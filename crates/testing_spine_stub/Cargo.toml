@@ -1,0 +1,51 @@
+[package]
+name = "testing_spine_stub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only spine stub binary — mounts the spine's standard surface (auth, account, admin, audit, role-grant) plus the cell verbs and cell-gated fact serving, for cross-backend integration tests. NEVER ship in a release."
+
+[[bin]]
+name = "testing_spine_stub"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Spine crates — the surface under test. No production sibling library exists
+# (unlike `testing_zzz_server` and other consumers' test binaries), so this
+# crate assembles the spine directly in `lib.rs`.
+fuz_actions.workspace = true
+fuz_auth.workspace = true
+# Domain layer under cross-backend test — the stub mounts the cell layer
+# (storage migrations from `fuz_cell`, RPC verbs from `fuz_cell_actions`)
+# exactly as it mounts `fuz_auth`.
+fuz_cell.workspace = true
+fuz_cell_actions.workspace = true
+# Fact substrate + its cell-gated serving — the stub mounts both routers
+# (cell-scoped + admin bare-hash) for the cross-backend fact-serving suite.
+fuz_fact.workspace = true
+fuz_fact_serving.workspace = true
+# `logging` feature → non-blocking stdout subscriber init.
+fuz_sys = { workspace = true, features = ["logging"] }
+fuz_db.workspace = true
+fuz_http.workspace = true
+fuz_realtime.workspace = true
+
+# Test-only fixtures — `TestingArgon2idHasher` (~1-5 ms argon2),
+# `_testing_reset` spec, env-gated startup DB reset. Deliberately a dep of
+# this test-only crate; the `cargo xtask check-release` audit blocks
+# `fuz_testing` from any production binary's dep graph.
+fuz_testing.workspace = true
+
+# Async runtime + web. Serving, the signal handler, and the drain come from
+# `fuz_actions::server`.
+tokio.workspace = true
+axum.workspace = true
+futures.workspace = true
+tracing.workspace = true
+
+# Serialization (health response, the `/ready` fixture check).
+serde_json.workspace = true

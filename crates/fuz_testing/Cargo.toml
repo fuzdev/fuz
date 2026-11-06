@@ -1,0 +1,33 @@
+[package]
+name = "fuz_testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Test-only spine fixtures — the test hasher, the daemon-token producer, the _testing_* action specs, and the Postgres test harness. NEVER link from a production binary."
+
+[dependencies]
+fuz_actions.workspace = true
+fuz_auth.workspace = true
+fuz_crypto.workspace = true
+fuz_sys.workspace = true
+fuz_db.workspace = true
+fuz_http.workspace = true
+argon2.workspace = true
+axum.workspace = true
+deadpool-postgres.workspace = true
+futures.workspace = true
+getrandom.workspace = true
+parking_lot.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "fs", "time"] }
+tokio-postgres.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

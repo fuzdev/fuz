@@ -1,0 +1,48 @@
+[package]
+name = "fuz_pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "PTY library — a safe Rust API over the libc PTY calls"
+
+[dependencies]
+libc.workspace = true
+
+# Cannot use workspace lints because workspace sets unsafe_code = "forbid"
+# and this crate requires unsafe for its libc calls (posix_openpt, fork, execvpe, read, write, ioctl).
+[lints.rust]
+unsafe_code = "allow"
+missing_debug_implementations = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[lints.rustdoc]
+# A doc link is the only machine-checkable claim a doc comment makes, so
+# deny broken links and malformed markup (CI's `cargo doc` step enforces it).
+broken_intra_doc_links = "deny"
+invalid_html_tags = "deny"
+bare_urls = "deny"
+redundant_explicit_links = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+assert_is_empty = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+significant_drop_tightening = "allow"
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow"
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unwrap_used = "warn"

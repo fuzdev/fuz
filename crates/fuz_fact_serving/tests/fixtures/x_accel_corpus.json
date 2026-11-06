@@ -1,0 +1,786 @@
+{
+	"about": "X-Accel facts-location validator corpus: each config, the prefix it is checked against, the expected verdict, and a substring one error must contain. Byte-identical copies are read by both twins - fuz_app src/test/server/x_accel_corpus.json and the Rust fuz_fact_serving crate tests/fixtures/x_accel_corpus.json - so change both together.",
+	"cases": [
+		{
+			"name": "safe_caret",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "safe_caret_glued",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~/_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "safe_caret_no_trailing_slash",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "prefix_without_trailing_slash",
+			"prefix": "/_facts",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "must end in exactly one `/`"
+		},
+		{
+			"name": "safe_in_http",
+			"prefix": "/_facts/",
+			"config": "http {\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n}\n",
+			"ok": true
+		},
+		{
+			"name": "tab_cr",
+			"prefix": "/_facts/",
+			"config": "server {\r\nlocation\t^~\t/_facts/\r\n{\r\ninternal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always;\r\n}\r\n}\r\n",
+			"ok": true
+		},
+		{
+			"name": "quote_escape",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src \\'none\\'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "single_quote_csp_escaped",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy 'default-src \\'none\\'; sandbox' always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "unquoted_nosniff",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; add_header X-Content-Type-Options nosniff always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "hash_midword",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X-A a#b;\n}\n",
+			"ok": true
+		},
+		{
+			"name": "hash_in_quotes",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X-A \"#}\";\n}\n",
+			"ok": true
+		},
+		{
+			"name": "brace_in_quotes",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X-A \"{\";\n}\n",
+			"ok": true
+		},
+		{
+			"name": "brace_in_word",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X-A a};\n}\n",
+			"ok": true
+		},
+		{
+			"name": "backslash_newline",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X-A a\\\nb;\n}\n",
+			"ok": true
+		},
+		{
+			"name": "dollar_brace_newline",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\ndefault_type ${x\n;\n}\n",
+			"ok": true
+		},
+		{
+			"name": "comment_with_braces",
+			"prefix": "/_facts/",
+			"config": "server {\n# location /_facts/ { not a block\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "extra_headers_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; add_header X-Frame-Options \"SAMEORIGIN\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "duplicate_nosniff_header",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"sniff\" always; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "may set `X-Content-Type-Options` only with"
+		},
+		{
+			"name": "duplicate_csp_header",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; add_header content-security-policy \"default-src *\"; }\n}\n",
+			"ok": false,
+			"error": "may set `Content-Security-Policy` only with"
+		},
+		{
+			"name": "duplicate_nosniff_without_always",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; add_header X-Content-Type-Options nosniff; }\n}\n",
+			"ok": false,
+			"error": "has another `add_header X-Content-Type-Options` (line 2)"
+		},
+		{
+			"name": "required_header_line_repeated",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; add_header X-Content-Type-Options nosniff always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "csp_report_only_beside_required",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; add_header Content-Security-Policy-Report-Only \"default-src 'self'\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "named_location",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation @_facts { root /var; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "include_at_server_level",
+			"prefix": "/_facts/",
+			"config": "server {\ninclude snippets/ssl.conf;\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "subprefix_caret",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ^~ /_facts/ab/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "unrelated_regex_and_exact",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ \\.php$ { deny all; }\nlocation = /health { return 200; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rx_charclass_with_caret_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_f[a]cts/ { root /var; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rx_group_with_caret_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/(_facts)/(.*)$ { alias /var/facts/$2; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rx_dot_with_caret_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_fac.s/ { root /var; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rx_x2f_with_caret_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^\\x2f_facts\\x2f { root /var; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rx_partial_with_caret_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_fact { root /var; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rx_kelvin_with_caret_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~* ^/_FA\u212aTS/ { }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "escaped_slash_prefix_safe",
+			"prefix": "/a/b/",
+			"config": "server {\nlocation ^~ /a/b/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "doc_example",
+			"prefix": "/_facts/",
+			"config": "server {\nlisten 443 ssl;\nlocation ^~ /_facts/ {\n\tinternal;\n\talias /srv/app/facts/;\n\tadd_header X-Content-Type-Options \"nosniff\" always;\n\tadd_header Content-Security-Policy \"default-src 'none'; sandbox\" always;\n}\n}\n",
+			"ok": true
+		},
+		{
+			"name": "ssi_off_everywhere",
+			"prefix": "/_facts/",
+			"config": "http {\nssi off;\nserver {\nssi OFF;\nlocation ^~ /_facts/ { internal; alias /var/facts/; ssi off; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation / { ssi off; proxy_pass http://app; }\n}\n}\n",
+			"ok": true
+		},
+		{
+			"name": "more_clear_headers_other_location",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation / { more_clear_headers Server; proxy_pass http://app; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "nesting_at_cap",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n",
+			"ok": true
+		},
+		{
+			"name": "empty",
+			"prefix": "/_facts/",
+			"config": "",
+			"ok": false,
+			"error": "No nginx"
+		},
+		{
+			"name": "missing_location",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /api/ { proxy_pass http://app; }\n}\n",
+			"ok": false,
+			"error": "No nginx"
+		},
+		{
+			"name": "public_caret",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "commented_internal",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { # internal;\nalias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "internal_as_header_value",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { add_header X-Note internal; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "nbsp_internal",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { alias /v/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; \u00a0internal; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "formfeed_internal",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { alias /v/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; \finternal; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "block_directive_internal",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal { } add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "second_public_same_server",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ^~ /_facts { alias /var/facts/; }\n}\n",
+			"ok": false,
+			"error": "`location ^~ /_facts` (line 3) is NOT marked"
+		},
+		{
+			"name": "second_public_other_server",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\nserver {\nlisten 8080;\nlocation ^~ /_facts/ { alias /var/facts/; }\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "public_subprefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ^~ /_facts/ab/ { alias /var/facts/ab/; }\n}\n",
+			"ok": false,
+			"error": "`location ^~ /_facts/ab/`"
+		},
+		{
+			"name": "gadget_dollar_brace",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\ndefault_type ${x; location ~ ^/_facts/(.*)$ { alias /var/facts/$1; } add_header X-B c;\n}\n",
+			"ok": false,
+			"error": "is a regex location naming the facts prefix"
+		},
+		{
+			"name": "gadget_dollar_brace_public",
+			"prefix": "/_facts/",
+			"config": "server {\ndefault_type ${x; location ^~ /_facts/ab/ { alias /var/facts/ab/; } add_header X-B c;\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "`location ^~ /_facts/ab/` (line 2) is NOT marked"
+		},
+		{
+			"name": "gadget_nbsp_comment",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\ndefault_type a\u00a0#; location ^~ /_facts/ab/ { alias /var/facts/ab/; }\nadd_header X-B c;\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "gadget_formfeed_comment",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\ndefault_type a\f#; location ^~ /_facts/ab/ { alias /var/facts/ab/; }\nadd_header X-B c;\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "gadget_bom",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\ndefault_type a\ufeff#; location ^~ /_facts/ab/ { alias /var/facts/ab/; }\nadd_header X-B c;\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "gadget_nel",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\ndefault_type a\u0085#; location ^~ /_facts/ab/ { alias /var/facts/ab/; }\nadd_header X-B c;\n}\n",
+			"ok": false,
+			"error": "is NOT marked `internal;`"
+		},
+		{
+			"name": "safe_plain",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "http_nested_plain",
+			"prefix": "/_facts/",
+			"config": "http {\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\nserver {\nlocation /_facts/ { alias /v/; }\n}\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "subprefix_plain_with_regex",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /_facts/ab/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_f[a]cts/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "rx_charclass_plain_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_f[a]cts/(.*)$ { alias /var/facts/$1; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "rx_group_plain_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/(_facts)/(.*)$ { alias /var/facts/$2; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "rx_dot_plain_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_fac.s/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "rx_x2f_plain_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^\\x2f_facts\\x2f { root /var; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "rx_partial_plain_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_fact { root /var; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "rx_upper_plain_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_FACTS/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "must use `^~`"
+		},
+		{
+			"name": "nested_caret_in_root",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation / { location ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; } }\nlocation ~ ^/_f[a]cts/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "must be a direct child of a `server` block"
+		},
+		{
+			"name": "nested_regex_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; location ~ \\.png$ { add_header X-A b; } }\n}\n",
+			"ok": false,
+			"error": "contains a nested `location` block"
+		},
+		{
+			"name": "if_addheader_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; if ($arg_x) { add_header X-A b; } }\n}\n",
+			"ok": false,
+			"error": "contains a nested `if` block"
+		},
+		{
+			"name": "limit_except_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; limit_except GET { deny all; } }\n}\n",
+			"ok": false,
+			"error": "contains a nested `limit_except` block"
+		},
+		{
+			"name": "include_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; include extra.conf; }\n}\n",
+			"ok": false,
+			"error": "contains `include`"
+		},
+		{
+			"name": "headers_only_in_if",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; if ($x) { add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; } }\n}\n",
+			"ok": false,
+			"error": "lacks `add_header X-Content-Type-Options"
+		},
+		{
+			"name": "exact_on_prefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation = /_facts/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "exact-match"
+		},
+		{
+			"name": "exact_on_prefix_glued",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation =/_facts/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "exact-match"
+		},
+		{
+			"name": "exact_below",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation = /_facts/ab/x { root /var; }\n}\n",
+			"ok": false,
+			"error": "exact-match"
+		},
+		{
+			"name": "rx_spelled_prefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_facts/(.*)$ { alias /var/facts/$1; }\n}\n",
+			"ok": false,
+			"error": "is a regex location naming the facts prefix"
+		},
+		{
+			"name": "rx_caseless_mixed",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~* ^/_FaCtS/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "is a regex location naming the facts prefix"
+		},
+		{
+			"name": "rx_caseless_astral",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~* ^/_FACTS\ud83d\ude00 { }\n}\n",
+			"ok": false,
+			"error": "is a regex location naming the facts prefix"
+		},
+		{
+			"name": "rx_escaped_slash_prefix_ab",
+			"prefix": "/a/b/",
+			"config": "server {\nlocation ^~ /a/b/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^\\/a\\/b\\/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "is a regex location naming the facts prefix"
+		},
+		{
+			"name": "rewrite_server_level",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nrewrite ^/files/(.*)$ /_facts/$1 last;\n}\n",
+			"ok": false,
+			"error": "`rewrite` (line 3) names the facts prefix"
+		},
+		{
+			"name": "rewrite_in_location",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /files/ { rewrite ^/files/(.*)$ /_facts/$1 last; }\n}\n",
+			"ok": false,
+			"error": "`rewrite` (line 3) names the facts prefix"
+		},
+		{
+			"name": "rewrite_in_if",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nif ($arg_x) { rewrite ^ /_facts/ab/x last; }\n}\n",
+			"ok": false,
+			"error": "`rewrite` (line 3) names the facts prefix"
+		},
+		{
+			"name": "try_files_prefix_uri",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /dl/ { try_files /nope /_facts$uri; }\n}\n",
+			"ok": false,
+			"error": "`try_files` (line 3) names the facts prefix"
+		},
+		{
+			"name": "error_page_into_prefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nerror_page 404 /_facts/ab/x;\n}\n",
+			"ok": false,
+			"error": "`error_page` (line 3) names the facts prefix"
+		},
+		{
+			"name": "index_into_prefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation / { index /_facts/ab/x; }\n}\n",
+			"ok": false,
+			"error": "`index` (line 3) names the facts prefix"
+		},
+		{
+			"name": "rewrite_in_http",
+			"prefix": "/_facts/",
+			"config": "http {\nrewrite ^/x /_facts/ab last;\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n}\n",
+			"ok": false,
+			"error": "`rewrite` (line 2) names the facts prefix"
+		},
+		{
+			"name": "add_before_body",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /page/ { add_before_body /_facts/x; }\n}\n",
+			"ok": false,
+			"error": "`add_before_body` (line 3) names the facts prefix"
+		},
+		{
+			"name": "add_after_body",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_after_body /_facts/x;\n}\n",
+			"ok": false,
+			"error": "`add_after_body` (line 3) names the facts prefix"
+		},
+		{
+			"name": "set_then_rewrite",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /dl/ { set $t /_facts$uri; rewrite ^ $t last; }\n}\n",
+			"ok": false,
+			"error": "`set` (line 3) names the facts prefix"
+		},
+		{
+			"name": "map_entry",
+			"prefix": "/_facts/",
+			"config": "http {\nmap $uri $target {\n~^/dl/(.*)$ /_facts/$1;\n}\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /dl/ { rewrite ^ $target last; }\n}\n}\n",
+			"ok": false,
+			"error": "`~^/dl/(.*)$` (line 3) names the facts prefix"
+		},
+		{
+			"name": "header_value_naming_prefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X-Note /_facts/;\n}\n",
+			"ok": false,
+			"error": "`add_header` (line 3) names the facts prefix"
+		},
+		{
+			"name": "set_and_map_unrelated",
+			"prefix": "/_facts/",
+			"config": "http {\nmap $uri $target {\n~^/dl/(.*)$ /files/$1;\n}\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation /dl/ { set $t /files$uri; rewrite ^ $target last; }\n}\n}\n",
+			"ok": true
+		},
+		{
+			"name": "alias_named_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /srv/app/_facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "alias_nested_dir",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /srv/site/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": true
+		},
+		{
+			"name": "rewrite_unrelated",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nrewrite ^/old/(.*)$ /new/$1 permanent;\n}\n",
+			"ok": true
+		},
+		{
+			"name": "try_files_and_error_page_unrelated",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation / { try_files $uri /index.html; }\nerror_page 404 /404.html;\n}\n",
+			"ok": true
+		},
+		{
+			"name": "prefix_double_trailing_slash",
+			"prefix": "/_facts//",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "must end in exactly one `/`"
+		},
+		{
+			"name": "only_below_prefix",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/00/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "must exist exactly at the prefix"
+		},
+		{
+			"name": "prefix_location_double_slash",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts// { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ ^/_f { alias /var/facts/; }\n}\n",
+			"ok": false,
+			"error": "must exist exactly at the prefix"
+		},
+		{
+			"name": "ssi_on_in_http",
+			"prefix": "/_facts/",
+			"config": "http {\nssi on;\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n}\n",
+			"ok": false,
+			"error": "`ssi` (line 2) is not `off`"
+		},
+		{
+			"name": "ssi_on_in_server",
+			"prefix": "/_facts/",
+			"config": "server {\nssi on;\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "`ssi` (line 2) is not `off`"
+		},
+		{
+			"name": "ssi_on_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; ssi on; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "`ssi` (line 2) is not `off`"
+		},
+		{
+			"name": "ssi_on_in_other_location",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation / { ssi on; proxy_pass http://app; }\n}\n",
+			"ok": false,
+			"error": "`ssi` (line 3) is not `off`"
+		},
+		{
+			"name": "ssi_variable",
+			"prefix": "/_facts/",
+			"config": "server {\nssi $ssi_mode;\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "`ssi` (line 2) is not `off`"
+		},
+		{
+			"name": "more_clear_headers_in_http",
+			"prefix": "/_facts/",
+			"config": "http {\nmore_clear_headers Server;\nserver {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n}\n",
+			"ok": false,
+			"error": "`more_clear_headers` (line 2) applies to the facts location"
+		},
+		{
+			"name": "more_clear_headers_in_server",
+			"prefix": "/_facts/",
+			"config": "server {\nmore_clear_headers X-Content-Type-Options;\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "`more_clear_headers` (line 2) applies to the facts location"
+		},
+		{
+			"name": "more_set_headers_in_facts",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; more_set_headers 'Content-Security-Policy: default-src *'; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "`more_set_headers` (line 2) applies to the facts location"
+		},
+		{
+			"name": "nesting_over_cap",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\na {\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n",
+			"ok": false,
+			"error": "blocks nested deeper than 64 levels (line 68)"
+		},
+		{
+			"name": "missing_csp",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; add_header X-Content-Type-Options \"nosniff\" always; }\n}\n",
+			"ok": false,
+			"error": "lacks `add_header Content-Security-Policy"
+		},
+		{
+			"name": "missing_always",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\"; }\n}\n",
+			"ok": false,
+			"error": "lacks `add_header Content-Security-Policy"
+		},
+		{
+			"name": "missing_nosniff",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "lacks `add_header X-Content-Type-Options"
+		},
+		{
+			"name": "unterminated_quote",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; add_header X \"a; }\n}\n",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "unclosed_block",
+			"prefix": "/_facts/",
+			"config": "server { location ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "missing_semicolon",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal } }\n}\n",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "quote_then_word",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nadd_header X \"a\"b;\n}\n",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "eof_mid_word",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\nx",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "location_unknown_modifier",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation toString /x { }\n}\n",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "location_three_words",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ a b { }\n}\n",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "rx_quantifier_braces",
+			"prefix": "/_facts/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\nlocation ~ /[0-9a-f]{2}/ { root /var; }\n}\n",
+			"ok": false,
+			"error": "could not parse the nginx config"
+		},
+		{
+			"name": "root_prefix",
+			"prefix": "/",
+			"config": "server {\nlocation ^~ /_facts/ { internal; alias /var/facts/; add_header X-Content-Type-Options \"nosniff\" always; add_header Content-Security-Policy \"default-src 'none'; sandbox\" always; }\n}\n",
+			"ok": false,
+			"error": "must be an absolute path below"
+		}
+	]
+}

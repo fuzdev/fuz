@@ -1,0 +1,42 @@
+[package]
+name = "fuz_release"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Fetch / verify / install for Fuz releases — manifests, tarball extraction, storage-key layout, and the release log reader. Publishing lives in fuz_sign."
+
+[dependencies]
+fuz_archive.workspace = true
+fuz_artifact.workspace = true
+fuz_crypto.workspace = true
+fuz_home.workspace = true
+fuz_sys.workspace = true
+fuz_storage.workspace = true
+tar.workspace = true
+flate2.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+tempfile.workspace = true
+# Test-only: mint a valid dummy VerifyingKey for VerifiedManifest's
+# `assume_verified_for_test` escape hatch (already a vetted workspace dep).
+ed25519-dalek.workspace = true
+# Test-only in-process FUZ_HOME redirect: the fetch / install / registry paths
+# all resolve their targets through ~/.fuz, so any suite driving them has to
+# point the home at a temp dir, and edition 2024 + `unsafe_code = "forbid"` rule
+# out `std::env::set_var`. resolver-2 keeps this dev-dep feature out of every
+# production binary (asserted by `cargo xtask check-release`'s test-only feature
+# rule).
+fuz_home = { workspace = true, features = ["test_home_override"] }
+# Test-only stub executables (`fuz_artifact::platform::test_stubs`): fixtures
+# that publish or install a release carry bytes the platform check accepts.
+fuz_artifact = { workspace = true, features = ["test_binary_stubs"] }
+
+[lints]
+workspace = true

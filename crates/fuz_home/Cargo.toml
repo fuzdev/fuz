@@ -1,0 +1,31 @@
+[package]
+name = "fuz_home"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The ~/.fuz home layer — FUZ_HOME path layout, daemon.json (DaemonInfo), log paths/rotation, and the daemon lifecycle constants"
+
+[features]
+# Test-only. Lets a test redirect `get_fuz_home` in-process via
+# `set_fuz_home_override_for_testing` (the `unsafe` `std::env::set_var` that
+# edition 2024 + `unsafe_code = forbid` disallow). NEVER enable on a shipping
+# binary — enable it only as a dev-dependency feature so resolver-2 keeps it out
+# of every normal build. See `paths.rs`.
+test_home_override = []
+
+[dependencies]
+fuz_sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Self dev-dep enabling the home-redirect seam for this crate's own integration
+# tests (daemon.json I/O). Dev-only, so resolver-2 keeps `test_home_override`
+# out of every normal build — verified by the CI cargo-tree feature-leak guard.
+fuz_home = { path = ".", features = ["test_home_override"] }
+
+[lints]
+workspace = true

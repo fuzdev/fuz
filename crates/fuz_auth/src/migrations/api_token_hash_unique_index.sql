@@ -1,0 +1,22 @@
+-- api_token_hash_unique_index: index the column every bearer request looks up.
+--
+-- Appended, never folded into `full_auth_schema` — an already-bootstrapped DB
+-- has recorded that migration as applied, so an index added there would never
+-- land there. See the module doc in `migrations.rs`.
+--
+-- `full_auth_schema` indexes `api_token(account_id)` and nothing else, so
+-- `query_validate_api_token`'s `WHERE token_hash = $1` — the lookup on the hot
+-- path of *every* bearer-authenticated request, valid or not — has been a
+-- sequential scan since the table shipped. The asymmetry is accidental:
+-- `auth_session` gets the same access pattern for free because its session hash
+-- *is* the primary key.
+--
+-- UNIQUE rather than a plain index, because both spines resolve a token with an
+-- at-most-one read (`query_opt` / `query_one`). Two rows sharing a hash would
+-- mean the two impls could silently disagree about which credential answered;
+-- the constraint makes that unrepresentable instead of merely improbable. It is
+-- also a real assertion about blake3 over 256 bits of CSPRNG output — if this
+-- statement ever fails on a live database, the right response is to look at why
+-- two rows collided, not to relax the index.
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_token_hash ON api_token(token_hash);

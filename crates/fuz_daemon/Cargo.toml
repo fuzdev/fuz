@@ -1,0 +1,26 @@
+[package]
+name = "fuz_daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "fuzd lifecycle (spawn/signal/health/stale pid/logs), behind fuzd's own CLI"
+
+[dependencies]
+fuz_client.workspace = true
+fuz_home.workspace = true
+fuz_sys.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Test-only in-process FUZ_HOME redirect for the daemon.json cleanup tests —
+# edition 2024 + `unsafe_code = "forbid"` rule out `std::env::set_var`, and
+# resolver-2 keeps this dev-dep feature out of every production binary.
+fuz_home = { workspace = true, features = ["test_home_override"] }
+
+[lints]
+workspace = true

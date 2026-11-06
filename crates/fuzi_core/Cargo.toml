@@ -1,0 +1,30 @@
+[package]
+name = "fuzi_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "fuzi core — package-lock.json reader, content-addressed npm cache, and node_modules materialization"
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+fuz_archive.workspace = true
+fuz_home.workspace = true
+fuz_sys = { workspace = true, features = ["tls"] }
+fuz_crypto.workspace = true
+url.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tar.workspace = true
+flate2.workspace = true
+nix.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,69 @@
+[package]
+name = "fuz_sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Generic OS/system primitives shared across the fuz workspace — fs, file locks, secure file ops, pid/signal, rand, time, env, the home directory lookup, CLI hints and argument parsing, a periodic task loop — no ~/.fuz home conventions"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+getrandom.workspace = true
+time.workspace = true
+libc.workspace = true
+# Adds the nix crate's `signal` feature (unions with the workspace `fs`) for
+# `pid::{send_signal,is_pid_alive}` — typed `kill(2)`, no `kill(1)` subprocess.
+nix = { workspace = true, features = ["signal"] }
+
+# Optional — linked only by the features below, so the minimal default
+# footprint (what the `fuz` CLI and other sync-only consumers pull) stays
+# free of tokio + the tracing stack.
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tracing-appender = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "macros", "signal"] }
+tokio-util = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+argh = { workspace = true, optional = true }
+
+[features]
+# Process-wide non-blocking tracing-subscriber init (the `logging` module).
+# Off by default — binaries opt in via
+# `fuz_sys = { workspace = true, features = ["logging"] }`.
+logging = ["dep:tracing-subscriber", "dep:tracing-appender"]
+# Bounded subprocess-pipe capture (the `capture` module). Off by default —
+# `fuz_eval` and `fuz_storage` opt in. Pulls tokio's io-util only.
+capture = ["dep:tokio", "tokio/io-util"]
+# Async shutdown-signal primitive (the `signal` module). Off by default —
+# `fuzd` and `fuz_http` opt in. Pulls tokio + the `tracing` facade (the
+# select logs which signal fired).
+signal = ["dep:tokio", "dep:tokio-util", "dep:tracing"]
+# Periodic background task loop (the `periodic` module): a startup pass, then
+# one per interval, until a `CancellationToken` is cancelled. Off by default —
+# `fuz_http` (which re-exports it for spine servers), `fuz_auth`, and
+# `fuz_fact` opt in.
+# Pulls tokio's timer + the `tracing` facade (a failed pass is logged).
+# Its unit tests run under `cargo test -p fuz_sys --features periodic` (a
+# workspace test enables it through `fuz_http`).
+periodic = ["dep:tokio", "tokio/time", "dep:tokio-util", "dep:tracing"]
+# Process-wide rustls `ring` crypto provider for reqwest-over-rustls consumers
+# (the `tls` module) — outbound HTTPS clients only, never inbound TLS. Off by
+# default — `fuz_storage`, `fuzi_core`, and any binary making outbound HTTPS
+# calls opt in. Pulls `rustls` with the `ring` provider only (no
+# `aws-lc-sys` C dep), so consumers cross-compile cleanly to static musl.
+tls = ["dep:rustls"]
+# Exit-code-correct argh parsing for CLI binaries (`cli::parse_env_args`). Off by
+# default — `fuz`, `fuzd`, `fuzi`, and `xtask` opt in, so the HTTP spine and
+# other library consumers don't compile argh.
+# Its unit tests run under `cargo test -p fuz_sys --features argh` (a
+# workspace test enables it through the binaries).
+argh = ["dep:argh"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+
+[lints]
+workspace = true

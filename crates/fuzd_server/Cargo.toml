@@ -1,0 +1,32 @@
+[package]
+name = "fuzd_server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "fuzd's UDS server (postcard codec, dispatch, exclusive bind, graceful shutdown) and the demand-driven workload registry with its observer and watcher kinds"
+
+[dependencies]
+fuz_home.workspace = true
+fuz_sidecar.workspace = true
+# `is_real_dir` (no-follow) for the watcher's dynamic re-watch on dir-create.
+fuz_sys.workspace = true
+fuz_wire.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+postcard.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+# Filesystem watching for the `watcher` workload kind (inotify / FSEvents).
+notify.workspace = true
+
+[dev-dependencies]
+# `test-util` enables tokio's paused-clock test helpers (start_paused /
+# time::advance) so the idle-grace retire tests don't sleep in real time.
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "_comment": "Trusted ed25519 public keys for release verification (base64). Add keys here during rotation.",
+  "_see": "docs/signing.md for key generation instructions",
+  "keys": ["7gRk3CVhjUsIIYT08ohrkgPo79bhSIz5dNNa5OjUra0="]
+}

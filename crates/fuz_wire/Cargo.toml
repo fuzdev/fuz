@@ -1,0 +1,19 @@
+[package]
+name = "fuz_wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "fuzd UDS wire protocol (postcard framing) + daemon, workload, and dormant sidecar payload types. Shared by fuzd_server (daemon) and fuz_client."
+
+[dependencies]
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

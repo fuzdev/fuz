@@ -1,0 +1,27 @@
+[package]
+name = "fuz_cell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Cell content primitive for the fuz spine (storage half) — the fuz_cell migration namespace, cell CRUD queries, view/edit/manage authz, and the relation-visibility filter. The RPC verb surface lives in fuz_cell_actions."
+
+[dependencies]
+fuz_auth.workspace = true
+fuz_db.workspace = true
+fuz_http.workspace = true
+fuz_sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+
+[dev-dependencies]
+# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`).
+fuz_testing.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

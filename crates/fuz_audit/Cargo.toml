@@ -1,0 +1,20 @@
+[package]
+name = "fuz_audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Release-time dep-graph audit: production binaries must not depend on test-fixture or audit-tooling crates. Build-tooling only, never linked from production binaries."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+
+# Dev-only crate; xtask binaries (and consumer-workspace xtask binaries)
+# are the only legitimate consumers. The audit itself rejects any
+# production binary that transitively depends on this crate.
+[package.metadata.fuz_audit]
+dev_only = true

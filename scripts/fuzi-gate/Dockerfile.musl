@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+#
+# Builds a musl-native `fuzi` and bundles it with node/npm for the fuzi gate's
+# musl pass (scripts/fuzi-gate.sh). Build context is the repo root; see
+# Dockerfile.musl.dockerignore.
+#
+# The context is copied whole, so any change in it reruns the `cargo build`
+# layer; the BuildKit cache mounts keep the crate registry + target dir across
+# builds, so that rerun compiles incrementally. The gate logic + fixtures are
+# MOUNTED at run time, so the container runs the checkout's own inner.sh and
+# fixtures, not the copies in the build stage.
+
+FROM rust:1.99.1-alpine AS build
+RUN apk add --no-cache build-base cmake perl
+WORKDIR /src
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p fuzi \
+    && cp target/release/fuzi /usr/local/bin/fuzi
+
+FROM alpine AS gate
+RUN apk add --no-cache nodejs npm
+COPY --from=build /usr/local/bin/fuzi /usr/local/bin/fuzi
+# Run with: -v <repo>/scripts/fuzi-gate:/gate:ro  -e FUZI=/usr/local/bin/fuzi
+#           -e GATE_DIR=/gate -e LIBC=musl  …  sh /gate/inner.sh

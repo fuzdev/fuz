@@ -1,0 +1,40 @@
+[package]
+name = "fuz_actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Action dispatch framework for the fuz spine — ActionSpec, registry, perform_action, HTTP RPC + WS bindings"
+
+[dependencies]
+fuz_auth.workspace = true
+fuz_db.workspace = true
+fuz_http.workspace = true
+fuz_realtime.workspace = true
+fuz_sys.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`). A dev
+# cycle — `fuz_testing` depends on `fuz_actions` — which cargo permits and
+# `fuz_audit` ignores (it walks runtime edges only).
+fuz_testing.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tower = { workspace = true, features = ["util"] }
+# `GatedRouter::into_router_for_testing`, so the server toolkit's router tests
+# drive the composed stack in-process. From a dev-dependency it stays out of
+# every build that compiles no tests.
+fuz_http = { workspace = true, features = ["test_router_access"] }
+
+[lints]
+workspace = true

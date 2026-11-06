@@ -1,0 +1,43 @@
+[package]
+name = "fuz_http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "HTTP framework primitives for the fuz spine — JSON-RPC envelopes, the compose_stack composition root, origin / Host / CORS gates, trusted-proxy + IP resolution, body limits, error response shapes, readiness, request tracing"
+
+[features]
+# Test-only. Exposes `GatedRouter::into_router_for_testing`, so a consumer's
+# tests can drive its composed router in-process (`oneshot`). Enable it only on
+# a `[dev-dependencies]` entry: resolver 2 then leaves it out of a build that
+# compiles no tests. Enabled on a normal edge — by any package the build
+# compiles, a `testing_*` server or an xtask included — resolver 2 unifies it
+# into every binary of that build. `cargo xtask check-release` refuses such an
+# edge (`fuz_audit`'s test-only feature rule).
+test_router_access = []
+
+[dependencies]
+fuz_sys = { workspace = true, features = ["signal", "periodic"] }
+fuz_db.workspace = true
+axum.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["http1", "server", "service", "tokio"] }
+tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true, features = ["catch-panic", "limit", "trace"] }
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+http-body-util = "0.1"
+futures.workspace = true
+tower = { workspace = true, features = ["util"] }
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

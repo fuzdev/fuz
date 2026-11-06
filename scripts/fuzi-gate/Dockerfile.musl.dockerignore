@@ -1,0 +1,7 @@
+# Build-context excludes for Dockerfile.musl (patterns are relative to the repo
+# root context). Keep the context to crate sources + Cargo manifests; drop the
+# multi-GB target dir, git history, and any node_modules/build output.
+target/
+.git/
+**/node_modules/
+**/dist/

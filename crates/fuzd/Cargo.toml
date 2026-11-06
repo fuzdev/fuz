@@ -1,0 +1,40 @@
+[package]
+name = "fuzd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The fuz daemon — hosts demand-driven workloads over a Unix domain socket; lifecycle via its own CLI"
+
+[dependencies]
+# `logging` feature → non-blocking stdout subscriber init; `argh` → the
+# exit-code-correct `parse_env_args`.
+fuz_home.workspace = true
+fuz_sys = { workspace = true, features = ["argh", "logging", "signal"] }
+fuz_daemon.workspace = true
+# Optional sidecar-runtime definitions, wired only under the `sidecar` feature
+# (off by default). The shipped daemon links neither — no embedded `sidecar.ts`,
+# no `--allow-env` Deno spawn. `fuz_sidecar` stays non-optional because the
+# (empty) `SidecarPool` and `fuzd_server`'s sidecar dispatch still need it.
+fuz_deno = { workspace = true, optional = true }
+fuz_python = { workspace = true, optional = true }
+fuzd_server.workspace = true
+fuz_sidecar.workspace = true
+argh.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[features]
+# Wire the Deno + Python sidecar factories into the daemon's `SidecarPool`.
+# Off by default: the production daemon links no non-Rust runtime host. Revive
+# the dormant sidecar workload with `cargo build -p fuzd --features sidecar`.
+sidecar = ["dep:fuz_deno", "dep:fuz_python"]
+
+[lints]
+workspace = true

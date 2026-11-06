@@ -1,0 +1,36 @@
+[package]
+name = "fuz_fact"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Content-addressed byte store for the fuz spine (storage half) — the fuz_facts migration namespace, FactStore + PgFactStore (embedded + <shard>/<rest> disk CAS, streaming), and fact_queries. Un-authz'd; the cell-gated serving half lives in fuz_fact_serving."
+
+[dependencies]
+fuz_db.workspace = true
+fuz_crypto.workspace = true
+# `periodic`: the loop `spawn_orphan_temp_sweeper` runs on.
+fuz_sys = { workspace = true, features = ["periodic"] }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+futures.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`). The
+# `fuz_fact` ⊥ {axum, fuz_http, fuz_cell, fuz_auth, fuz_actions} layering rule
+# is a *runtime* rule; `fuz_audit` skips dev edges.
+fuz_testing.workspace = true
+# Dev-only: `AUTH_MIGRATIONS` — `fact_holder` FKs into the auth schema's
+# `actor` table, so the suites run the auth chain ahead of the fact chain.
+fuz_auth.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

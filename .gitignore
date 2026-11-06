@@ -1,0 +1,51 @@
+# Deps
+node_modules/
+
+# Output
+.svelte-kit/
+build/
+dist/
+dist_*/
+target/
+.gro/
+.fuz/
+.zzz/
+
+# Env
+.env*
+!.env.example
+!.env.*.example
+!.env.test
+!.env.*.test
+env
+
+# Secrets
+*.pem
+*.key
+id_rsa
+id_ed25519*
+
+# Local (per-machine, never shared)
+*.local
+*.local.*
+
+# Ignore
+*.ignore
+*.ignore.*
+ignore
+
+# Temporary files
+tmp/
+*.tmp
+.tmp*
+*.bak
+
+# Log files
+*.log
+
+# Workflow
+/worktree
+
+# Os
+.DS_Store
+Thumbs.db

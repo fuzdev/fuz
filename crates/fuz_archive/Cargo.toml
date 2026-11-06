@@ -1,0 +1,19 @@
+[package]
+name = "fuz_archive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Manifest-free, security-hardened streaming tar.gz extraction (shared by fuz_release and fuzi_core)"
+
+[dependencies]
+fuz_crypto.workspace = true
+tar.workspace = true
+flate2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

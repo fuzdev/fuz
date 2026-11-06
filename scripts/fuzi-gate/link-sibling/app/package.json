@@ -1,0 +1,14 @@
+{
+  "name": "fuzi-gate-link-sibling",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "fuzi gate fixture: sibling link: true packages (a prod link and a dev link with an executable bin) beside one small registry dep.",
+  "dependencies": {
+    "localpkg-a": "file:../localpkg-a",
+    "picocolors": "1.1.1"
+  },
+  "devDependencies": {
+    "localpkg-b": "file:../localpkg-b"
+  }
+}

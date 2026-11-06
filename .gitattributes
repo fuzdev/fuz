@@ -1,0 +1,2 @@
+# Force LF on checkout everywhere, even under Windows autocrlf.
+* text=auto eol=lf

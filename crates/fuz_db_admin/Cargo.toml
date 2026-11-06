@@ -1,0 +1,27 @@
+[package]
+name = "fuz_db_admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "DB-admin REST table-browser router for the fuz spine — a generic public-schema browser gated by a configurable global role"
+
+[dependencies]
+fuz_auth.workspace = true
+fuz_db.workspace = true
+fuz_http.workspace = true
+axum.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+deadpool-postgres.workspace = true
+tokio-postgres.workspace = true
+
+[dev-dependencies]
+# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`).
+fuz_testing.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

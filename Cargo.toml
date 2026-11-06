@@ -1,0 +1,189 @@
+[workspace]
+resolver = "2"
+members = ["crates/fuz", "crates/fuz_actions", "crates/fuz_archive", "crates/fuz_audit", "crates/fuz_auth", "crates/fuz_cell", "crates/fuz_cell_actions", "crates/fuz_client", "crates/fuz_artifact", "crates/fuz_crypto", "crates/fuz_eval", "crates/fuz_fact", "crates/fuz_fact_serving", "crates/fuz_daemon", "crates/fuz_db", "crates/fuz_db_admin", "crates/fuz_home", "crates/fuz_http", "crates/fuz_pty", "crates/fuz_realtime", "crates/fuz_release", "crates/fuz_sign", "crates/fuz_storage", "crates/fuz_sys", "crates/fuz_sidecar", "crates/fuz_testing", "crates/fuz_wire", "crates/fuzd_server", "crates/fuz_deno", "crates/fuz_python", "crates/fuzd", "crates/fuzi", "crates/fuzi_core", "crates/testing_spine_stub", "crates/xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "0BSD"
+repository = "https://github.com/fuzdev/fuz"
+homepage = "https://www.fuz.dev/"
+publish = false
+
+[workspace.dependencies]
+fuz_actions = { path = "crates/fuz_actions" }
+fuz_archive = { path = "crates/fuz_archive" }
+fuz_artifact = { path = "crates/fuz_artifact" }
+fuz_audit = { path = "crates/fuz_audit" }
+fuz_auth = { path = "crates/fuz_auth" }
+fuz_cell = { path = "crates/fuz_cell" }
+fuz_cell_actions = { path = "crates/fuz_cell_actions" }
+fuz_client = { path = "crates/fuz_client" }
+fuz_crypto = { path = "crates/fuz_crypto" }
+fuz_daemon = { path = "crates/fuz_daemon" }
+fuz_eval = { path = "crates/fuz_eval" }
+fuz_fact = { path = "crates/fuz_fact" }
+fuz_fact_serving = { path = "crates/fuz_fact_serving" }
+fuz_db = { path = "crates/fuz_db" }
+fuz_db_admin = { path = "crates/fuz_db_admin" }
+fuz_home = { path = "crates/fuz_home" }
+fuz_http = { path = "crates/fuz_http" }
+fuz_realtime = { path = "crates/fuz_realtime" }
+fuz_sidecar = { path = "crates/fuz_sidecar" }
+fuz_testing = { path = "crates/fuz_testing" }
+fuzd_server = { path = "crates/fuzd_server" }
+fuz_deno = { path = "crates/fuz_deno" }
+fuz_python = { path = "crates/fuz_python" }
+fuz_release = { path = "crates/fuz_release" }
+fuz_sign = { path = "crates/fuz_sign" }
+fuz_storage = { path = "crates/fuz_storage" }
+fuz_sys = { path = "crates/fuz_sys" }
+fuz_wire = { path = "crates/fuz_wire" }
+fuzi_core = { path = "crates/fuzi_core" }
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip`: parse floats correctly rounded, as `JSON.parse` does — the
+# wire-int adapters' (`fuz_http::deserialize_wire_int`) twin parity rests on it
+serde_json = { version = "1", features = ["float_roundtrip"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "sync", "fs", "signal", "time", "process", "io-util"] }
+getrandom = "0.3"
+axum = { version = "0.8", features = ["ws"] }
+# Named directly only to classify axum's WS read errors: `axum::Error` boxes the
+# `tungstenite::Error` underneath, and `fuz_realtime` downcasts it to tell an
+# over-cap message (close 1009) from other read failures — axum exposes no
+# accessor for that. The downcast matches only the exact type axum links, so
+# this MUST track axum's tungstenite version (via tokio-tungstenite): when an
+# axum bump moves it, move this in the same change. No default features — the
+# handshake half is axum's concern.
+tungstenite = { version = "0.29", default-features = false }
+# The connection layer under axum, named directly so `fuz_http`'s
+# `serve_with_shutdown` runs its own accept loop: axum's serve waits on every
+# connection, and a client that stops reading holds its connection, and with
+# it the drain, open. Kept on the versions axum links (no new packages); the
+# features each user needs are enabled where it is used. hyper's floor is the
+# version `fuz_http`'s body-limit docs describe (a request with both
+# `Content-Length` and `Transfer-Encoding`).
+hyper = { version = "1.11.1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+futures-util = { version = "0.3", features = ["sink"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+argon2 = { version = "0.5", features = ["rand"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
+# rustls with the `ring` provider only — reqwest uses `rustls-no-provider`, so
+# `fuz_sys::tls` installs ring as the process default. ring drops the
+# `aws-lc-sys` C library + cmake build, so the distribution binaries (fuzi, fuz
+# self-upgrade over `forge://`) cross-compile cleanly to static musl.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+parking_lot = "0.12"
+# Bounded LRU backing for the in-memory `RateLimiter` (caps tracked keys under
+# key-enumeration attack). Twin of fuz_app's `LruMap`-backed limiter.
+lru = "0.18.3"
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["codec", "time", "rt"] }
+subtle = "2"
+base64 = "0.22"
+tempfile = "3"
+thiserror = "2"
+blake3 = "1"
+semver = "1"
+time = { version = "0.3", features = ["formatting"] }
+# gzip for the release tarball + fuzi's npm tarballs. The `zlib-rs` backend
+# (pure Rust, `libz-rs-sys`) replaces the default `miniz_oxide` one: inflate is
+# the single hottest step of a warm `fuzi install` (every cached tarball is
+# decompressed and hashed), and zlib-rs decompresses materially faster. Set at
+# the workspace level so all four consumers move together — a mixed graph would
+# compile both backends.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+tar = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+zeroize = "1"
+url = "2"
+nix = { version = "0.31", default-features = false, features = ["fs"] }
+# Filesystem watching (inotify on Linux, FSEvents on macOS) for the fuzd
+# `watcher` workload kind. `default-features = false` drops the optional
+# crossbeam channel + serde surface (minimal-feature hygiene); the inotify
+# backend needs no feature flag, `macos_fsevent` covers the macOS tier.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+postcard = { version = "1", features = ["alloc"] }
+argh = "0.1"
+tracing = "0.1"
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
+deadpool-postgres = "0.14"
+# BytesMut for hand-written `ToSql` impls (fuz_db's `UntypedTextParam`);
+# already in the graph via tokio-postgres.
+bytes = "1"
+ed25519-dalek = { version = "2" }
+# ed25519-dalek requires rand 0.8.x (uses rand_core 0.6.x); fuz_sign is the only
+# consumer (keypair generation), centralized here per the workspace convention.
+rand = "0.8"
+libc = "0.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.rustdoc]
+# A doc link is the only machine-checkable claim a doc comment makes, so
+# deny broken links and malformed markup (CI's `cargo doc` step enforces it).
+broken_intra_doc_links = "deny"
+invalid_html_tags = "deny"
+bare_urls = "deny"
+redundant_explicit_links = "deny"
+
+[workspace.lints.clippy]
+# Enable lint groups (priority -1 so individual lints can override)
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Pedantic overrides
+# Fires only on test asserts; its `assert_eq!(x, [] as [T; 0])` rewrite reads worse
+assert_is_empty = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+
+# Nursery overrides
+significant_drop_tightening = "allow"
+
+# Cargo overrides
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow"
+
+# Restriction lints (panic points need explicit #[allow] with justification)
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# For the cross-backend test stub: fuz_app's cross suites run
+# `cargo build -p testing_spine_stub --profile cross-test` before every
+# Rust-backed run. Release optimization without LTO, with parallel codegen and
+# incremental compilation, so the rebuild after a spine edit takes seconds
+# instead of a full LTO relink. Nothing shipped is built with it.
+[profile.cross-test]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+# keep the symbol table for readable panic backtraces; release strips it
+strip = "debuginfo"

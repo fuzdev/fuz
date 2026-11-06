@@ -1,0 +1,14 @@
+{
+  "name": "fuzi-gate-vite-rollup",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "fuzi gate fixture: rollup-based vite (v7) + esbuild, exercises the prebuilt @rollup/rollup-<platform> and @esbuild/<host> chain with install scripts skipped.",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7",
+    "vite": "7.3.3"
+  }
+}

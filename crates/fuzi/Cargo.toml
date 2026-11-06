@@ -1,0 +1,26 @@
+[package]
+name = "fuzi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "fuzi — the lockfile-driven npm installer (the fuz-stack npm bridge)"
+
+[dependencies]
+fuzi_core.workspace = true
+argh.workspace = true
+# `cli::parse_env_args` — argh parsing under fuzi's own usage exit code
+# (`EX_USAGE`). Already in fuzi's graph through `fuzi_core`.
+fuz_sys = { workspace = true, features = ["argh"] }
+serde.workspace = true
+serde_json.workspace = true
+# The SIGINT/SIGTERM listener behind the staging-tree drain (`src/signal.rs`) —
+# tokio's self-pipe handler is what lets the removal run on an ordinary thread,
+# which `unsafe_code = "forbid"` + `remove_dir_all` both require.
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

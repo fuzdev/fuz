@@ -1,0 +1,8 @@
+{
+  "name": "localpkg-b",
+  "version": "2.0.0",
+  "private": true,
+  "bin": {
+    "localpkg-b": "bin/cli.js"
+  }
+}

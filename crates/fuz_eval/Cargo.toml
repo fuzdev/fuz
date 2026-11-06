@@ -1,0 +1,30 @@
+[package]
+name = "fuz_eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "One-shot config evaluation through a pinned `fgro eval`: spawn it, pipe a driver over stdin, read its envelope fail-closed"
+
+# Test-only: a stand-in for `fgro eval` that writes canned envelopes, for the
+# integration suites. The `testing_` prefix keeps it out of every release.
+[[bin]]
+name = "testing_fake_fgro"
+path = "src/bin/testing_fake_fgro.rs"
+test = false
+
+[dependencies]
+fuz_sys = { workspace = true, features = ["capture"] } # bounded pipe capture + the shared ceilings
+tokio.workspace = true
+serde.workspace = true # the envelope's typed mirrors
+serde_json.workspace = true # the envelope; the trust root's package.json reads
+thiserror.workspace = true
+blake3.workspace = true # the fgro pin; the driver's hash the envelope must name
+# `fs` (the workspace's) for the pin cache directory's O_DIRECTORY | O_NOFOLLOW
+# open and `signal` for the process-group kill, both already linked through
+# fuz_sys; `user`, this crate's alone, for the passwd lookup of the user `fgro`
+# runs as (its home and primary group).
+nix = { workspace = true, features = ["signal", "user"] }
+
+[lints]
+workspace = true

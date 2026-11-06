@@ -1,0 +1,37 @@
+[package]
+name = "fuz_crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Cryptographic primitives for Fuz (signature verification, content hashing, canonical JSON). Signing lives in fuz_sign."
+
+[dependencies]
+ed25519-dalek.workspace = true  # verification only — keygen/signing features live in fuz_sign
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+subtle.workspace = true  # Constant-time comparison for trusted-key check + content-hash equality
+blake3.workspace = true  # content hashing (the canonical hashing home)
+sha2.workspace = true    # sha512 (release tier, install.sh, npm SRI, SSHSIG) + sha256 (SSHSIG, npm SRI tokens fuzi ignores)
+hex.workspace = true     # hex (de)coding of digests
+
+[features]
+# Test-only. Enables a runtime registry of additional trusted verifying keys
+# (`add_trusted_key_for_testing`) so downstream test crates can exercise the
+# end-to-end sign→verify composition with a key they control. NEVER enable on a
+# shipping binary — enable it only as a dev-dependency feature so Cargo's
+# resolver-2 keeps it out of every normal build. See `signing.rs`.
+test_trust_anchor = []
+
+[build-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "fuz_db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "PostgreSQL pool wrapper, identity-tracked migration runner, and query helpers"
+
+[dependencies]
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

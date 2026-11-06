@@ -1,0 +1,49 @@
+[package]
+name = "fuz_auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Auth surface for the fuz spine — keyring, sessions, password (Argon2), API + daemon tokens, rate limiter, audit emitter, bootstrap, account REST routes"
+
+[dependencies]
+fuz_db.workspace = true
+fuz_http.workspace = true
+fuz_sys = { workspace = true, features = ["periodic"] }
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+lru.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+blake3.workspace = true
+base64.workspace = true
+subtle.workspace = true
+getrandom.workspace = true
+uuid.workspace = true
+argon2.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`). A dev
+# cycle — `fuz_testing` depends on `fuz_auth` — which cargo permits and
+# `fuz_audit` ignores (it walks runtime edges only).
+fuz_testing.workspace = true
+# Dev-only: the parity test between `is_valid_fact_hash` and
+# `ContentHash::parse_fact_hash`. A runtime edge would put the release-key
+# verifier in every auth-only consumer's graph.
+fuz_crypto.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tempfile.workspace = true
+# `ServiceExt::oneshot`, to drive the REST routers in the route-level suites.
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

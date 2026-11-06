@@ -1,0 +1,41 @@
+[package]
+name = "fuz_artifact"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "fuz distribution domain: content-addressed artifact model (build/hash/store/symlink) + first-party tool install. Consumed by fuz, fuz_release, fuz_sign, xtask."
+
+[features]
+# Test-only. Exposes `platform::test_stubs` — minimal ELF / Mach-O executables
+# the platform check accepts — to the suites of the crates that publish, build,
+# or install releases (`fuz_release`, `fuz_sign`, `fuz`, `xtask`, the forge's),
+# whose fixtures must carry bytes for the host target. NEVER enable on a shipping binary:
+# enable it only as a dev-dependency feature, so resolver-2 keeps it out of
+# every normal build (`cargo xtask check-release` refuses it on a normal or
+# build edge).
+test_binary_stubs = []
+
+[dependencies]
+fuz_home.workspace = true
+fuz_sys.workspace = true
+fuz_crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Test-only in-process FUZ_HOME redirect for the create→find→verify round-trip
+# (`tests/round_trip.rs`) — the local artifact store resolves every path under
+# ~/.fuz, and edition 2024 + `unsafe_code = "forbid"` rule out
+# `std::env::set_var`. resolver-2 keeps this dev-dep feature out of every
+# production binary (the same seam `fuz_sign`'s signed-trust test uses).
+fuz_home = { workspace = true, features = ["test_home_override"] }
+# Self dev-dep enabling the stub executables for this crate's own integration
+# suites (`tests/`), which build artifacts through the platform check.
+fuz_artifact = { path = ".", features = ["test_binary_stubs"] }
+
+[lints]
+workspace = true

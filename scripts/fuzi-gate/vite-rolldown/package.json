@@ -1,0 +1,14 @@
+{
+  "name": "fuzi-gate-vite-rolldown",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "fuzi gate fixture: rolldown-based vite (v8) + esbuild, exercises the prebuilt rolldown/oxc native .node addon chain (detect-libc selection) with install scripts skipped.",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7",
+    "vite": "8.0.14"
+  }
+}

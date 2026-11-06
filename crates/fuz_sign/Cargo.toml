@@ -1,0 +1,43 @@
+[package]
+name = "fuz_sign"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Producer-side signing + publishing for Fuz (ed25519 keys, manifest and release log head signing, publish, prune, release log writers). Deliberately NOT a dependency of the fuz consumer binary."
+
+[dependencies]
+fuz_artifact.workspace = true
+fuz_crypto.workspace = true
+# The default signing key lives in the fuz config directory (`key_file`).
+fuz_home.workspace = true
+fuz_sys.workspace = true
+fuz_release.workspace = true
+fuz_storage.workspace = true
+ed25519-dalek = { workspace = true, features = ["rand_core", "zeroize"] }
+rand.workspace = true  # keypair generation (ed25519-dalek needs rand 0.8.x)
+zeroize.workspace = true  # Zeroize key material on drop
+base64.workspace = true
+semver.workspace = true # release-version comparison for prune retention
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+tempfile.workspace = true
+tar.workspace = true
+flate2.workspace = true
+# Test-only seams for the end-to-end signed-trust integration test
+# (`tests/signed_trust.rs`): a trusted key the test controls + an in-process
+# FUZ_HOME redirect. resolver-2 keeps these dev-dep features out of every
+# production binary (verified: `cargo tree -e features` shows fuz/fuzd/fuzf
+# linking fuz_crypto/fuz_home without them).
+fuz_crypto = { workspace = true, features = ["test_trust_anchor"] }
+fuz_home = { workspace = true, features = ["test_home_override"] }
+# Test-only stub executables (`fuz_artifact::platform::test_stubs`): fixtures
+# that publish or install a release carry bytes the platform check accepts.
+fuz_artifact = { workspace = true, features = ["test_binary_stubs"] }
+
+[lints]
+workspace = true

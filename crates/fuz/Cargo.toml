@@ -1,0 +1,30 @@
+[package]
+name = "fuz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The fuz CLI — installs and verifies signed first-party tools (self, tool, artifact, workload observe)"
+
+[dependencies]
+fuz_artifact.workspace = true
+fuz_client.workspace = true
+fuz_crypto.workspace = true  # the embedded witness keys (WITNESS_KEYS); verification only, already linked through fuz_release
+fuz_home.workspace = true
+fuz_sys = { workspace = true, features = ["argh"] }
+fuz_release.workspace = true  # storage comes through here too, never from fuz_storage directly: fuz_release offers parse_existing_storage alone
+fuz_wire.workspace = true
+argh.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true  # the private target directory `fuz artifact build --verify` rebuilds into
+
+[dev-dependencies]
+# Test-only stub executables: the stale decoy binary the artifact build suite
+# plants at `target/release/fuz`.
+fuz_artifact = { workspace = true, features = ["test_binary_stubs"] }
+
+[lints]
+workspace = true

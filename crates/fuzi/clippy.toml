@@ -1,0 +1,45 @@
+# fuzi's clippy config. A crate-level `clippy.toml` REPLACES the workspace one
+# (clippy reads the nearest file and does not merge), so everything below the
+# exec-free block is copied from the workspace `clippy.toml` — keep the two in
+# step. The same file sits in `fuzi`, `fuzi_core`, and `fuz_archive`.
+
+# fuzi's install path runs no package code and spawns nothing (the `fuzi_core`
+# entry in docs/crates.md). These lists make a process spawn a lint error in the
+# fuzi crates — by type and by path, so an aliased or grouped import
+# (`use std::process::{Command as Cmd}`) is caught where the text scan in
+# `fuzi_core/tests/exec_free.rs` is blind. Scoped here, not workspace-wide:
+# `fuz` and `fuzd` legitimately spawn. `allow-invalid`: a path whose crate is
+# not a dependency of the crate being linted (`tokio` in `fuz_archive`, `nix`
+# everywhere — and its `process` feature is off) does not resolve, which is the
+# same "unreachable" the lint enforces; adding the dependency makes it bite.
+disallowed-types = [
+    { path = "std::process::Command", reason = "fuzi is exec-free: no process spawns on the install path" },
+    { path = "tokio::process::Command", reason = "fuzi is exec-free: no process spawns on the install path", allow-invalid = true },
+]
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "fuzi is exec-free: no process spawns on the install path" },
+    { path = "tokio::process::Command::new", reason = "fuzi is exec-free: no process spawns on the install path", allow-invalid = true },
+    { path = "nix::unistd::execv", reason = "fuzi is exec-free: no exec on the install path", allow-invalid = true },
+    { path = "nix::unistd::execve", reason = "fuzi is exec-free: no exec on the install path", allow-invalid = true },
+    { path = "nix::unistd::execvp", reason = "fuzi is exec-free: no exec on the install path", allow-invalid = true },
+    { path = "nix::unistd::execvpe", reason = "fuzi is exec-free: no exec on the install path", allow-invalid = true },
+    { path = "nix::unistd::execveat", reason = "fuzi is exec-free: no exec on the install path", allow-invalid = true },
+    { path = "nix::unistd::fexecve", reason = "fuzi is exec-free: no exec on the install path", allow-invalid = true },
+    { path = "nix::spawn::posix_spawn", reason = "fuzi is exec-free: no process spawns on the install path", allow-invalid = true },
+    { path = "nix::spawn::posix_spawnp", reason = "fuzi is exec-free: no process spawns on the install path", allow-invalid = true },
+    { path = "nix::unistd::fork", reason = "fuzi is exec-free: no fork on the install path", allow-invalid = true },
+    # From the workspace clippy.toml:
+    # Every `$HOME` lookup goes through `fuz_sys::home_dir`, which refuses an
+    # empty or relative home; std's own reads an empty `HOME` as unset and
+    # substitutes the password database's home.
+    { path = "std::env::home_dir", reason = "use fuz_sys::home_dir: it refuses an empty or relative HOME" },
+]
+
+# From the workspace clippy.toml: restriction lints (`unwrap_used` /
+# `expect_used` / `panic`) are warn-level workspace-wide (see Cargo.toml
+# `[workspace.lints.clippy]`) so production panic points need an explicit
+# justified `#[allow]`. Tests panic on assertion failure by design, so allow
+# the three there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

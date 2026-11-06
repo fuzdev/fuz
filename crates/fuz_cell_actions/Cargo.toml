@@ -1,0 +1,33 @@
+[package]
+name = "fuz_cell_actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Cell RPC action specs for the fuz spine — build_cell_spec_set + the cell/grant/field/item/audit ActionSpec handlers atop fuz_cell storage"
+
+[dependencies]
+fuz_cell.workspace = true
+fuz_actions.workspace = true
+fuz_auth.workspace = true
+fuz_db.workspace = true
+fuz_http.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+deadpool-postgres.workspace = true
+
+[dev-dependencies]
+# Dev-only: the PG-suite harness + seeding (`fuz_testing`) and the no-op
+# transport pieces `perform_action` takes (`fuz_realtime`, `tracing`), for the
+# dispatcher-driven `tests/cell_authz.rs`. Dev-only edges, so they never reach
+# a production build — `fuz_audit` walks runtime edges only.
+fuz_testing.workspace = true
+fuz_realtime.workspace = true
+tracing.workspace = true
+# Dev-only: the fact chain + `PgFactStore` puts the ref-admission cases seed.
+fuz_fact.workspace = true
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

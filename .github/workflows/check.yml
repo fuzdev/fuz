@@ -1,0 +1,251 @@
+# Checks the Rust workspace.
+#
+# `check` — the self-contained lane: format, lint, tests (run twice — once at
+# the runner's umask, once at 000, because the `~/.fuz` mode assertions are
+# only as strict as the umask the tree is born under), the release dep-graph
+# audit (`cargo xtask check-release` — the rail that keeps `fuz_testing` /
+# `fuz_audit` / `fuz_sign`, the weakened test-mode Argon2 params, and every
+# `test_*` feature seam out of production builds), and rustdoc held at zero
+# warnings across all features.
+# `cargo test --workspace` skips the `#[ignore]` real-Postgres suites, so this
+# job needs no services.
+#
+# `db-tests` — the `#[ignore]` real-Postgres suites against a Postgres service.
+# `fuz_storage`'s backends are not covered here: they ride unit tests plus the
+# `#[ignore]` SSH round-trip that needs a real host.
+#
+# `fuzi-gate` — the fuzi empirical gate, glibc leg: a real (script-skipped)
+# `fuzi install` from the committed lockfile fixtures, then the functional
+# toolchain assertions (esbuild transform, `.bin` shims, `vite build` on both
+# rollup and rolldown, `fuzi verify`, a real SIGINT mid-install, fuzi ⊇ npm
+# with matching `.bin` entries — strict, so a skipped npm check fails), plus
+# the `link-sibling` fixture (sibling `link: true` symlinks match `npm ci`, link
+# targets never written, a tampered tree caught by `fuzi verify`). The musl leg needs docker
+# + a cold in-container cargo build, so it stays on the manual script
+# (`scripts/fuzi-gate.sh --musl-only`).
+#
+# `install-test` — drives scripts/install.sh end-to-end against a local HTTPS
+# server (deno + a throwaway self-signed cert) and then the mutation gate that
+# proves the e2e suite would notice if install.sh's download/checksum/TLS checks
+# regressed. Needs no Rust build. The mutation gate also carries the `redirect`
+# case's non-vacuity — a silently-regressed HTTP listener would leave `redirect`
+# passing on its own, since curl refuses `http://localhost:0/…` pre-connect.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ['**']
+  # Allow manually re-running the check from the Actions tab.
+  workflow_dispatch:
+
+# Cancel a PR's in-progress run when a new commit supersedes it; let main-branch
+# runs finish so every push to main stays verified. Note that is per *push*, not
+# per commit: a push of several commits is checked at its tip only.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: the checks only read the repo.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # The toolchain is pinned in rust-toolchain.toml, not `stable`: the
+      # workspace runs `clippy::nursery` at warn and this job denies warnings,
+      # so a floating toolchain would fail CI whenever a new Rust release adds a
+      # nursery lint. Bump the file deliberately. The runner's preinstalled
+      # rustup installs that toolchain and its components; any rustup 1.28+
+      # reads the file with no arguments, so skip self-updating it.
+      - name: Install Rust
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          cargo --version
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --workspace
+
+      # `~/.fuz` directory *modes* are load-bearing — a world-writable artifacts
+      # dir is local code execution, since the staging dir is renamed into place
+      # — and a mode that is never asserted is a mode the environment chose.
+      # `tempfile::tempdir()` does not create at 0700; it applies the process
+      # umask, so the runner's umask silently decides whether the suite's mode
+      # assertions mean anything. Re-running under the permissive extreme makes
+      # them mean it at both ends. The binaries are already built by the step
+      # above, so this leg costs test execution only, not a second build.
+      - name: Test (umask 000)
+        run: |
+          umask 000
+          cargo test --locked --workspace
+
+      - name: Release dep-graph audit
+        run: cargo xtask check-release
+
+      # `-D warnings`, not a warning count against a baseline: `cargo doc` is
+      # incremental, so a count taken against a warm target dir re-emits
+      # warnings only for the crates it actually rebuilt — it can read *lower*
+      # than the baseline, and a counting gate silently stops gating. Hard zero
+      # is immune: any crate whose own source or whose dependency fingerprint
+      # moved is re-documented, and every crate that wasn't was green the last
+      # time it was. `--all-features` because the default feature set is not
+      # the whole doc surface — it hid a genuinely broken intra-doc link in
+      # `fuz_crypto`, behind the dev-only `test_trust_anchor` feature.
+      #
+      # `--document-private-items` because rustdoc only checks the docs of the
+      # items it documents: without it, every doc comment on a private or
+      # `pub(crate)` item — module headers of private modules, private fields —
+      # goes unchecked. One leg covers both directions. Private mode is a
+      # superset for these lints, not a different set: a link resolves in the
+      # same scope either way, and `private_intra_doc_links` (public docs
+      # linking a private item) still fires in this mode — it only adds a note
+      # that the link happens to render here. The other way round, private mode
+      # sees more items, so it can find an ambiguity public mode can't (a
+      # private `mod verify` beside the re-exported `fn verify`).
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --all-features --document-private-items
+
+  # Needs network to registry.npmjs.org (tarball fetches) and the runner's
+  # preinstalled node + npm (npm only for the superset cross-check).
+  fuzi-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # Installs the toolchain pinned in rust-toolchain.toml (see `check`).
+      - name: Install Rust
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      # Strict: a skipped npm cross-check (npm ci failing) fails the job.
+      - name: fuzi empirical gate (glibc)
+        run: scripts/fuzi-gate.sh --glibc-only
+        env:
+          FUZI_GATE_STRICT: "1"
+
+  # Exercises scripts/install.sh without a Rust build. deno is installed via its
+  # official install script rather than a third-party setup action (fewer
+  # pinned actions to audit); openssl + curl are preinstalled on ubuntu-latest.
+  install-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Deno
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+
+      # Fail loud if deno didn't land on PATH — otherwise both scripts below
+      # SKIP (exit 0) on missing deno and the whole gate goes vacuously green.
+      - name: Verify Deno on PATH
+        run: deno --version
+
+      - name: install.sh end-to-end
+        run: scripts/install-test.sh
+
+      - name: install.sh mutation gate
+        run: scripts/install-test-mutants.sh
+
+  db-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fuz_test
+          POSTGRES_PASSWORD: fuz_test
+          POSTGRES_DB: fuz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Each crate's `#[ignore]` suite points at its own database via these
+    # env vars (`fuz_http`'s `ready` suite shares `fuz_db_test` with `fuz_db`).
+    env:
+      FUZ_DB_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_db_test
+      FUZ_AUTH_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_auth_test
+      FUZ_CELL_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_cell_test
+      FUZ_FACT_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_fact_test
+      FUZ_FACT_SERVING_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_fact_serving_test
+      FUZ_ACTIONS_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_actions_test
+      FUZ_DB_ADMIN_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_db_admin_test
+      FUZ_REALTIME_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_realtime_test
+      FUZ_CELL_ACTIONS_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_cell_actions_test
+
+    steps:
+      # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # Installs the toolchain pinned in rust-toolchain.toml (see `check`).
+      - name: Install Rust
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Create test databases
+        run: |
+          psql postgres://fuz_test:fuz_test@localhost:5432/fuz_test \
+            -c 'CREATE DATABASE fuz_db_test;' \
+            -c 'CREATE DATABASE fuz_auth_test;' \
+            -c 'CREATE DATABASE fuz_cell_test;' \
+            -c 'CREATE DATABASE fuz_fact_test;' \
+            -c 'CREATE DATABASE fuz_fact_serving_test;' \
+            -c 'CREATE DATABASE fuz_actions_test;' \
+            -c 'CREATE DATABASE fuz_db_admin_test;' \
+            -c 'CREATE DATABASE fuz_realtime_test;' \
+            -c 'CREATE DATABASE fuz_cell_actions_test;'
+
+      # `--test-threads=1`: the suites share one database per crate and some
+      # tests read the whole `public` schema (`fuz_db`'s snapshot test), so
+      # they must not run concurrently within a binary.
+      - name: DB integration tests
+        run: >-
+          cargo test --locked
+          -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact_serving -p fuz_actions -p fuz_db_admin -p fuz_realtime -p fuz_cell_actions
+          -- --ignored --test-threads=1
