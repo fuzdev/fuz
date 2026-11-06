@@ -231,8 +231,11 @@ async fn a_project_other_than_the_trust_root_is_refused() {
 
 /// The child gets the arguments the protocol names, `fgro` as `argv[0]`, the
 /// trust root as its working directory, `TZ=UTC` as its whole environment, and
-/// no descriptor but stdin, stdout, and stderr — this suite's own environment
-/// (`PATH`, `HOME`, Cargo's variables) included in what is withheld.
+/// no descriptor this process opened but stdin, stdout, and stderr — this
+/// suite's own environment (`PATH`, `HOME`, Cargo's variables) included in what
+/// is withheld. A descriptor this process inherited without close-on-exec (a CI
+/// runner can leave some) reaches any child; fgro closes those itself, so the
+/// fake sees them and the assertion allows them.
 #[tokio::test]
 async fn the_child_gets_its_arguments_the_trust_root_tz_alone_and_stdio_alone() {
     let (scratch, _) = project("fake_report", "export default 1;\n");
@@ -251,6 +254,8 @@ async fn the_child_gets_its_arguments_the_trust_root_tz_alone_and_stdio_alone() 
 
     // a descriptor this process holds open across the spawn
     let held = std::fs::File::open(&config).unwrap();
+    let mut expected_fds = vec![0, 1, 2];
+    expected_fds.extend(inherited_fds());
     let output = eval_with(&config, "report", Duration::from_millis(1500))
         .await
         .unwrap();
@@ -271,7 +276,7 @@ async fn the_child_gets_its_arguments_the_trust_root_tz_alone_and_stdio_alone() 
     );
     assert_eq!(report["cwd"], scratch.path().to_str().unwrap());
     assert_eq!(report["env"], serde_json::json!({"TZ": "UTC"}));
-    assert_eq!(report["fds"], serde_json::json!([0, 1, 2]));
+    assert_eq!(report["fds"], serde_json::json!(expected_fds));
     // not root, so no drop: the child is this process's uid (the drop's own
     // suite is `uid_drop`, run as root)
     let euid = common::effective_uid();
@@ -606,4 +611,25 @@ async fn the_pin_cache_is_used_on_the_eval_path() {
     assert!(output.value_json.starts_with('{'));
     let mode = std::fs::metadata(&cache).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o700);
+}
+
+/// The descriptors above stderr this process holds without close-on-exec:
+/// what its own parent left inheritable, since std and tokio open every
+/// descriptor close-on-exec.
+fn inherited_fds() -> Vec<u32> {
+    let mut fds: Vec<u32> = std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| {
+            let fd: u32 = entry.ok()?.file_name().to_str()?.parse().ok()?;
+            let fdinfo = std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}")).ok()?;
+            let flags = fdinfo
+                .lines()
+                .find_map(|line| line.strip_prefix("flags:"))
+                .and_then(|flags| u32::from_str_radix(flags.trim(), 8).ok())?;
+            // O_CLOEXEC is 02000000 on every Linux architecture
+            (fd > 2 && flags & 0o2_000_000 == 0).then_some(fd)
+        })
+        .collect();
+    fds.sort_unstable();
+    fds
 }
