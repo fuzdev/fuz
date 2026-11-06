@@ -433,27 +433,32 @@ async fn handle_tables(
 }
 
 /// Parse an optional integer query param — absent ⇒ `default`, malformed ⇒
-/// 400 `invalid_query_params` in the flat envelope (twinning the TS Zod
-/// coercion's 400).
+/// 400 `invalid_query_params` in the flat envelope (twinning the TS
+/// `query_int`'s 400, which reads the same `[+-]?digits` spellings).
 fn parse_query_i64(raw: Option<&str>, default: i64) -> Result<i64, Response> {
     raw.map_or(Ok(default), |s| {
         s.parse().map_err(|_| invalid_query_params_response())
     })
 }
 
+/// The largest offset the TS twin accepts, `Number.MAX_SAFE_INTEGER`.
+const DB_TABLE_ROWS_OFFSET_MAX: i64 = (1 << 53) - 1;
+
 /// Parse and bound the paging params — absent ⇒ defaults, malformed or
 /// out-of-range ⇒ 400 `invalid_query_params`. Strict bounds, not a silent
-/// clamp: out-of-range is a caller bug the TS twin's Zod schema already 400s
+/// clamp: out-of-range is a caller bug the TS twin's query schema already 400s
 /// on, and hiding it here made the twins diverge.
 ///
 /// # Errors
 ///
-/// Returns the 400 denial `Response` (`Err`) on a malformed number, negative
-/// offset, or a limit outside `[1, DB_TABLE_ROWS_LIMIT_MAX]`.
+/// Returns the 400 denial `Response` (`Err`) on a malformed number, an offset
+/// outside `[0, 2^53−1]`, or a limit outside `[1, DB_TABLE_ROWS_LIMIT_MAX]`.
 fn parse_paging(offset_raw: Option<&str>, limit_raw: Option<&str>) -> Result<(i64, i64), Response> {
     let offset = parse_query_i64(offset_raw, 0)?;
     let limit = parse_query_i64(limit_raw, DB_TABLE_ROWS_DEFAULT_LIMIT)?;
-    if offset < 0 || !(1..=DB_TABLE_ROWS_LIMIT_MAX).contains(&limit) {
+    if !(0..=DB_TABLE_ROWS_OFFSET_MAX).contains(&offset)
+        || !(1..=DB_TABLE_ROWS_LIMIT_MAX).contains(&limit)
+    {
         return Err(invalid_query_params_response());
     }
     Ok((offset, limit))
@@ -502,6 +507,7 @@ mod query_param_tests {
             (None, Some("1e2")),
             (None, Some("-5")),
             (Some("-1"), None),
+            (Some("9007199254740992"), None),
         ] {
             let resp = parse_paging(offset, limit).unwrap_err();
             assert_eq!(
@@ -511,6 +517,10 @@ mod query_param_tests {
             );
         }
         assert_eq!(parse_paging(Some("+5"), Some("1000")).unwrap(), (5, 1000));
+        assert_eq!(
+            parse_paging(Some("9007199254740991"), None).unwrap(),
+            ((1 << 53) - 1, DB_TABLE_ROWS_DEFAULT_LIMIT)
+        );
     }
 }
 

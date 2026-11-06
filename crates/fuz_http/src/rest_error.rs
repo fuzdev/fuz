@@ -3,9 +3,10 @@
 //! The `{ "error": <reason> }` (+ optional fields) bodies that hand-mounted
 //! axum routes return on denial — the REST sibling of [`crate::jsonrpc_error`]
 //! (which builds JSON-RPC envelopes). Single source of truth for the flat
-//! `ApiError` / `PermissionError` shapes matching `fuz_app`'s
-//! `http/error_schemas.ts`, so every consumer's hand-mounted routes reject
-//! with one wire body across both spines. Paired with
+//! bodies of `fuz_app`'s `REST_*` error definitions (`http/error_schemas.ts`),
+//! such as `REST_AUTHENTICATION_REQUIRED` and `REST_INSUFFICIENT_PERMISSIONS`,
+//! so every consumer's hand-mounted routes reject with one wire body across
+//! both spines. Paired with
 //! [`crate::origin::forbidden_origin_response`], another flat-REST builder.
 
 use axum::Json;
@@ -56,7 +57,7 @@ struct PermissionErrorBody<'a> {
 /// Build the canonical `401` unauthenticated response.
 ///
 /// Flat `{"error": "authentication_required"}` REST body matching `fuz_app`'s
-/// `ApiError` shape — the REST sibling of [`crate::unauthenticated`] (the
+/// `REST_AUTHENTICATION_REQUIRED` — the REST sibling of [`crate::unauthenticated`] (the
 /// JSON-RPC envelope form). For hand-mounted routes that resolve auth
 /// themselves rather than going through the RPC dispatcher.
 #[must_use]
@@ -71,7 +72,7 @@ pub fn authentication_required_response() -> Response {
 /// Build the canonical `403` insufficient-permissions response.
 ///
 /// Flat `{"error": "insufficient_permissions", "required_roles": [...]}` REST
-/// body matching `fuz_app`'s `PermissionError` shape — the REST sibling of
+/// body matching `fuz_app`'s `REST_INSUFFICIENT_PERMISSIONS` — the REST sibling of
 /// [`crate::forbidden`]. `required_roles` names the role(s) the route demands.
 #[must_use]
 pub fn insufficient_permissions_response(required_roles: &[&str]) -> Response {
@@ -336,8 +337,8 @@ mod tests {
 
     /// The two pre-auth 400s are the same flat envelope with different
     /// reasons, pinned byte-for-byte side by side so neither grows a field the
-    /// other lacks. Both omit the TS twin's DEV-only `issues`: the detail is a
-    /// Zod artifact, and a cross-impl assertion that pinned it would be
+    /// other lacks. Both omit the TS twin's DEV-only `issues`: the detail is the
+    /// TS validator's own, and a cross-impl assertion that pinned it would be
     /// pinning a build mode.
     #[tokio::test]
     async fn the_pre_auth_400_bodies_are_the_bare_flat_envelopes() {

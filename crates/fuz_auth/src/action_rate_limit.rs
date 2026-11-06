@@ -17,8 +17,8 @@
 //! one limiter pair — a single per-account cap across the whole action
 //! surface (matching TS `default_action_account_rate_limit`).
 //!
-//! Mirrors TS `RateLimitKey = z.enum(['ip', 'account', 'both'])` in
-//! `fuz_app/src/lib/http/error_schemas.ts`. `None` on an entry skips
+//! Mirrors TS `RateLimitKey = one_of(['ip', 'account', 'both'])` in
+//! `fuz_app/src/lib/rate_limiter.ts`. `None` on an entry skips
 //! the gate entirely (no limiter consulted).
 
 /// Per-method rate-limit class. See module docs.

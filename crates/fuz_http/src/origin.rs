@@ -80,7 +80,7 @@ const ENTRY_EXCERPT_MAX: usize = 200;
 /// Build the canonical origin-rejection response.
 ///
 /// `403` + the flat `{"error": "forbidden_origin"}` REST body matching
-/// `fuz_app`'s `ApiError` shape. The single source of the rejection across
+/// `fuz_app`'s `REST_FORBIDDEN_ORIGIN`. The single source of the rejection across
 /// every origin-checking site: the [`origin_layer`] middleware plus the
 /// per-handler checks every spine entry point makes through `fuz_auth`'s gate.
 #[must_use]

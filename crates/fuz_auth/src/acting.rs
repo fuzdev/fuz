@@ -13,12 +13,11 @@
 //! the strict wire grammar of the `fuz_schema` `Uuid` twin, which takes the
 //! max UUID in any case — [`fuz_http::is_valid_uuid`] is that grammar's Rust
 //! twin and gates this parser. The TS status route and WS upgrade read the
-//! raw query through `parse_acting`, by the same grammar; the TS REST query
-//! routes validate `acting` with a Zod query schema, which refuses the
-//! uppercase max (see [`parse_acting_selector`]). This module is the single
-//! parser for that shape;
-//! each route maps a malformed value to its own transport error (400) or
-//! treats it as absent, per its posture.
+//! raw query through `parse_acting`, and the TS REST query routes validate
+//! `acting` with a `fuz_schema` query schema over that twin, both by the same
+//! grammar (see [`parse_acting_selector`]). This module is the single parser
+//! for that shape; each route maps a malformed value to its own transport
+//! error (400) or treats it as absent, per its posture.
 //!
 //! The JSON `?params=` decoding on the RPC GET path is a different concept and
 //! is not this parser's business: that one decodes a whole JSON-RPC params

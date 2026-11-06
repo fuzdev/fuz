@@ -240,7 +240,7 @@ impl AuthSpec {
     /// Validate the cross-axis registry invariants (1, 3, 4, 5). Returns the
     /// violated invariant's message on failure.
     ///
-    /// Mirrors `fuz_app`'s `RouteAuth` `.superRefine`. Invariant 2 (the
+    /// Mirrors `fuz_app`'s `assert_route_auth_invariants`. Invariant 2 (the
     /// `actor != None ⟺ input declares acting` biconditional) needs typed-input
     /// introspection the Rust spine lacks pre-codegen, so it stays deferred —
     /// the dispatcher reads `acting` from raw params instead.

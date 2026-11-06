@@ -21,7 +21,7 @@
 //!   [`RegistryBuildError::InvalidAuthSpec`] on a violation (roles ⟹
 //!   actor required; no accountless actors; the unrestricted leaf
 //!   declares no role / credential gates; no empty credential allowlist).
-//!   Mirrors `fuz_app`'s `RouteAuth` `.superRefine`.
+//!   Mirrors `fuz_app`'s `assert_route_auth_invariants`.
 //! - **Rate-limit / account axis** — an account-keyed class
 //!   ([`RateLimitClass::Account`] / [`RateLimitClass::Both`]) requires
 //!   `auth.account` = [`AuthAxis::Required`], since the per-account bucket
@@ -128,7 +128,7 @@ pub enum RegistryBuildError {
     /// A spec's [`fuz_auth::AuthSpec`] violated a cross-axis registry invariant
     /// (1: roles ⟹ actor required; 3: no accountless actors; 4: unrestricted
     /// is leaf; 5: no empty credential allowlist). Fail loud at
-    /// registry-compile time, mirroring `fuz_app`'s `RouteAuth` `.superRefine`.
+    /// registry-compile time, mirroring `fuz_app`'s `assert_route_auth_invariants`.
     #[error("invalid auth spec for method '{method}': {reason}")]
     InvalidAuthSpec {
         method: &'static str,
@@ -474,8 +474,8 @@ mod tests {
     }
 
     /// An `AuthSpec` that fails `validate` is refused as that, ahead of the
-    /// rate-limit check, matching the twin, whose `RouteAuth` parse runs
-    /// before the registration loop.
+    /// rate-limit check, matching the twin, whose `assert_route_auth_invariants`
+    /// runs before the registration loop.
     #[test]
     fn compile_reports_an_invalid_auth_spec_before_the_rate_limit_axis() {
         let accountless_actor = AuthSpec {
