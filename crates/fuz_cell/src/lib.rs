@@ -72,7 +72,7 @@ pub use cell_moderation::{
 };
 pub use cell_relation_visibility::filter_visible_targets;
 pub use cell_schema::{
-    CellData, CellDataError, CellPolicy, CellPolicyError, CellRow, CellVisibility,
+    CellData, CellDataError, CellModeration, CellPolicy, CellPolicyError, CellRow, CellVisibility,
 };
 pub use cell_steward::cell_steward_admits;
 pub use cell_view_sql::CellViewer;

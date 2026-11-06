@@ -57,8 +57,8 @@ use fuz_cell::cell_queries::{
 use fuz_cell::cell_relation_visibility::filter_visible_targets;
 use fuz_cell::cell_schema::{
     CellCloneInput, CellCreateInput, CellData, CellDeleteInput, CellGetInput, CellListInput,
-    CellListOrderBy, CellListOrderDir, CellModerateInput, CellPolicy, CellPolicySetInput, CellRow,
-    CellUpdateInput, CellVisibility,
+    CellListOrderBy, CellListOrderDir, CellModerateInput, CellModeration, CellPolicy,
+    CellPolicySetInput, CellRow, CellUpdateInput, CellVisibility,
 };
 use fuz_cell::cell_steward::cell_steward_admits;
 use fuz_cell::cell_view_sql::CellViewer;
@@ -1189,7 +1189,7 @@ async fn handle_list<C: deadpool_postgres::GenericClient + ?Sized>(
         created_by: input.created_by,
         path_prefix: input.path_prefix.as_deref(),
         root_id: input.root_id,
-        moderation: input.moderation.as_deref(),
+        moderation: input.moderation.map(CellModeration::as_str),
         viewer,
         shared_with_caller_only,
         order_by: if input.order_by.as_deref() == Some("updated_at") {

@@ -412,6 +412,36 @@ pub struct CellDeleteInput {
     pub acting: Option<Uuid>,
 }
 
+/// A `cell.moderation` marker on the wire — the twin of the TS
+/// `CellModeration` (`'pending' | 'approved' | 'rejected'`), the markers the
+/// create authorizer's verdict and `cell_moderate` write.
+///
+/// `cell_list`'s `moderation` filter decodes as one, so another value is
+/// `invalid_params` with no reason at decode rather than a filter matching
+/// nothing, as on the twin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CellModeration {
+    /// [`crate::cell_moderation::CELL_MODERATION_PENDING`].
+    Pending,
+    /// [`crate::cell_moderation::CELL_MODERATION_APPROVED`].
+    Approved,
+    /// [`crate::cell_moderation::CELL_MODERATION_REJECTED`].
+    Rejected,
+}
+
+impl CellModeration {
+    /// The `cell.moderation` literal this marker names.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => crate::cell_moderation::CELL_MODERATION_PENDING,
+            Self::Approved => crate::cell_moderation::CELL_MODERATION_APPROVED,
+            Self::Rejected => crate::cell_moderation::CELL_MODERATION_REJECTED,
+        }
+    }
+}
+
 /// The terminal transition a `cell_moderate` call applies to a gated
 /// contribution's `moderation` lifecycle.
 ///
@@ -520,8 +550,9 @@ pub struct CellListInput {
     #[serde(deserialize_with = "fuz_http::deserialize_optional_wire_uuid")]
     pub root_id: Option<Uuid>,
     /// Filter by moderation lifecycle marker (`pending` drives the mod-queue
-    /// via `idx_cell_moderation_pending`).
-    pub moderation: Option<String>,
+    /// via `idx_cell_moderation_pending`). A [`CellModeration`], so another
+    /// value is refused at decode rather than matching nothing.
+    pub moderation: Option<CellModeration>,
     /// Only `"me"` is valid at the wire (the handler rejects anything else as
     /// `invalid_params`, and an unauthenticated caller outright). It narrows to
     /// cells admitting the caller via a `cell_grant` row, excluding the cells
@@ -583,6 +614,29 @@ mod tests {
         assert_eq!(item.limit, Some(5));
         assert!(serde_json::from_str::<CellFieldListInput>(r#"{"limit":5.5}"#).is_err());
         assert!(serde_json::from_str::<CellItemListInput>(r#"{"limit":5.5}"#).is_err());
+    }
+
+    /// `cell_list`'s `moderation` filter is the twin's `CellModeration`: the
+    /// three markers decode, and any other value is refused at decode rather
+    /// than filtering to nothing.
+    #[test]
+    fn list_moderation_filter_takes_only_the_markers() {
+        use super::CellModeration;
+        for (raw, marker) in [
+            ("pending", CellModeration::Pending),
+            ("approved", CellModeration::Approved),
+            ("rejected", CellModeration::Rejected),
+        ] {
+            let input: CellListInput = parse(json!({"moderation": raw})).unwrap();
+            assert_eq!(input.moderation, Some(marker));
+            assert_eq!(marker.as_str(), raw);
+        }
+        for bad in [json!(""), json!("bogus"), json!("Pending"), json!(1)] {
+            assert!(
+                parse::<CellListInput>(json!({"moderation": bad})).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     /// The spellings `Uuid::parse_str` accepts and the TS `Uuid` refuses.

@@ -80,10 +80,32 @@ pub enum CellGrantPrincipalInput {
         actor_id: Uuid,
     },
     Role {
+        /// The role the grant admits, on the shared name grammar
+        /// ([`fuz_auth::is_valid_name`]) — the twin's `RoleName`. Off it is
+        /// `invalid_params` with no reason at decode, ahead of the role
+        /// registry check.
+        #[serde(deserialize_with = "deserialize_role_name")]
         role: String,
         #[serde(default, deserialize_with = "fuz_http::deserialize_nullish_wire_uuid")]
         scope_id: Option<Uuid>,
     },
+}
+
+/// Decode a role name, refusing a string off [`fuz_auth::is_valid_name`] —
+/// the twin of a TS field declared as `RoleName`.
+///
+/// A refusal is a serde error, so `fuz_http::parse_strict_params` answers it
+/// as the generic `invalid params` (-32602) with no `data.reason`, as the twin's
+/// schema step does.
+fn deserialize_role_name<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let role = String::deserialize(deserializer)?;
+    if !fuz_auth::is_valid_name(&role) {
+        return Err(serde::de::Error::custom("not a valid role name"));
+    }
+    Ok(role)
 }
 
 /// `cell_grant_create` input. Idempotent on the principal's unique index —
@@ -214,5 +236,56 @@ mod tests {
         // The discriminant itself stays closed.
         assert!(parse(json!({"kind": "nobody", "actor_id": ACTOR_ID})).is_err());
         assert!(parse(json!({"actor_id": ACTOR_ID})).is_err());
+    }
+
+    /// The role arm's `role` is a role name, as the twin's `RoleName` is: a
+    /// string off the shared name grammar, or past `NAME_LENGTH_MAX`, is
+    /// refused at decode; a name on it decodes whether or not it is
+    /// registered, which the handler checks.
+    #[test]
+    fn principal_role_takes_only_the_name_grammar() {
+        let too_long = "a".repeat(fuz_auth::NAME_LENGTH_MAX + 1);
+        for bad in [
+            "",
+            "Admin",
+            "a_",
+            "_a",
+            "a__b",
+            "a1",
+            "GLOBAL",
+            "a b",
+            too_long.as_str(),
+        ] {
+            assert!(
+                parse(json!({"kind": "role", "role": bad})).is_err(),
+                "role {bad:?} must be refused"
+            );
+        }
+        assert!(parse(json!({"kind": "role", "role": 1})).is_err());
+        let at_max = "a".repeat(fuz_auth::NAME_LENGTH_MAX);
+        for good in ["nobody", "teaching_assistant", at_max.as_str()] {
+            assert!(
+                matches!(
+                    parse(json!({"kind": "role", "role": good})),
+                    Ok(CellGrantPrincipalInput::Role { .. })
+                ),
+                "role {good:?} must decode"
+            );
+        }
+    }
+
+    /// An off-grammar role reaches the wire as the twin's schema refusal
+    /// does: `invalid_params` (-32602), the generic message, no `data`.
+    #[test]
+    fn an_off_grammar_role_is_invalid_params_with_no_reason() {
+        let err = fuz_http::parse_strict_params::<super::CellGrantCreateInput>(json!({
+            "cell_id": ACTOR_ID,
+            "level": "viewer",
+            "principal": {"kind": "role", "role": "Not_A_Role"},
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, fuz_http::JsonrpcErrorCode::InvalidParams);
+        assert_eq!(err.message, fuz_http::INVALID_PARAMS_MESSAGE);
+        assert!(err.data.is_none());
     }
 }
