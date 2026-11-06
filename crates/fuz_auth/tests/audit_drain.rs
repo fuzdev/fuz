@@ -56,8 +56,10 @@ async fn a_panicking_listener_still_settles_the_drain() {
     );
 }
 
-/// A pool of one client whose own checkout gives up after 50 ms — the request
-/// bound, made short.
+/// A pool of one client whose own checkout gives up after 50 ms of waiting —
+/// the request bound, made short. Opening and recycling the client keep a
+/// generous bound: a cold Postgres connect can take longer than 50 ms, and
+/// the bound under test is the wait for a held client.
 fn one_client_pool() -> fuz_db::Pool {
     let config: tokio_postgres::Config = common::test_url().parse().expect("test URL parses");
     fuz_db::Pool::builder(deadpool_postgres::Manager::new(
@@ -66,7 +68,10 @@ fn one_client_pool() -> fuz_db::Pool {
     ))
     .runtime(deadpool_postgres::Runtime::Tokio1)
     .max_size(1)
-    .timeouts(fuz_db::checkout_timeouts(Duration::from_millis(50)))
+    .timeouts(deadpool_postgres::Timeouts {
+        wait: Some(Duration::from_millis(50)),
+        ..fuz_db::checkout_timeouts(Duration::from_secs(5))
+    })
     .build()
     .expect("pool builds")
 }

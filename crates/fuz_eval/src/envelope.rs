@@ -1014,8 +1014,8 @@ mod tests {
         }
     }
 
-    /// A value comes only with a graph whose every module loaded: B2's cache
-    /// keys on each module's bytes and format.
+    /// A value comes only with a graph whose every module loaded: a value's
+    /// cache is keyed on each module's bytes and format.
     #[test]
     fn a_value_with_a_module_not_loaded_is_refused() {
         for field in ["blake3", "format"] {

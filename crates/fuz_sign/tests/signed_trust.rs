@@ -1184,7 +1184,7 @@ async fn publish_tool_version(
     .unwrap();
 }
 
-/// B3: the per-tool install path enforces version safety symmetric with the
+/// The per-tool install path enforces version safety symmetric with the
 /// self path (`fetch_version`). An explicit `--version <older>` over a newer
 /// install is a downgrade — blocked by default, permitted with
 /// `allow_downgrade`. (A fresh install of any version is allowed, covered by
@@ -1268,7 +1268,7 @@ async fn install_tool_blocks_downgrade_unless_allowed() {
     fuz_crypto::clear_trusted_keys_for_testing();
 }
 
-/// B3: the publisher's `minimum_version` floor is enforced by the tool install
+/// The publisher's `minimum_version` floor is enforced by the tool install
 /// path even with `allow_downgrade` — the same contract the self path carries
 /// (`fetch_version_enforces_minimum_even_with_allow_downgrade`), on the
 /// **upgrade path**. Install a 0.4.0 base, then a 0.5.0 release demanding minimum
