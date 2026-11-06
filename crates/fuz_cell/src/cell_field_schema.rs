@@ -15,7 +15,7 @@ use uuid::Uuid;
 /// Field-name length cap (mirrors the TS `CELL_FIELD_NAME_REGEX` brand
 /// `^[a-z][a-z0-9_]{0,63}$`).
 ///
-/// The wire is duck-typed (no Zod layer on the spine), so the handler
+/// The wire is duck-typed (no schema layer on the spine), so the handler
 /// enforces the grammar via [`is_valid_field_name`].
 pub const CELL_FIELD_NAME_LENGTH_MAX: usize = 64;
 

@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::cell_action_specs::{dispatch_db, map_cell_error, require_manageable_cell};
 use fuz_cell::cell_audit_queries::query_audit_log_list_by_cell;
-use fuz_cell::cell_audit_schema::{CELL_AUDIT_LIST_DEFAULT_LIMIT, CellAuditListInput};
+use fuz_cell::cell_audit_schema::{CELL_AUDIT_LIST_EVENTS_MAX, CellAuditListInput};
 
 async fn handle_audit_list<C: GenericClient + ?Sized>(
     client: &C,
@@ -30,7 +30,7 @@ async fn handle_audit_list<C: GenericClient + ?Sized>(
     // Manage-tier gate (admin / owner). Viewers + editors fall through to
     // the IDOR-mask 404 — the timeline is more sensitive than the content.
     let cell = require_manageable_cell(client, auth, input.cell_id).await?;
-    let rows = query_audit_log_list_by_cell(client, cell.id, CELL_AUDIT_LIST_DEFAULT_LIMIT)
+    let rows = query_audit_log_list_by_cell(client, cell.id, CELL_AUDIT_LIST_EVENTS_MAX)
         .await
         .map_err(|e| map_cell_error(e, false))?;
     let events = rows

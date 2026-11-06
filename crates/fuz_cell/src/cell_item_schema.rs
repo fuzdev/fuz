@@ -20,7 +20,7 @@ use uuid::Uuid;
 ///
 /// The cap comes from `fuz_sys::fractional_index`, so this wire check and the
 /// generator that produces positions can't drift apart. The wire is duck-typed
-/// (no Zod layer on the spine), so the handler enforces the grammar here. The
+/// (no schema layer on the spine), so the handler enforces the grammar here. The
 /// no-trailing-`'0'` invariant lives client-side, not on the wire.
 #[must_use]
 pub fn is_valid_position(position: &str) -> bool {

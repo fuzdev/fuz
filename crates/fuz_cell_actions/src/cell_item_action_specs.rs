@@ -198,7 +198,7 @@ async fn handle_item_list<C: GenericClient + ?Sized>(
     validate_list_limit(input.limit, CELL_RELATION_LIST_LIMIT_MAX, "cell_item_list")?;
     let limit = input.limit.unwrap_or(CELL_RELATION_LIST_LIMIT_DEFAULT);
     // The forward cursor is a position key, so it takes the position grammar
-    // — the twin declares `position_after` as `CellItemPosition.optional()`,
+    // — the twin declares `position_after` as `optional(CellItemPosition)`,
     // and a cursor the grammar refuses can only have been hand-built.
     if let Some(position_after) = &input.position_after {
         validate_position(position_after)?;

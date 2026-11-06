@@ -71,7 +71,7 @@ pub struct CellGrantRow {
 /// `deny_unknown_fields` applies per arm — the tag is consumed before the
 /// variant reads its fields, so `kind` is never itself an unknown field, and
 /// the other arm's fields are rejected rather than silently dropped. Twin of
-/// the TS `z.discriminatedUnion('kind', [strictObject, strictObject])`.
+/// the TS `variant('kind', [object, object])`, whose objects are strict.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum CellGrantPrincipalInput {
@@ -156,7 +156,7 @@ mod tests {
     const ACTOR_ID: &str = "11111111-1111-4111-8111-111111111111";
     const SCOPE_ID: &str = "22222222-2222-4222-9222-222222222222";
 
-    /// Every shape the TS `discriminatedUnion` accepts still parses, tag in
+    /// Every shape the TS `variant` accepts still parses, tag in
     /// any position.
     #[test]
     fn principal_accepts_the_canonical_arms() {
@@ -188,9 +188,9 @@ mod tests {
     }
 
     /// The principal's ids decode through the strict wire grammar, so a
-    /// spelling `Uuid::parse_str` takes and `z.uuid()` refuses is
+    /// spelling `Uuid::parse_str` takes and the TS `Uuid` refuses is
     /// `invalid_params` here rather than a live lookup. `scope_id` is
-    /// `Uuid.nullish()` on the twin, so `null` stays a spelling of
+    /// `optional(nullable(Uuid))` on the twin, so `null` stays a spelling of
     /// "any scope" while an off-grammar string does not.
     #[test]
     fn principal_ids_take_only_the_wire_uuid_grammar() {

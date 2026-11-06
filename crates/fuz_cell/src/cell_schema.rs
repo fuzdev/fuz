@@ -53,7 +53,7 @@ impl CellVisibility {
 /// Column a `cell_list` query orders by.
 ///
 /// The wire carries `order_by` as a string; the `cell_list` handler refuses
-/// any value but `created_at` / `updated_at` (the TS schema's `z.enum`) and
+/// any value but `created_at` / `updated_at` (the TS schema's `one_of`) and
 /// maps an absent one to [`Self::CreatedAt`], as the TS backend does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CellListOrderBy {
@@ -74,7 +74,7 @@ impl CellListOrderBy {
 }
 
 /// Sort direction for a `cell_list` query. The handler refuses a wire value
-/// other than `asc` / `desc` (the TS schema's `z.enum`) and maps an absent one
+/// other than `asc` / `desc` (the TS schema's `one_of`) and maps an absent one
 /// to [`Self::Desc`], as the TS backend does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CellListOrderDir {
@@ -214,7 +214,7 @@ pub enum CellDataError {
 }
 
 /// The cell content a write carries — the twin of `fuz_app`'s `CellData`,
-/// `z.looseObject({label: z.string().optional(), summary: z.string().optional()})`.
+/// `loose_object({label: optional(string), summary: optional(string)})`.
 ///
 /// A JSON object whose `label` and `summary`, when present, are strings; every
 /// other key passes through unchecked, as the loose schema admits it. The
@@ -280,7 +280,7 @@ pub enum CellPolicyError {
 }
 
 /// A root's contribution policy as a write carries it — the twin of
-/// `fuz_app`'s `CellPolicy`, `z.looseObject({})`.
+/// `fuz_app`'s `CellPolicy`, `loose_object({})`.
 ///
 /// Any JSON object: the spine stores it without reading it, and the mounted
 /// create authorizer both validates
@@ -317,8 +317,8 @@ impl<'de> Deserialize<'de> for CellPolicy {
     }
 }
 
-/// Decode a required key whose value may be `null` — the twin of Zod's
-/// `.nullable()` (absent is refused, `null` is `None`). A bare `Option` field
+/// Decode a required key whose value may be `null` — the twin of a TS
+/// `nullable` (absent is refused, `null` is `None`). A bare `Option` field
 /// would read an absent key as `None` too.
 fn deserialize_required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -585,7 +585,7 @@ mod tests {
     /// A grammar-valid v4 — the only id shape Postgres ever mints.
     const CELL_ID: &str = "3f8a1c2e-1234-4abc-9def-0123456789ab";
 
-    /// The list pages read `.int()` as the twin does — every integral
+    /// The list pages read an integer as the twin does — every integral
     /// spelling, nothing fractional, nothing past the safe range — and the
     /// relation lists' `limit` too. Decoded from text, since `json!` would
     /// build an integer for `5.0`.
@@ -719,7 +719,7 @@ mod tests {
         }
     }
 
-    /// The twin's `.optional()` admits an absent key and nothing else, so an
+    /// The twin's `optional` admits an absent key and nothing else, so an
     /// explicit `null` is refused at the field, not read as "no value" —
     /// independently of `fuz_http`'s pre-decode walk.
     #[test]
@@ -729,7 +729,7 @@ mod tests {
         assert!(parse::<CellListInput>(json!({"ids": Value::Null})).is_err());
     }
 
-    /// `cell_create.parent_id` is `Uuid.nullish()` on the twin — `null` is a
+    /// `cell_create.parent_id` is `optional(nullable(Uuid))` on the twin — `null` is a
     /// spelling of "a root", not a refusal. The grammar still applies to a
     /// string.
     #[test]
@@ -759,8 +759,8 @@ mod tests {
         assert!(parse::<CellListInput>(json!({"ids": [Value::Null]})).is_err());
     }
 
-    /// `CellData` is the twin's `z.looseObject({label?: string, summary?:
-    /// string})`: an object, its two typed fields strings when present, every
+    /// `CellData` is the twin's `loose_object({label: optional(string),
+    /// summary: optional(string)})`: an object, its two typed fields strings when present, every
     /// other key passed through.
     #[test]
     fn cell_data_takes_an_object_with_string_base_fields() {

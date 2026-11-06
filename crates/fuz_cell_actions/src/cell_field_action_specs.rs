@@ -135,7 +135,7 @@ async fn handle_field_list<C: GenericClient + ?Sized>(
     validate_list_limit(input.limit, CELL_RELATION_LIST_LIMIT_MAX, "cell_field_list")?;
     let limit = input.limit.unwrap_or(CELL_RELATION_LIST_LIMIT_DEFAULT);
     // The forward cursor is a field name, so it takes the field-name grammar
-    // — the twin declares `name_after` as `CellFieldName.optional()`, and a
+    // — the twin declares `name_after` as `optional(CellFieldName)`, and a
     // cursor the grammar refuses can only have been hand-built.
     if let Some(name_after) = &input.name_after {
         validate_field_name(name_after)?;

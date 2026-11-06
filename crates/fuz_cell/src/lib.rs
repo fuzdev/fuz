@@ -61,7 +61,7 @@ pub mod cell_view_sql;
 pub mod error;
 pub mod migrations;
 
-pub use cell_audit_schema::{CELL_AUDIT_LIST_DEFAULT_LIMIT, CellAuditEventRow};
+pub use cell_audit_schema::{CELL_AUDIT_LIST_EVENTS_MAX, CellAuditEventRow};
 pub use cell_authz::{can_edit_cell, can_manage_cell, can_steward_cell, can_view_cell};
 pub use cell_field_schema::CellFieldRow;
 pub use cell_grant_schema::{CellGrantLevel, CellGrantRow};

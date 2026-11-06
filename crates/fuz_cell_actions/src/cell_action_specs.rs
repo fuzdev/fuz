@@ -295,11 +295,11 @@ pub const ERROR_CELL_POLICY_MANAGE_ONLY: &str = "cell_policy_manage_only";
 /// policy it can't interpret with. The spine never answers it itself.
 pub const ERROR_CELL_POLICY_INVALID: &str = "cell_policy_invalid";
 
-/// `cell_create` keys whose TS twin is `.nullish()`, so an explicit `null` is
-/// a spelling of "absent" rather than a refusal.
+/// `cell_create` keys whose TS twin is `optional(nullable(…))`, so an
+/// explicit `null` is a spelling of "absent" rather than a refusal.
 ///
 /// Every other key on the input — `visibility` and `acting` included — is
-/// `.optional()`, and `fuz_http::parse_strict_params_allowing_null` holds
+/// `optional` alone, and `fuz_http::parse_strict_params_allowing_null` holds
 /// those to the same `-32602` the twin gives.
 const CELL_CREATE_NULLABLE: &[&str] = &["kind", "path", "parent_id", "policy"];
 
@@ -391,7 +391,7 @@ fn validate_policy_write(
 
 /// Validate an optional list `limit` (`1..=max` when present) for the list
 /// verb `method` — the relation lists and `cell_list` — the twin of its
-/// `z.number().int().min(1).max(max)` (`positive().max(max)` on `cell_list`).
+/// `pipe(number, integer, min_value(1), max_value(max))`.
 pub(crate) fn validate_list_limit(
     limit: Option<i64>,
     max: i64,
@@ -409,8 +409,9 @@ pub(crate) fn validate_list_limit(
 }
 
 /// Validate an optional list `offset` (`0..=SAFE_INTEGER_MAX` when present)
-/// for the list verb `method`, the twin of its `z.number().int().nonnegative()`
-/// — `int()` refuses past `Number.MAX_SAFE_INTEGER`.
+/// for the list verb `method`, the twin of its
+/// `pipe(number, safe_integer, min_value(0))` — `safe_integer` refuses past
+/// `Number.MAX_SAFE_INTEGER`.
 pub(crate) fn validate_list_offset(offset: Option<i64>, method: &str) -> Result<(), JsonrpcError> {
     if offset.is_some_and(|n| !(0..=SAFE_INTEGER_MAX).contains(&n)) {
         return Err(fuz_http::invalid_input_params(
@@ -685,7 +686,7 @@ pub(crate) fn map_cell_error(err: CellError, path_write: bool) -> JsonrpcError {
 
 /// Reject a `path` write outside `[1, CELL_PATH_LENGTH_MAX]` characters
 /// (mirrors the TS `CellPath` brand). The wire structs are duck-typed
-/// (no Zod-equivalent schema layer on the Rust spine), so length is
+/// (no schema layer on the Rust spine), so length is
 /// enforced here in the handler. The count is UTF-16 code units, which is
 /// what `String.length` — and so the brand's `bounded_string` — measures, so
 /// an astral-plane character costs two on both spines.
@@ -702,7 +703,7 @@ fn validate_cell_path(path: &str) -> Result<(), JsonrpcError> {
 
 /// Reject a wire `kind` longer than [`CELL_KIND_LENGTH_MAX`].
 ///
-/// Mirrors the TS `z.string().max(CELL_KIND_LENGTH_MAX)` on `cell_create` and
+/// Mirrors the TS `bounded_string({max: CELL_KIND_LENGTH_MAX})` on `cell_create` and
 /// the `cell_list` filter. Like [`validate_cell_path`], the count is UTF-16
 /// code units, and the refusal is a schema-shaped `invalid_params` with no
 /// reason. An empty `kind` passes here: `cell_create` refuses it separately
@@ -1127,14 +1128,14 @@ async fn handle_list<C: deadpool_postgres::GenericClient + ?Sized>(
         ));
     }
     // An out-of-range page is refused, not clamped — the bounds of the TS
-    // twin's `z.number().int().positive().max(CELL_LIST_LIMIT_MAX)` and
-    // `int().nonnegative()`, which carry no reason. Every schema-twin check
+    // twin's `limit` (an integer in `[1, CELL_LIST_LIMIT_MAX]`) and `offset`
+    // (a safe integer, at least 0), which carry no reason. Every schema-twin check
     // sits above the auth-reason checks below: the twin's schema refuses
     // before its handler runs.
     validate_list_limit(input.limit, CELL_LIST_LIMIT_MAX, "cell_list")?;
     validate_list_offset(input.offset, "cell_list")?;
     // The remaining value grammar the twin's schema holds — `shared_with` is
-    // `z.literal('me')`, `order_by` / `order_direction` are `z.enum`s — refused
+    // `literal('me')`, `order_by` / `order_direction` are `one_of`s — refused
     // here too, still ahead of the auth-reason checks and with no reason.
     if let Some(sw) = input.shared_with.as_deref()
         && sw != "me"

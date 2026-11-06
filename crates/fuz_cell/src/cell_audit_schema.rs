@@ -10,9 +10,11 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Page size for `cell_audit_list`. Single page — no cursor on the
-/// wire (mirrors the TS `CELL_AUDIT_LIST_DEFAULT_LIMIT`).
-pub const CELL_AUDIT_LIST_DEFAULT_LIMIT: i64 = 50;
+/// The most events `cell_audit_list` returns, the most recent first.
+///
+/// Fixed: the input takes no `limit` and the output no cursor, so this is the
+/// whole timeline a caller sees (mirrors the TS `CELL_AUDIT_LIST_EVENTS_MAX`).
+pub const CELL_AUDIT_LIST_EVENTS_MAX: i64 = 50;
 
 /// `cell_audit_list` input.
 #[derive(Debug, Deserialize)]
