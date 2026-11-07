@@ -334,7 +334,7 @@ pub(crate) async fn perform_action_with(
         return Err(error);
     }
     // the void rule, from the spec's declared shape rather than each void
-    // handler opting in — the twin's `z.void()` input refusing every shape but
+    // handler opting in — the twin's void input refusing every shape but
     // the no-arg call
     spec.input.check(input.params)?;
 

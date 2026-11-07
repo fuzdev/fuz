@@ -298,11 +298,11 @@ impl ConsumerErrorCode {
 // `#[cold]` on every constructor — these are error paths, instruct LLVM
 // to skip inlining them on the hot path.
 //
-// `data: None` by default — `fuz_app`'s TS includes Zod validation issues
-// in `invalid_params.data`, which can leak schema info to unauthenticated
-// callers. Rust ships `None` and lets the caller opt in via the explicit
-// variants when the data is safe to disclose (e.g. internal_error with a
-// debug string).
+// `data: None` by default — validation issues describe the input schema,
+// which can leak to unauthenticated callers; `fuz_app`'s TS sends them in
+// `invalid_params.data` in development only. Rust ships `None` and lets the
+// caller opt in via the explicit variants when the data is safe to disclose
+// (e.g. internal_error with a debug string).
 
 #[cold]
 #[must_use]
@@ -385,7 +385,7 @@ pub fn invalid_input_params(detail: &str, reason: Option<&str>) -> JsonrpcError 
 /// contract the TS twin splits the same way:
 ///
 /// 1. The **envelope** (`fuz_http::jsonrpc::classify`, twin of
-///    `JsonrpcRequest.params: z.looseObject({}).optional()`) admits
+///    `JsonrpcRequest.params: optional(loose_object({}))`) admits
 ///    `params` absent or an object, and refuses a present non-object —
 ///    explicit `null`, an array, a scalar — as `invalid_request`
 ///    (`-32600`) before dispatch. An absent `params` arrives here as
@@ -1096,7 +1096,7 @@ mod tests {
         assert_eq!(e.data, None);
     }
 
-    /// All-optional input, the `.default({})` wire shape — the case a caller
+    /// All-optional input, defaulted to `{}` on the TS twin — the case a caller
     /// would otherwise hand-roll an `is_null()` branch for.
     #[derive(Debug, Default, PartialEq, serde::Deserialize)]
     #[serde(default, deny_unknown_fields)]

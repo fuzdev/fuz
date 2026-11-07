@@ -1,16 +1,17 @@
 //! Strict typed-params decoding — [`parse_strict_params`].
 //!
 //! The spine's typed inputs decode through `#[derive(Deserialize)]`, which
-//! covers most of what a `z.strictObject` declares: required-vs-optional,
-//! types, and (with `#[serde(deny_unknown_fields)]`) unknown keys. It is
-//! *more permissive* than zod in exactly one place — serde maps a JSON `null`
-//! onto `Option::None`, where zod's `.optional()` admits an absent key and
-//! nothing else. So `{"ids": null}` reads as "no filter" and answers `200` on
-//! the bare decode it wraps (the crate-private `parse_params`), and `-32602` on the TS twin.
+//! covers most of what the TS twin's strict object schema declares:
+//! required-vs-optional, types, and (with `#[serde(deny_unknown_fields)]`)
+//! unknown keys. It is *more permissive* than the twin in exactly one place —
+//! serde maps a JSON `null` onto `Option::None`, where the twin's `optional`
+//! admits an absent key and nothing else. So `{"ids": null}` reads as "no
+//! filter" and answers `200` on the bare decode it wraps (the crate-private
+//! `parse_params`), and `-32602` on the TS twin.
 //!
 //! [`parse_strict_params`] closes that: the same decode with a `null` walk in
 //! front of it, and is the typed-params decode this crate exports for every
-//! action input. An input whose twin declares a `.nullish()` field spells that out
+//! action input. An input whose twin declares a nullable field spells that out
 //! through [`parse_strict_params_allowing_null`], which exempts the named
 //! keys and holds the rest to the same walk.
 //!
@@ -67,13 +68,13 @@ pub fn parse_strict_params_allowing_null<T: DeserializeOwned>(
 
 /// Reject a JSON `null` on any top-level `params` key outside `nullable`.
 ///
-/// Zod's `.optional()` admits an absent key and nothing else, so `{"ids":
+/// The TS twin's `optional` admits an absent key and nothing else, so `{"ids":
 /// null}` is `-32602` on the TS backend; serde's `Option<T>` instead maps
 /// `null` to `None`, so the same request would read as "no filter" on Rust and
 /// silently answer 200. This walk is what closes that.
 ///
 /// The rule the `nullable` list encodes: a method may admit `null` on exactly
-/// the keys its TS twin declares `.nullish()` / `.nullable()`
+/// the keys its TS twin declares nullable (`nullable`, or `optional` of one)
 /// (`cell_create.{kind,path,parent_id,policy}`, `cell_update.path`,
 /// `cell_policy_set.policy`, the grant principal's `scope_id`), and nowhere
 /// else. Name them as a const beside the

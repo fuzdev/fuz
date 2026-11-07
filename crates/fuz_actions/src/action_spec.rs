@@ -26,7 +26,7 @@
 //! keeping the handler closure as the only thing the registry stores
 //! — the closure
 //! itself is monomorphized at registration. Per-spec Input/Output
-//! validation (Zod equivalent) happens inside the closure where the
+//! validation (the TS twin's schema parse) happens inside the closure where the
 //! types are known; the spec carries just auth + the coarse [`InputShape`]
 //! (void or object, which the dispatcher enforces) + `side_effects` + handler.
 //!
@@ -60,7 +60,7 @@ pub struct ActionSpec {
     /// Auth + credential + role gates. Checked before the handler runs.
     pub auth: AuthSpec,
     /// Whether the method takes params — the twin of whether `fuz_app`'s
-    /// `ActionSpec.input` is `z.void()`. [`fn@crate::perform_action`] holds an
+    /// `ActionSpec.input` is a void schema. [`fn@crate::perform_action`] holds an
     /// [`InputShape::Void`] method to the no-arg call before the handler runs;
     /// `_testing_action_manifest` reports it as the method's `input`.
     ///

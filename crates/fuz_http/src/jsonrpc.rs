@@ -5,7 +5,7 @@
 //! (`rpc_post_handler`, `rpc_get_handler`) lives in `fuz_actions` — so the
 //! framework primitives here have zero consumer coupling.
 //!
-//! Mirrors `fuz_app`'s `http/jsonrpc.ts` Zod schemas + MCP `_meta`
+//! Mirrors `fuz_app`'s `http/jsonrpc.ts` envelope schemas and their MCP
 //! superset shape.
 
 use serde::{Deserialize, Serialize};
@@ -241,8 +241,8 @@ pub enum Classified<'a> {
 /// `params` is validated across two layers, mirroring the TS twin:
 ///
 /// 1. **Envelope (here).** `params` may be **absent or an object**, and
-///    nothing else — `JsonrpcRequest.params` is a
-///    `z.looseObject({}).optional()`, so an explicit `null`, an array, or
+///    nothing else — `JsonrpcRequest.params` is an
+///    `optional(loose_object({}))`, so an explicit `null`, an array, or
 ///    a scalar fails request validation before dispatch. A present
 ///    non-object is therefore `Classified::Invalid` with `invalid_request`
 ///    (-32600) and the request's own id, matching
@@ -370,7 +370,8 @@ fn extract_id(obj: &Map<String, Value>) -> Value {
 /// `message` defaults, and `data` passes through verbatim. The result is
 /// always a valid base-set error, so a malformed error object can
 /// never panic the read loop — it just surfaces to the awaiting caller as
-/// `PeerError::ClientError`.
+/// `PeerError::ClientError`. Twin of `fuz_app`'s
+/// `parse_inbound_jsonrpc_error`, which reads the reply the same way.
 #[allow(clippy::cast_possible_truncation)] // saturating; `i32::try_from` bounds it
 fn parse_inbound_error(error: Option<&Value>) -> JsonrpcError {
     let obj = error.and_then(Value::as_object);
@@ -433,7 +434,7 @@ mod tests {
     }
 
     /// The envelope's `params` contract: absent or object, nothing else.
-    /// Twin of `JsonrpcRequest.params: z.looseObject({}).optional()`, which
+    /// Twin of `JsonrpcRequest.params: optional(loose_object({}))`, which
     /// fails request validation on a present non-object — so the refusal is
     /// `invalid_request` (-32600), not `invalid_params`, and carries the
     /// request's own id (the TS POST handler re-extracts it off the raw body).

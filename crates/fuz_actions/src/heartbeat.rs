@@ -16,7 +16,7 @@
 //! but declaring it keeps the two spines' auth shapes identical rather than
 //! resting the gate on the transport.
 //!
-//! Nullary input and output — the input is `z.void()` on the TS side, so the
+//! Nullary input and output — the input is `void` on the TS side, so the
 //! spec declares [`fuz_http::InputShape::Void`]: an absent, `null`, or `{}`
 //! params is the call and the dispatcher refuses any other shape with
 //! `-32602` before the handler runs. The output is an empty object. Liveness is
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(spec.auth.credentials, CredentialGate::Any);
     }
 
-    /// The twin's `z.void()` input: the spec declares the void shape, so the
+    /// The twin's `void` input: the spec declares the void shape, so the
     /// dispatcher (not the handler) refuses a declared param, and the body
     /// answers `{}`.
     #[test]

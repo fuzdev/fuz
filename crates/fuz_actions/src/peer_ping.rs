@@ -107,10 +107,10 @@ pub struct PingRequest {
 /// version. The inbound reply is **validated against this** before it
 /// resolves the awaiting caller.
 ///
-/// Both fields read as the twin's `z.number().int()` does
+/// Both fields read as the twin's `pipe(number, safe_integer)` does
 /// ([`fuz_http::deserialize_wire_int`]), so a client that writes `7.0` is
 /// answered alike on both spines. `protocol_version` stays a `u32`, stricter
-/// than the twin's sign-free `int()` by refusing a negative.
+/// than the twin's sign-free `safe_integer` by refusing a negative.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PingResponse {
     #[serde(deserialize_with = "fuz_http::deserialize_wire_int")]
@@ -132,7 +132,7 @@ pub struct PingResponse {
 /// deadline passes it to [`fuz_realtime::ActionPeer::request`] directly,
 /// where the deadline is a server policy rather than a remote-client input.
 ///
-/// Strict, mirroring the TS `PingActionInput`'s `z.strictObject`. `peer/ping`
+/// Strict, mirroring the TS `PingActionInput`'s `object`. `peer/ping`
 /// is `auth: public` and so declares no `acting` field, which makes a
 /// well-formed `acting` an unrecognized key here — the same `-32602` the twin
 /// gives, rather than a value the dispatcher's `check_acting_selector` waves
@@ -140,27 +140,28 @@ pub struct PingResponse {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct PingActionInput {
-    /// `z.number().int().optional()` on the twin, which admits negatives and
-    /// zero — hence `i64`, not `u64`. The adapter holds `.int()` itself: any
+    /// `optional(pipe(number, safe_integer))` on the twin, which admits negatives
+    /// and zero — hence `i64`, not `u64`. The adapter holds `safe_integer` itself: any
     /// integral spelling, within the safe-integer range.
     #[serde(deserialize_with = "fuz_http::deserialize_optional_wire_int")]
     nonce: Option<i64>,
-    /// `z.number().int().positive().optional()` on the twin. The adapter holds
-    /// `.int()` and `u64` the sign half (a negative is `-32602` from serde);
+    /// `optional(pipe(number, safe_integer, min_value(1)))` on the twin. The
+    /// adapter holds `safe_integer` and `u64` the sign half (a negative is
+    /// `-32602` from serde);
     /// the zero half is in [`PingActionInput::check_bounds`].
     #[serde(deserialize_with = "fuz_http::deserialize_optional_wire_int")]
     timeout_ms: Option<u64>,
 }
 
 impl PingActionInput {
-    /// Enforce the bound the twin's zod declares past `.int()`, which the
-    /// field types and the wire-int adapter do not express: `.positive()` on
+    /// Enforce the bound the twin declares past `safe_integer`, which the
+    /// field types and the wire-int adapter do not express: `min_value(1)` on
     /// `timeout_ms`.
     ///
     /// # Errors
     ///
-    /// [`fuz_http::invalid_input_params`] (-32602), the code `z.number()`'s
-    /// `too_small` issue produces.
+    /// [`fuz_http::invalid_input_params`] (-32602), the code the twin's
+    /// `min_value` issue produces.
     fn check_bounds(&self) -> Result<(), JsonrpcError> {
         if self.timeout_ms == Some(0) {
             return Err(fuz_http::invalid_input_params(
@@ -346,7 +347,7 @@ mod tests {
         assert_eq!(filled.timeout_ms, Some(200));
     }
 
-    /// `nonce` is `z.number().int()` on the twin — signed, so a negative and a
+    /// `nonce` is `pipe(number, safe_integer)` on the twin — signed, so a negative and a
     /// zero are ordinary values, not refusals. `i64` carries them; a `u64`
     /// field answers `-32602` where the twin issues the ping.
     #[test]
@@ -421,7 +422,7 @@ mod tests {
     /// much included — is refused at the input rather than dropped. The
     /// dispatcher's `check_acting_selector` judges only the *value*, so
     /// without `deny_unknown_fields` a valid v4 would sail through to the
-    /// handler where the TS twin's `z.strictObject` answers `-32602`.
+    /// handler where the TS twin's `object` answers `-32602`.
     #[test]
     fn action_input_refuses_an_unrecognized_key() {
         assert!(

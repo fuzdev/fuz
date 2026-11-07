@@ -81,13 +81,13 @@ pub const CANCEL_METHOD: &str = "cancel";
 
 /// Params of a `cancel` notification — `{request_id: <string|number>}`.
 ///
-/// Twin of the TS `CancelNotificationParams`, a
-/// `z.strictObject({request_id: JsonrpcRequestId})`, so the strictness
+/// Twin of the TS `CancelNotificationParams`, an
+/// `object({request_id: JsonrpcRequestId})`, so the strictness
 /// matches on both halves: `deny_unknown_fields` refuses an extra key the
-/// way `strictObject` does, a missing `request_id` refuses outright, and
+/// way `object` does, a missing `request_id` refuses outright, and
 /// the id's own string|number shape is checked when it is keyed (see
 /// `PendingRequestSignals::cancel`). A frame that fails any of these names
-/// no request and is dropped, exactly as the twin's `safeParse` failure
+/// no request and is dropped, exactly as the twin's parse failure
 /// path does.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
