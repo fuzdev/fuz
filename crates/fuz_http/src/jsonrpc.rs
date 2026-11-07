@@ -365,16 +365,21 @@ fn extract_id(obj: &Map<String, Value>) -> Value {
 /// The peer that replies to a server-initiated request is **untrusted**,
 /// so this is deliberately lenient: a `code` outside the base set (a
 /// consumer-declared code included — the wire carries no status to rebuild
-/// it with) coerces to [`JsonrpcErrorCode::InternalError`], a missing/non-string
+/// it with — and any non-integer) coerces to [`JsonrpcErrorCode::InternalError`];
+/// an integral float spelling (`-32002.0`) reads as its integer. A missing/non-string
 /// `message` defaults, and `data` passes through verbatim. The result is
 /// always a valid base-set error, so a malformed error object can
 /// never panic the read loop — it just surfaces to the awaiting caller as
 /// `PeerError::ClientError`.
+#[allow(clippy::cast_possible_truncation)] // saturating; `i32::try_from` bounds it
 fn parse_inbound_error(error: Option<&Value>) -> JsonrpcError {
     let obj = error.and_then(Value::as_object);
     let code = obj
         .and_then(|o| o.get("code"))
-        .and_then(Value::as_i64)
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))
+        })
         .and_then(|n| i32::try_from(n).ok())
         .and_then(|n| JsonrpcErrorCode::try_from(n).ok())
         .unwrap_or(JsonrpcErrorCode::InternalError);
@@ -686,6 +691,20 @@ mod tests {
         );
         let response = jsonrpc_error_http_response(Value::Null, crate::method_not_found("x"));
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn parse_inbound_error_reads_an_integral_float_code_as_its_integer() {
+        let read =
+            |code: Value| parse_inbound_error(Some(&json!({"code": code, "message": "m"}))).code;
+        assert_eq!(read(json!(-32002)), JsonrpcErrorCode::Forbidden);
+        assert_eq!(read(json!(-32002.0)), JsonrpcErrorCode::Forbidden);
+        assert_eq!(read(json!(-32002.5)), JsonrpcErrorCode::InternalError);
+        // 2^32 - 32002: wraps to Forbidden as i32
+        assert_eq!(
+            read(json!(4_294_935_294.0)),
+            JsonrpcErrorCode::InternalError
+        );
     }
 
     #[test]
