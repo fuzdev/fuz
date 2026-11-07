@@ -27,6 +27,13 @@
 //! just under `f64::MAX` that round to it. One divergence remains, the twin's
 //! runtime, not the spec: Node's undici strips a second leading BOM, where
 //! Deno, Bun, and this decode drop only the one the spec does.
+//!
+//! `serde_json` accepts `"\u0000"`, as `JSON.parse` does, but Postgres refuses
+//! U+0000 in `text` and `jsonb`. So a parsed object holding one in any string
+//! or key is `invalid_request_body` (not a parse failure: the JSON is valid),
+//! found by the same walk the RPC dispatcher refuses it with
+//! ([`crate::scan_json_value`]); the twin's `create_input_validation` does the
+//! same ahead of its schema.
 
 use std::borrow::Cow;
 
@@ -62,7 +69,8 @@ pub fn decode_json_text(body: &[u8]) -> Cow<'_, str> {
 ///
 /// Returns the flat 400 denial `Response` (`Err`): `invalid_json_body` when
 /// the body doesn't parse as JSON (an empty body included) or isn't an
-/// object; `invalid_request_body` when the object doesn't deserialize to `T`.
+/// object; `invalid_request_body` when the object holds U+0000 in a string or
+/// key ([`crate::scan_json_value`]) or doesn't deserialize to `T`.
 #[allow(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
@@ -72,6 +80,11 @@ pub fn parse_json_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, Response> 
         serde_json::from_str(&decode_json_text(body)).map_err(|_| invalid_json_body_response())?;
     if !value.is_object() {
         return Err(invalid_json_body_response());
+    }
+    // U+0000 in any string or key, which Postgres refuses to store, ahead of
+    // the deserialize — the twin's `create_input_validation` walks before its schema
+    if crate::scan_json_value(&value).nul {
+        return Err(invalid_request_body_response());
     }
     serde_json::from_value(value).map_err(|_| invalid_request_body_response())
 }
@@ -131,6 +144,35 @@ mod tests {
             assert_eq!(
                 refusal(body).await,
                 INVALID_REQUEST,
+                "{}",
+                body.escape_ascii()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_nul_in_a_string_or_key_is_invalid_request_body() {
+        for body in [
+            &br#"{"name":"a\u0000"}"#[..],
+            br#"{"name":"a","x":{"\u0000":1}}"#,
+            // under the kept duplicate
+            br#"{"name":"a","name":"\u0000"}"#,
+        ] {
+            assert_eq!(
+                refusal(body).await,
+                INVALID_REQUEST,
+                "{}",
+                body.escape_ascii()
+            );
+        }
+        // an escaped backslash before `u0000` is no NUL, and a NUL under a
+        // dropped duplicate is never read
+        for body in [
+            &br#"{"name":"\\u0000"}"#[..],
+            br#"{"name":"\u0000","name":"a"}"#,
+        ] {
+            assert!(
+                parse_json_body::<Input>(body).is_ok(),
                 "{}",
                 body.escape_ascii()
             );

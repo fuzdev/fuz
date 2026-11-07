@@ -690,13 +690,28 @@ pub fn require_void_params(params: &Value) -> Result<(), JsonrpcError> {
     }
 }
 
-/// The `data.reason` the dispatcher's [`json_has_own_proto_key`] refusal
-/// carries — `ERROR_PARAMS_PROTO_KEY` in `fuz_app`'s `http/error_schemas.ts`.
+/// The `data.reason` the dispatcher's refusal of an own `__proto__` key in
+/// `params` carries ([`scan_json_value`]) — `ERROR_PARAMS_PROTO_KEY` in
+/// `fuz_app`'s `http/error_schemas.ts`.
 pub const ERROR_PARAMS_PROTO_KEY: &str = "params_proto_key";
 
-/// Whether any object in `value` has an own `__proto__` key, at any depth —
-/// what the dispatcher refuses in a request's `params`
-/// ([`ERROR_PARAMS_PROTO_KEY`]).
+/// The `data.reason` the dispatcher's refusal of U+0000 in `params` carries
+/// ([`scan_json_value`]) — `ERROR_PARAMS_NUL` in `fuz_app`'s
+/// `http/error_schemas.ts`.
+pub const ERROR_PARAMS_NUL: &str = "params_nul";
+
+/// What one walk of a JSON value finds ([`scan_json_value`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JsonValueScan {
+    /// An object holds an own `__proto__` key, at any depth
+    /// ([`ERROR_PARAMS_PROTO_KEY`]).
+    pub proto_key: bool,
+    /// A string or an object key holds U+0000 ([`ERROR_PARAMS_NUL`]).
+    pub nul: bool,
+}
+
+/// Walk `value` once for the two things a request may not store, at any
+/// depth: an own `__proto__` key, and U+0000 in a string or a key.
 ///
 /// The key is harmless to serde, but a JS client that copies the stored JSON
 /// back with plain assignment (`target[key] = value`, any shallow copy or
@@ -704,26 +719,48 @@ pub const ERROR_PARAMS_PROTO_KEY: &str = "params_proto_key";
 /// prototype-pollution sink for whoever reads it. `constructor` and
 /// `prototype` keys are inert on a plain object and are not checked.
 ///
-/// Walks with an explicit stack, as the TS twin (`json_has_own_proto_key` in
-/// `http/schema_helpers.ts`) must: `JSON.parse` nests deeper than its call
-/// stack. `serde_json` caps nesting on parse, so the stack here stays shallow;
-/// the walk is linear in the value's nodes either way.
+/// U+0000 is valid JSON (`"\u0000"`) that `serde_json` accepts, but Postgres
+/// refuses it in `text` and `jsonb`, so a value holding one fails its write
+/// with a 500. The dispatcher refuses either in `params` (`invalid_params`,
+/// the proto key first), and [`crate::parse_json_body`] a NUL in a route body
+/// (`invalid_request_body`).
+///
+/// Reads the parsed value, as the TS twin (`scan_json_value` in
+/// `http/schema_helpers.ts`) does: of two duplicate keys only the kept one is
+/// walked, and `serde_json::Value` keeps the last, as `JSON.parse` does.
+/// Walks with an explicit stack, as the twin must: `JSON.parse` nests deeper
+/// than its call stack. `serde_json` caps nesting on parse, so the stack here
+/// stays shallow; the walk is linear in the value's nodes either way.
 #[must_use]
-pub fn json_has_own_proto_key(value: &Value) -> bool {
+pub fn scan_json_value(value: &Value) -> JsonValueScan {
+    let mut scan = JsonValueScan::default();
     let mut stack = vec![value];
     while let Some(current) = stack.pop() {
         match current {
-            Value::Object(map) => {
-                if map.contains_key("__proto__") {
-                    return true;
+            Value::String(text) => {
+                if !scan.nul && text.contains('\0') {
+                    scan.nul = true;
                 }
-                stack.extend(map.values());
+            }
+            Value::Object(map) => {
+                for (key, item) in map {
+                    if key == "__proto__" {
+                        scan.proto_key = true;
+                    }
+                    if !scan.nul && key.contains('\0') {
+                        scan.nul = true;
+                    }
+                    stack.push(item);
+                }
             }
             Value::Array(items) => stack.extend(items),
             _ => {}
         }
+        if scan.proto_key && scan.nul {
+            break;
+        }
     }
-    false
+    scan
 }
 
 /// Read a JSON number with an integral value as an `i64`, as the TS twin's
@@ -821,10 +858,10 @@ mod tests {
     use super::{
         InputShape, as_integral_i64, deserialize_nullish_wire_uuid, deserialize_optional_wire_uuid,
         deserialize_optional_wire_uuid_vec, deserialize_wire_uuid, deserialize_wire_uuid_vec,
-        is_valid_uuid, json_has_own_proto_key, parse_optional_bool_param,
-        parse_optional_enum_param, parse_optional_i64_param, parse_optional_str_param,
-        parse_optional_uuid_param, parse_uuid_param, reject_null_keys, reject_unknown_keys,
-        require_void_params,
+        is_valid_uuid, parse_optional_bool_param, parse_optional_enum_param,
+        parse_optional_i64_param, parse_optional_str_param, parse_optional_uuid_param,
+        parse_uuid_param, reject_null_keys, reject_unknown_keys, require_void_params,
+        scan_json_value,
     };
     use crate::{JsonrpcError, JsonrpcErrorCode};
     use serde_json::{Value, json};
@@ -959,12 +996,20 @@ mod tests {
         assert_eq!(serde_json::from_value::<Nullable>(value).unwrap().n, None);
     }
 
+    fn scan(text: &str) -> super::JsonValueScan {
+        scan_json_value(&serde_json::from_str::<Value>(text).expect("valid json"))
+    }
+
     fn has_proto(text: &str) -> bool {
-        json_has_own_proto_key(&serde_json::from_str::<Value>(text).expect("valid json"))
+        scan(text).proto_key
+    }
+
+    fn has_nul(text: &str) -> bool {
+        scan(text).nul
     }
 
     #[test]
-    fn json_has_own_proto_key_finds_the_key_at_any_depth() {
+    fn scan_json_value_finds_a_proto_key_at_any_depth() {
         for text in [
             r#"{"__proto__":{"x":1}}"#,
             r#"{"__proto__":null}"#,
@@ -979,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn json_has_own_proto_key_admits_constructor_values_and_near_misses() {
+    fn scan_json_value_admits_constructor_values_and_near_miss_keys() {
         for text in [
             r#"{"constructor":{"prototype":{"x":1}}}"#,
             r#"{"prototype":{}}"#,
@@ -996,16 +1041,68 @@ mod tests {
     }
 
     #[test]
-    fn json_has_own_proto_key_walks_deep_values_without_recursing() {
+    fn scan_json_value_walks_deep_values_without_recursing() {
         // past serde_json's parse-time depth cap, built by hand
-        let mut deep = json!({"__proto__": 1});
+        let mut deep = json!({"__proto__": 1, "a": "\u{0}"});
         for _ in 0..100_000 {
             deep = Value::Array(vec![deep]);
         }
         // `Value`'s own drop recurses, so the tower is never dropped — not
         // even when the assertion below fails and the test unwinds
         let deep = std::mem::ManuallyDrop::new(deep);
-        assert!(json_has_own_proto_key(&deep));
+        assert_eq!(
+            scan_json_value(&deep),
+            super::JsonValueScan {
+                proto_key: true,
+                nul: true
+            }
+        );
+    }
+
+    #[test]
+    fn scan_json_value_finds_a_nul_in_a_string_or_key_at_any_depth() {
+        for text in [
+            r#"{"a":"\u0000"}"#,
+            r#"{"a":"x\u0000y"}"#,
+            r#"{"a":{"b":[1,"\u0000"]}}"#,
+            r#"["\u0000"]"#,
+            r#""\u0000""#,
+            r#"{"\u0000":1}"#,
+            r#"{"a":{"k\u0000":null}}"#,
+        ] {
+            assert!(has_nul(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn scan_json_value_admits_an_escaped_backslash_and_other_control_escapes() {
+        for text in [
+            // a backslash, then the text `u0000`
+            r#"{"a":"\\u0000"}"#,
+            r#"{"a":"\u0001\u001f\t"}"#,
+            r#"{"a":0,"b":null,"c":false}"#,
+            "{}",
+        ] {
+            assert!(!has_nul(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn scan_json_value_walks_only_the_kept_duplicate_as_the_twin_does() {
+        assert!(!has_nul(r#"{"a":"\u0000","a":"x"}"#));
+        assert!(has_nul(r#"{"a":"x","a":"\u0000"}"#));
+    }
+
+    #[test]
+    fn scan_json_value_reports_both_findings_from_one_walk() {
+        assert_eq!(
+            scan(r#"{"__proto__":{},"b":"\u0000"}"#),
+            super::JsonValueScan {
+                proto_key: true,
+                nul: true
+            }
+        );
+        assert_eq!(scan(r#"{"a":[{"b":1}]}"#), super::JsonValueScan::default());
     }
 
     /// One field per deserializer, so a decode failure names which shape

@@ -377,8 +377,9 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   - the `deserialize_*wire_int` adapters, which read a typed integer as
     `pipe(number, integer)` does (any integral spelling, within the safe-integer
     range);
-  - `json_has_own_proto_key`, the walk behind the dispatcher's
-    `params_proto_key` refusal.
+  - `scan_json_value`, the one walk behind the dispatcher's
+    `params_proto_key` and `params_nul` refusals and `parse_json_body`'s
+    NUL refusal.
 
   `strict_params` is the typed half (`parse_strict_params`). Field rules that
   name auth-owned fields (role names, text bounds, the paging reasons) stay in

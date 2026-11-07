@@ -152,13 +152,13 @@ pub use origin_wildcard::{
     origin_wildcard_warning, parse_allow_origin_wildcards,
 };
 pub use params::{
-    ERROR_PARAMS_PROTO_KEY, InputShape, as_integral_i64, deserialize_nullish_wire_int,
-    deserialize_nullish_wire_uuid, deserialize_optional_wire_int, deserialize_optional_wire_uuid,
-    deserialize_optional_wire_uuid_vec, deserialize_wire_int, deserialize_wire_uuid,
-    deserialize_wire_uuid_vec, is_valid_uuid, json_has_own_proto_key, parse_optional_bool_param,
+    ERROR_PARAMS_NUL, ERROR_PARAMS_PROTO_KEY, InputShape, JsonValueScan, as_integral_i64,
+    deserialize_nullish_wire_int, deserialize_nullish_wire_uuid, deserialize_optional_wire_int,
+    deserialize_optional_wire_uuid, deserialize_optional_wire_uuid_vec, deserialize_wire_int,
+    deserialize_wire_uuid, deserialize_wire_uuid_vec, is_valid_uuid, parse_optional_bool_param,
     parse_optional_enum_param, parse_optional_i64_param, parse_optional_str_param,
     parse_optional_uuid_param, parse_str_param, parse_uuid_param, reject_null_keys,
-    reject_unknown_keys, require_void_params, serialize_result,
+    reject_unknown_keys, require_void_params, scan_json_value, serialize_result,
 };
 pub use parsed_proxy::{ParsedProxy, ProxyParseError};
 pub use proxy::{is_trusted_ip, parse_proxy_entry, parse_proxy_list};

@@ -25,12 +25,14 @@
 //!    sits **ahead** of validation so a flood of malformed input burns the
 //!    budget it should, and so a throttled caller pays no validation work.
 //! 6. **400** — input validation, of which the dispatcher owns the params
-//!    shape, the prototype-key walk, one field, and the void rule: `params`
+//!    shape, the params walk, one field, and the void rule: `params`
 //!    must be absent or an object (see `check_params_shape` — the GET query
 //!    string carries any JSON value there), must hold no own `__proto__` key
-//!    at any depth (`check_params_proto_key`, `data.reason`
+//!    at any depth (`check_params_walk`, `data.reason`
 //!    [`fuz_http::ERROR_PARAMS_PROTO_KEY`] — a JS client copying stored JSON
-//!    back would hit the prototype setter), a *present* `acting` must be a
+//!    back would hit the prototype setter) nor U+0000 in any string or key
+//!    (the same walk, [`fuz_http::ERROR_PARAMS_NUL`] — Postgres refuses it in
+//!    `text` and `jsonb`), a *present* `acting` must be a
 //!    string passing [`fuz_http::is_valid_uuid`] (see
 //!    `check_acting_selector`), and a spec
 //!    declaring [`fuz_http::InputShape::Void`] takes only the no-arg call
@@ -327,7 +329,7 @@ pub(crate) async fn perform_action_with(
     if let Some(error) = check_params_shape(input.params) {
         return Err(error);
     }
-    if let Some(error) = check_params_proto_key(input.params) {
+    if let Some(error) = check_params_walk(input.params) {
         return Err(error);
     }
     if let Some(error) = check_acting_selector(input.params) {
@@ -403,20 +405,28 @@ fn check_params_shape(params: &Value) -> Option<JsonrpcError> {
     ))
 }
 
-/// The dispatcher's input-validation step (the twin's step 5): an own
-/// `__proto__` key anywhere in `params` ([`fuz_http::json_has_own_proto_key`])
-/// is `invalid_params` with `data.reason`
-/// [`fuz_http::ERROR_PARAMS_PROTO_KEY`], for every spec, void ones included.
+/// The dispatcher's input-validation step (the twin's step 5): one walk of
+/// `params` ([`fuz_http::scan_json_value`]) refuses an own `__proto__` key
+/// anywhere, `invalid_params` with `data.reason`
+/// [`fuz_http::ERROR_PARAMS_PROTO_KEY`], then U+0000 in any string or key,
+/// with [`fuz_http::ERROR_PARAMS_NUL`] — for every spec, void ones included.
 ///
 /// It runs after [`check_params_shape`], so a non-object `params` is that
 /// check's reasonless refusal — the twin walks only object params for the same
 /// answer — and ahead of the `acting` check and the void rule, as the twin
 /// walks before its input schema judges either.
-fn check_params_proto_key(params: &Value) -> Option<JsonrpcError> {
-    fuz_http::json_has_own_proto_key(params).then(|| {
-        fuz_http::invalid_input_params(
+fn check_params_walk(params: &Value) -> Option<JsonrpcError> {
+    let scan = fuz_http::scan_json_value(params);
+    if scan.proto_key {
+        return Some(fuz_http::invalid_input_params(
             "params hold an own `__proto__` key",
             Some(fuz_http::ERROR_PARAMS_PROTO_KEY),
+        ));
+    }
+    scan.nul.then(|| {
+        fuz_http::invalid_input_params(
+            "params hold a NUL character",
+            Some(fuz_http::ERROR_PARAMS_NUL),
         )
     })
 }
@@ -680,7 +690,7 @@ async fn settle_effects(
 
 #[cfg(test)]
 mod tests {
-    use super::{check_acting_selector, check_params_proto_key, check_params_shape, read_acting};
+    use super::{check_acting_selector, check_params_shape, check_params_walk, read_acting};
     use fuz_auth::{AuthSpec, CredentialGate};
     use serde_json::{Value, json};
     use uuid::Uuid;
@@ -717,12 +727,14 @@ mod tests {
     }
 
     #[test]
-    fn check_params_proto_key_refuses_with_its_reason() {
+    fn check_params_walk_refuses_a_proto_key_with_its_reason() {
         for params in [
             json!({"__proto__": {"x": 1}}),
             json!({"acting": UUID, "data": {"a": [{"__proto__": null}]}}),
+            // the proto key answers first
+            json!({"__proto__": {}, "a": "\u{0}"}),
         ] {
-            let error = check_params_proto_key(&params).expect("proto key refused");
+            let error = check_params_walk(&params).expect("proto key refused");
             assert_eq!(
                 error.code,
                 fuz_http::JsonrpcErrorCode::InvalidParams,
@@ -739,8 +751,31 @@ mod tests {
             Value::Null,
             json!({}),
             json!({"constructor": {"prototype": {}}, "a": "__proto__"}),
+            json!({"a": "\\u0000", "b": "\u{1}"}),
         ] {
-            assert!(check_params_proto_key(&params).is_none(), "{params}");
+            assert!(check_params_walk(&params).is_none(), "{params}");
+        }
+    }
+
+    #[test]
+    fn check_params_walk_refuses_a_nul_with_its_reason() {
+        for params in [
+            json!({"a": "\u{0}"}),
+            json!({"acting": UUID, "data": {"a": [1, "x\u{0}y"]}}),
+            json!({"data": {"k\u{0}": 1}}),
+        ] {
+            let error = check_params_walk(&params).expect("NUL refused");
+            assert_eq!(
+                error.code,
+                fuz_http::JsonrpcErrorCode::InvalidParams,
+                "{params}"
+            );
+            assert_eq!(error.message, fuz_http::INVALID_PARAMS_MESSAGE, "{params}");
+            assert_eq!(
+                error.data,
+                Some(json!({"reason": fuz_http::ERROR_PARAMS_NUL})),
+                "{params}"
+            );
         }
     }
 
