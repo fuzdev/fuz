@@ -377,22 +377,26 @@ struct ExtraAccountSpec {
     roles: Vec<String>,
 }
 
+/// Declared keys of one `extra_accounts` entry — the TS twin's strict object.
+const EXTRA_ACCOUNT_KEYS: &[&str] = &["username", "password_value", "roles"];
+
 impl ExtraAccountSpec {
-    /// Parse one `extra_accounts` entry strictly, mirroring the TS
-    /// `z.strictObject({username, password_value?, roles})`: a missing
-    /// `username`/`roles`, or a non-string anywhere, is a malformed call →
-    /// loud [`invalid_input`] rather than a silently-dropped entry (which
-    /// would seed fewer accounts than the fixture asked for).
+    /// Parse one `extra_accounts` entry strictly, mirroring the TS twin's
+    /// strict `object({username, password_value?, roles})`: an undeclared key,
+    /// a missing `username`/`roles`, or a non-string anywhere, is a malformed
+    /// call → loud [`invalid_input`] rather than a silently-dropped entry
+    /// (which would seed fewer accounts than the fixture asked for).
     fn from_value(v: &Value) -> Result<Self, JsonrpcError> {
+        fuz_http::reject_unknown_keys(v, EXTRA_ACCOUNT_KEYS)?;
         let username = v
             .get("username")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid_input("`extra_accounts[].username` must be a string"))?
             .to_owned();
-        // `password_value` is optional (TS `z.string().optional()`): absent
-        // or null → None, a present non-string → reject.
+        // `password_value` is optional (TS `optional(string)`): absent → None,
+        // a present non-string — `null` included — → reject.
         let password_value = match v.get("password_value") {
-            None | Some(Value::Null) => None,
+            None => None,
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => {
                 return Err(invalid_input(
@@ -712,6 +716,27 @@ mod tests {
     fn extra_account_spec_rejects_missing_roles() {
         let v = json!({"username": "eve"});
         assert!(ExtraAccountSpec::from_value(&v).is_err());
+    }
+
+    #[test]
+    fn extra_account_spec_rejects_a_null_password_value() {
+        // the twin's `optional(string)` admits an absent key and nothing else
+        let v = json!({"username": "eve", "password_value": null, "roles": []});
+        let error = ExtraAccountSpec::from_value(&v)
+            .map(drop)
+            .expect_err("a null password_value is refused, not read as absent");
+        assert_eq!(error.code, JsonrpcErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn extra_account_spec_rejects_an_unknown_key() {
+        // the twin's entry is a strict object
+        let v = json!({"username": "eve", "roles": [], "password": "pw"});
+        let error = ExtraAccountSpec::from_value(&v)
+            .map(drop)
+            .expect_err("an undeclared key is refused");
+        assert_eq!(error.code, JsonrpcErrorCode::InvalidParams);
+        assert_eq!(error.message, INVALID_PARAMS_MESSAGE);
     }
 
     #[test]

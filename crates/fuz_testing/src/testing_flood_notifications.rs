@@ -81,11 +81,14 @@ pub(crate) const ERROR_TESTING_FLOOD_NO_CONNECTION: &str = "no_connection";
 /// Declared input keys — a strict object.
 const TESTING_FLOOD_KEYS: &[&str] = &["count", "size"];
 
-/// Read `key` as an integer from 0 through `max`.
+/// Read `key` as an integer from 0 through `max`, any integral spelling
+/// (`5.0`, `1e1`, `-0`) included, as the TS twin's safe-integer check reads
+/// it ([`fuz_http::as_integral_i64`]).
 fn bounded_integer(params: &Value, key: &str, max: u64) -> Result<u64, fuz_http::JsonrpcError> {
     params
         .get(key)
-        .and_then(Value::as_u64)
+        .and_then(fuz_http::as_integral_i64)
+        .and_then(|value| u64::try_from(value).ok())
         .filter(|value| *value <= max)
         .ok_or_else(|| {
             invalid_input_params(&format!("{key} must be an integer from 0 to {max}"), None)
@@ -134,4 +137,34 @@ pub fn create_testing_flood_notifications_action_spec() -> ActionSpec {
         InputShape::Object,
         handler,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_integer_reads_an_integral_float() {
+        for (text, expected) in [("1", 1), ("1.0", 1), ("1e1", 10), ("-0", 0), ("-0.0", 0)] {
+            let params: Value = serde_json::from_str(&format!(r#"{{"count": {text}}}"#)).unwrap();
+            assert_eq!(
+                bounded_integer(&params, "count", TESTING_FLOOD_MAX_COUNT).ok(),
+                Some(expected),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_integer_refuses_a_fraction_a_negative_and_past_the_max() {
+        let past = (TESTING_FLOOD_MAX_COUNT + 1).to_string();
+        for text in ["1.5", "-1", "-1.0", past.as_str(), "\"1\"", "null", "true"] {
+            let params: Value = serde_json::from_str(&format!(r#"{{"count": {text}}}"#)).unwrap();
+            assert!(
+                bounded_integer(&params, "count", TESTING_FLOOD_MAX_COUNT).is_err(),
+                "{text}"
+            );
+        }
+        assert!(bounded_integer(&json!({}), "count", TESTING_FLOOD_MAX_COUNT).is_err());
+    }
 }
