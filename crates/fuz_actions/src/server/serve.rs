@@ -136,6 +136,7 @@ pub fn boot_only(
         server_name,
         &StackOptions {
             host_gate: spec.browser_gates.host_gate,
+            allowed_origins_var: spec.browser_gates.allowed_origins_var,
             ..StackOptions::new(
                 env.allowed_origins.clone(),
                 Arc::new(env.trusted_proxies.clone()),

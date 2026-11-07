@@ -5,14 +5,18 @@
 //! matcher row by row against the same expectations it checks the TS ones
 //! against. Pure: no database read, no state.
 //!
-//! Reads `{patterns: string, origin: string | null}`. `patterns` goes through
+//! Reads `{patterns: string, origin: string | null, hosts?: string[]}`.
+//! `patterns` goes through
 //! [`fuz_http::AllowedOrigins::parse`]; a refusal answers
 //! `{ok: false, errors: [{index?, kind}]}` — one entry per reason, `index` the
 //! 1-based entry position (absent for a list-level reason), `kind` the shared
 //! wire name. A list that parses answers `{ok: true, allowed}`, where `allowed`
 //! is the request-level answer for one `Origin` header carrying `origin`: an
 //! absent `Origin` (`null`) passes, any other value must be one the list
-//! allows. Mirrors `fuz_app`'s TS `_testing_origin_check`.
+//! allows. With `hosts`, the request also carries those `Host` header values
+//! and must pass the host gate's check
+//! ([`fuz_http::AllowedOrigins::allows_request_hosts`]; `[]` is a request
+//! without one). Mirrors `fuz_app`'s TS `_testing_origin_check`.
 //!
 //! Gated on the daemon-token credential, matching `_testing_reset`.
 
@@ -24,7 +28,7 @@ use serde_json::{Map, Value, json};
 
 /// Declared input keys — the exact key set of the TS twin's
 /// `testing_origin_check_action_spec.input` strict object.
-const TESTING_ORIGIN_CHECK_KEYS: &[&str] = &["patterns", "origin"];
+const TESTING_ORIGIN_CHECK_KEYS: &[&str] = &["patterns", "origin", "hosts"];
 
 /// Build the `_testing_origin_check` action spec.
 #[must_use]
@@ -47,6 +51,25 @@ pub fn create_testing_origin_check_action_spec() -> ActionSpec {
                     ));
                 }
             };
+            // `optional(array(string))` on the twin
+            let hosts: Option<Vec<&str>> = match params.get("hosts") {
+                None => None,
+                Some(Value::Array(values)) => Some(
+                    values
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            invalid_input_params("hosts must be an array of strings", None)
+                        })?,
+                ),
+                Some(_) => {
+                    return Err(invalid_input_params(
+                        "hosts must be an array of strings",
+                        None,
+                    ));
+                }
+            };
             Ok(match AllowedOrigins::parse(patterns) {
                 Err(errors) => {
                     let errors: Vec<Value> = errors
@@ -64,7 +87,10 @@ pub fn create_testing_origin_check_action_spec() -> ActionSpec {
                     json!({ "ok": false, "errors": errors })
                 }
                 Ok(allowed) => {
-                    let allowed = origin.is_none_or(|origin| allowed.allows(origin));
+                    let allowed = origin.is_none_or(|origin| allowed.allows(origin))
+                        && hosts
+                            .as_deref()
+                            .is_none_or(|hosts| allowed.allows_request_hosts(hosts));
                     json!({ "ok": true, "allowed": allowed })
                 }
             })

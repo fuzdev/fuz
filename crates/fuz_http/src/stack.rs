@@ -14,7 +14,7 @@
 //! ```text
 //! request_tracing_layer (optional, the whole router)
 //!   → catch_panic (the whole router)
-//!   → per group: body cap → host_layer (optional) → origin_layer
+//!   → per group: body cap → host_layer (on by default) → origin_layer
 //!       → simple_request_layer (optional, per group) → client_ip_middleware
 //!       → handler
 //! ```
@@ -87,11 +87,12 @@ use axum::response::Response;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::body_limit::body_limit_layer;
-use crate::host::host_layer;
+use crate::host::{HostGate, host_layer};
 use crate::ip_resolve::client_ip_middleware;
 use crate::origin::{AllowedOrigins, origin_layer};
 use crate::parsed_proxy::ParsedProxy;
 use crate::rest_error::internal_error_response;
+use crate::server_env::ALLOWED_ORIGINS_VAR;
 use crate::simple_request::simple_request_layer;
 use crate::tracing_layer::request_tracing_layer;
 
@@ -233,12 +234,18 @@ impl RouteGroup {
 pub struct StackOptions {
     /// The allowlist the origin check (and, when on, the host gate) reads.
     pub allowed_origins: AllowedOrigins,
+    /// The env var the allowlist was read from, which the host gate's
+    /// refusal warning names. [`ALLOWED_ORIGINS_VAR`] unless the server
+    /// reads its own.
+    pub allowed_origins_var: &'static str,
     /// The trusted-proxy set `client_ip_middleware` resolves `X-Forwarded-For`
     /// against. Empty is the conservative setting, not a disabled one: every
     /// peer is untrusted, so the TCP peer is the client IP.
     pub trusted_proxies: Arc<Vec<ParsedProxy>>,
-    /// Mount [`host_layer`] in every group — the DNS-rebinding gate, for a
-    /// server that answers on loopback (see [`crate::host`]).
+    /// Mount [`host_layer`] in every group — the DNS-rebinding gate (see
+    /// [`crate::host`]). On by default; a server reached by names its
+    /// allowlist doesn't hold (and that accepts the rebinding exposure)
+    /// clears it.
     pub host_gate: bool,
     /// Wrap the router in [`request_tracing_layer`] — one access-log line per
     /// request. Off for a server whose request volume would drown its log.
@@ -246,8 +253,8 @@ pub struct StackOptions {
 }
 
 impl StackOptions {
-    /// Options with the given allowlist and trusted proxies, request tracing
-    /// on, and the host gate off.
+    /// Options with the given allowlist (read from [`ALLOWED_ORIGINS_VAR`])
+    /// and trusted proxies, request tracing on, and the host gate on.
     #[must_use]
     pub const fn new(
         allowed_origins: AllowedOrigins,
@@ -255,8 +262,9 @@ impl StackOptions {
     ) -> Self {
         Self {
             allowed_origins,
+            allowed_origins_var: ALLOWED_ORIGINS_VAR,
             trusted_proxies,
-            host_gate: false,
+            host_gate: true,
             request_tracing: true,
         }
     }
@@ -442,7 +450,7 @@ fn gate_group(group: RouteGroup, options: &StackOptions) -> Router {
     }
     if options.host_gate {
         router = router.layer(from_fn_with_state(
-            options.allowed_origins.clone(),
+            HostGate::new(options.allowed_origins.clone(), options.allowed_origins_var),
             host_layer,
         ));
     }
@@ -756,10 +764,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_host_gate_sits_inside_the_cap() {
-        let options = StackOptions {
-            host_gate: true,
-            ..base_options()
-        };
+        let options = base_options();
         let foreign_host = [("host", "rebind.example")];
         assert_eq!(
             send(app(&options), post_req("/small", 1, &foreign_host)).await,
@@ -776,7 +781,7 @@ mod tests {
             .await,
             StatusCode::PAYLOAD_TOO_LARGE
         );
-        // loopback passes; the gate is off by default
+        // loopback passes; a cleared gate passes anything
         assert_eq!(
             status(
                 app(&options),
@@ -786,7 +791,14 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(
-            status(app(&base_options()), post_req("/small", 1, &foreign_host)).await,
+            status(
+                app(&StackOptions {
+                    host_gate: false,
+                    ..base_options()
+                }),
+                post_req("/small", 1, &foreign_host)
+            )
+            .await,
             StatusCode::OK
         );
     }

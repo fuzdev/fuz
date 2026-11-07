@@ -51,9 +51,9 @@ pub struct OriginWildcardOptions {
 }
 
 impl OriginWildcardOptions {
-    /// No host gate, no notes.
+    /// The host gate on (as [`crate::StackOptions::new`] mounts it), no notes.
     pub const DEFAULT: Self = Self {
-        host_gate: false,
+        host_gate: true,
         note: None,
         port_wildcard_note: None,
     };
@@ -270,11 +270,7 @@ mod tests {
         }
         // no host gate, no note: neither sentence
         assert_eq!(
-            origin_wildcard_warning(
-                &pattern("https://*.example.com"),
-                &OriginWildcardOptions::DEFAULT
-            )
-            .unwrap(),
+            origin_wildcard_warning(&pattern("https://*.example.com"), &with(false, None)).unwrap(),
             "host wildcard: a page served from ANY host matching `*.example.com` (each `*` is \
              any one label) is an allowed origin. The server trusts every such page: one that \
              is same-site with the host you log in at carries the session cookie, and with it \
@@ -439,8 +435,7 @@ mod tests {
     #[test]
     fn without_the_host_gate_no_host_sentence() {
         for origin in ["http://localhost:*", "https://*.example.com", "http://*:*"] {
-            let text =
-                origin_wildcard_warning(&pattern(origin), &OriginWildcardOptions::DEFAULT).unwrap();
+            let text = origin_wildcard_warning(&pattern(origin), &with(false, None)).unwrap();
             assert!(!text.contains("`Host` check"), "{origin}: {text}");
             assert!(!text.contains("DNS rebinding"), "{origin}: {text}");
         }

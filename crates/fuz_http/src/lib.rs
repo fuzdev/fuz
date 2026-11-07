@@ -42,8 +42,8 @@
 //! requests from foreign pages before any per-request work; the origin check
 //! covers every group, the fallback included, unless a group is carved out by
 //! name with a reason (the fallback group never can be). `host_layer` is
-//! opt-in through [`StackOptions::host_gate`] (see [`host`]'s module doc),
-//! tracing is on by default and off through
+//! on by default and off through [`StackOptions::host_gate`] (see [`host`]'s
+//! module doc), tracing is on by default and off through
 //! [`StackOptions::request_tracing`], and `simple_request_layer` is a
 //! per-group opt-in ([`RouteGroup::refuse_simple_requests`]) that fits only
 //! groups with no form or multipart uploads — the spine's own JSON handlers
@@ -114,7 +114,10 @@ pub mod stack;
 // -- Public API re-exports ---------------------------------------------------
 
 pub use body_limit::DEFAULT_BODY_LIMIT_BYTES;
-pub use host::{FORBIDDEN_HOST_REASON, forbidden_host_response, host_layer, is_loopback_host};
+pub use host::{
+    FORBIDDEN_HOST_REASON, HOST_REFUSAL_WARN_INTERVAL, HostGate, forbidden_host_response,
+    format_host_refusal_warning, host_layer, is_loopback_host,
+};
 pub use ip_canonical::{IpFamily, normalize_ip, rate_limit_ip_key, validate_ip_strict};
 pub use ip_resolve::{
     ClientIp, UNRESOLVED_CLIENT_IP, client_ip_middleware, forwarded_for_value, resolve_client_ip,

@@ -56,9 +56,9 @@ pub struct BrowserGateSpec {
     /// [`fuz_http::ALLOWED_ORIGINS_VAR`] unless the server reads its own.
     pub allowed_origins_var: &'static str,
     /// Mount the `Host` check, the DNS-rebinding gate
-    /// ([`fuz_http::StackOptions::host_gate`]), for a server that answers on
-    /// loopback. [`AppBackend::stack_options`] carries it, and the wildcard
-    /// origin text says what the same entries open there.
+    /// ([`fuz_http::StackOptions::host_gate`]) — on in [`Self::DEFAULT`].
+    /// [`AppBackend::stack_options`] carries it, and the wildcard origin text
+    /// says what the same entries open there.
     pub host_gate: bool,
     /// The server's sentence on what a page the allowlist trusts reaches
     /// there, added to every wildcard entry's text
@@ -70,10 +70,10 @@ pub struct BrowserGateSpec {
 }
 
 impl BrowserGateSpec {
-    /// The spine's own allowlist var, no host gate, no notes.
+    /// The spine's own allowlist var, the host gate on, no notes.
     pub const DEFAULT: Self = Self {
         allowed_origins_var: fuz_http::ALLOWED_ORIGINS_VAR,
-        host_gate: false,
+        host_gate: true,
         origin_wildcard_note: None,
         port_wildcard_note: None,
     };
@@ -218,6 +218,10 @@ pub struct AppBackend {
     /// Whether the server mounts the `Host` check
     /// ([`BrowserGateSpec::host_gate`]), for [`Self::stack_options`].
     pub host_gate: bool,
+    /// The env var the allowlist was read from
+    /// ([`BrowserGateSpec::allowed_origins_var`]), which the host gate's
+    /// refusal warning names.
+    pub allowed_origins_var: &'static str,
     pub trusted_proxies: Arc<Vec<ParsedProxy>>,
     pub bootstrap_token_path: Option<PathBuf>,
     pub session_cookie_name: &'static str,
@@ -259,13 +263,14 @@ impl AppBackend {
         }
     }
 
-    /// The `compose_stack` options: the allowlist, the trusted proxies, and
-    /// the host gate when the server mounts one
-    /// ([`BrowserGateSpec::host_gate`]).
+    /// The `compose_stack` options: the allowlist and the var it was read
+    /// from, the trusted proxies, and the host gate unless the server clears
+    /// it ([`BrowserGateSpec::host_gate`]).
     #[must_use]
     pub fn stack_options(&self) -> StackOptions {
         StackOptions {
             host_gate: self.host_gate,
+            allowed_origins_var: self.allowed_origins_var,
             ..StackOptions::new(
                 self.allowed_origins.clone(),
                 Arc::clone(&self.trusted_proxies),
@@ -515,6 +520,7 @@ pub fn build_app_backend(
         audit_sse,
         allowed_origins: env.allowed_origins.clone(),
         host_gate: spec.browser_gates.host_gate,
+        allowed_origins_var: spec.browser_gates.allowed_origins_var,
         trusted_proxies: Arc::new(env.trusted_proxies.clone()),
         bootstrap_token_path: env.bootstrap_token_path.clone(),
         session_cookie_name: spec.session_cookie_name,
