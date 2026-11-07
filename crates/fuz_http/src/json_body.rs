@@ -1,8 +1,8 @@
 //! JSON request bodies, decoded with the TS twin's two refusals.
 //!
 //! `fuz_app`'s route pipeline (`create_input_validation` in
-//! `http/route_spec.ts`) reads a body with Hono's `c.req.json()` — the body
-//! decoded as UTF-8 text, then `JSON.parse` — and answers `400
+//! `http/route_spec.ts`) reads a body with `read_json_body` — the body
+//! decoded as UTF-8 text (`c.req.text()`), then `parse_json_text` — and answers `400
 //! invalid_json_body` when that throws or yields anything but an object
 //! (`null`, an array, a scalar). Only an object that fails the input schema is
 //! `400 invalid_request_body`. A handler deserializing straight to its input
@@ -16,13 +16,17 @@
 //! first also matches `JSON.parse` on a duplicated key — the last one wins —
 //! where a derived `Deserialize` refuses it.
 //!
-//! `serde_json` refuses three things `JSON.parse` accepts, so these answer
-//! `invalid_json_body` here and `invalid_request_body` (or success) on the
-//! twin: an escaped lone surrogate (`"\ud800"`), a number out of `f64` range
-//! (`1e400`), and nesting deeper than 128 (on the JSON-RPC `POST` body they
-//! answer `parse_error` where the twin dispatches). A fourth divergence is the
-//! twin's runtime, not the spec: Node's undici strips a second leading BOM,
-//! where Deno, Bun, and this decode drop only the one the spec does.
+//! `serde_json` refuses three things `JSON.parse` accepts — an escaped lone
+//! surrogate (`"\ud800"`), a number out of `f64` range (`1e400`), and nesting
+//! 128 deep — and the twin refuses them too (`parse_json_text` in
+//! `http/json_text.ts`), so they answer `invalid_json_body` on both spines
+//! (`parse_error` on a JSON-RPC body or WS frame). The out-of-range verdict
+//! matches `JSON.parse`'s `Infinity` exactly because this crate builds
+//! `serde_json` with `float_roundtrip`, which feature unification turns on for
+//! every server linking it; without it, `serde_json` refuses a few numbers
+//! just under `f64::MAX` that round to it. One divergence remains, the twin's
+//! runtime, not the spec: Node's undici strips a second leading BOM, where
+//! Deno, Bun, and this decode drop only the one the spec does.
 
 use std::borrow::Cow;
 
@@ -143,5 +147,39 @@ mod tests {
         assert_eq!(parse(b"{\"name\":\"a\xFF\"}").name, "a\u{FFFD}");
         // a duplicated key keeps its last value
         assert_eq!(parse(br#"{"name":"a","name":"b"}"#).name, "b");
+    }
+
+    /// The three refusals the twin's `parse_json_text` holds to, and the
+    /// `float_roundtrip` boundary its `Infinity` matches: a number just past
+    /// `f64::MAX` that rounds to it is a number, one that rounds past is not.
+    #[test]
+    fn refuses_what_the_twin_refuses_as_invalid_json() {
+        let refused = |body: &str| {
+            parse_json_body::<serde_json::Value>(body.as_bytes())
+                .err()
+                .map(|r| r.status())
+        };
+        for body in [
+            r#"{"x":"\ud800"}"#,
+            r#"{"x":"\udc00"}"#,
+            r#"{"\ud800":1}"#,
+            r#"{"x":"\ud800","x":1}"#,
+            r#"{"x":1e400}"#,
+            r#"{"x":-1e400}"#,
+            r#"{"x":1.7976931348623159e308}"#,
+        ] {
+            assert_eq!(refused(body), Some(StatusCode::BAD_REQUEST), "{body}");
+        }
+        let deep = format!("{{\"x\":{}{}}}", "[".repeat(127), "]".repeat(127));
+        assert_eq!(refused(&deep), Some(StatusCode::BAD_REQUEST));
+        let shallow = format!("{{\"x\":{}{}}}", "[".repeat(126), "]".repeat(126));
+        assert_eq!(refused(&shallow), None);
+        for body in [
+            r#"{"x":"\ud83d\ude00"}"#,
+            r#"{"x":1e-400}"#,
+            r#"{"x":1.797693134862315807e308}"#,
+        ] {
+            assert_eq!(refused(body), None, "{body}");
+        }
     }
 }
