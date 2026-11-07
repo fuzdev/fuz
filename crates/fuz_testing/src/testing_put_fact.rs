@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 /// `testing_put_fact_action_spec.input` strict object.
 const TESTING_PUT_FACT_KEYS: &[&str] = &["content", "content_type", "holder", "external_url"];
 
-/// `content_type`, `holder` and `external_url` are `.optional()` on the twin,
+/// `content_type`, `holder` and `external_url` are `optional(...)` on the twin,
 /// so an explicit `null` is refused rather than read as absent.
 const TESTING_PUT_FACT_NON_NULLABLE: &[&str] = &["content_type", "holder", "external_url"];
 
@@ -49,7 +49,7 @@ pub fn create_testing_put_fact_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |params: Value, ctx: ActionContext<'_>| {
         Box::pin(async move {
             fuz_http::reject_unknown_keys(&params, TESTING_PUT_FACT_KEYS)?;
-            // `content_type` is `.optional()` on the twin, so `null` and a
+            // `content_type` is `optional(string)` on the twin, so `null` and a
             // non-string are both refused rather than read as absent.
             fuz_http::reject_null_keys(&params, TESTING_PUT_FACT_NON_NULLABLE)?;
             let content = params

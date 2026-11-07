@@ -200,9 +200,9 @@ pub fn parse_str_param<'a>(params: &'a Value, name: &'static str) -> Result<&'a 
 /// the spine decodes from a request (query values, JSON-RPC params).
 ///
 /// Twin of both TS `Uuid` schemas in `fuz_app` — the `@fuzdev/fuz_schema`
-/// one in `primitive_schemas_fuz.ts` (`pipe(string, uuid, to_lower_case)`)
-/// and the Zod one in `primitive_schemas.ts` (`z.uuid()` with that grammar
-/// as its `pattern`): hyphenated 8-4-4-4-12 hex (case-insensitive) with the
+/// `Uuid` in `primitive_schemas.ts` (`pipe(string, uuid, to_lower_case)`)
+/// and its Zod form `ZodUuid` in `zod_schemas.ts` (`z.uuid()` with that
+/// grammar as its `pattern`): hyphenated 8-4-4-4-12 hex (case-insensitive) with the
 /// RFC 9562 version nibble in `1..=8` and the variant nibble in `[89abAB]`,
 /// plus the two special values — nil (all zeros) and max (all `f`s, in any
 /// case, as RFC 9562 §4 reads a UUID case-insensitively).

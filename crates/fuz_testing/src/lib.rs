@@ -195,7 +195,7 @@ mod auth_gate_tests {
     }
 
     /// The parameterless introspection reads declare a void input, as their
-    /// TS twins' `z.void()` inputs do, and the whole set still compiles: the
+    /// TS twins' `s.void` inputs do, and the whole set still compiles: the
     /// daemon-token gate resolves no actor, so `VoidInputWithActor` holds off.
     #[test]
     fn parameterless_reads_declare_a_void_input() {

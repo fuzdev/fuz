@@ -24,7 +24,7 @@ use serde_json::{Map, Value, json};
 
 /// Declared input keys — the exact key set of the TS twin's
 /// `testing_schema_snapshot_action_spec.input` strict object. The one field is
-/// `.optional()`, so the same list is the non-nullable set.
+/// `optional(array(string))`, so the same list is the non-nullable set.
 const TESTING_SCHEMA_SNAPSHOT_KEYS: &[&str] = &["exclude_tables"];
 
 /// Build the `_testing_schema_snapshot` action spec.
@@ -36,7 +36,7 @@ pub fn create_testing_schema_snapshot_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |params: Value, ctx: ActionContext<'_>| {
         Box::pin(async move {
             fuz_http::reject_unknown_keys(&params, TESTING_SCHEMA_SNAPSHOT_KEYS)?;
-            // `exclude_tables` is `z.array(z.string()).optional()` on the
+            // `exclude_tables` is `optional(array(string))` on the
             // twin, so `null`, a non-array, and a non-string element are each
             // `-32602` there rather than silently dropped.
             fuz_http::reject_null_keys(&params, TESTING_SCHEMA_SNAPSHOT_KEYS)?;

@@ -174,7 +174,7 @@ pub fn create_testing_reset_action_spec(options: TestingResetOptions) -> ActionS
 
         Box::pin(async move {
             fuz_http::reject_unknown_keys(&params, TESTING_RESET_KEYS)?;
-            // Every declared field is `.optional()` on the twin, so an
+            // Every declared field is `optional(...)` on the twin, so an
             // explicit `null` is refused rather than read as absent.
             fuz_http::reject_null_keys(&params, TESTING_RESET_KEYS)?;
             let extra_keeper_roles: Vec<String> =
@@ -320,8 +320,7 @@ struct SeededKeeper {
     extras: Vec<Value>,
     /// The keeper's additional actors (from input `extra_actors`), in
     /// order. JSON `{ "id": <uuid>, "name": <string> }` objects matching
-    /// the TS `z.array(z.strictObject({id: Uuid, name: z.string()}))`
-    /// output shape. Empty when none were requested.
+    /// the TS `array(object({id: Uuid, name: string}))` output shape. Empty when none were requested.
     extra_actors: Vec<Value>,
 }
 
@@ -329,7 +328,7 @@ struct SeededKeeper {
 ///
 /// The input fields (`extra_keeper_roles`, `extra_actors`, `extra_accounts`)
 /// all reject malformed values rather than silently coercing, matching the TS
-/// Zod schema's strictness. The twin refuses them at its schema step, so the
+/// schema's strictness. The twin refuses them at its schema step, so the
 /// wire carries the generic reason-less `invalid params`
 /// ([`invalid_input_params`]); `detail` goes to the debug log.
 fn invalid_input(detail: &str) -> JsonrpcError {
@@ -338,16 +337,16 @@ fn invalid_input(detail: &str) -> JsonrpcError {
 
 /// Declared input keys — the exact key set of the TS twin's
 /// `testing_reset_action_spec.input` strict object. All three are
-/// `z.array(...).optional()`, so the same list serves as the non-nullable set.
+/// `optional(array(...))`, so the same list serves as the non-nullable set.
 const TESTING_RESET_KEYS: &[&str] = &["extra_keeper_roles", "extra_accounts", "extra_actors"];
 
 /// Parse an optional JSON params field as an ordered array of strings.
 ///
 /// Absent → empty vec: the field is optional on the wire
-/// (`extra_*: z.array(z.string()).optional()`), which admits a missing key
+/// (`extra_*: optional(array(string))`), which admits a missing key
 /// and nothing else. A present value that isn't an array — JSON `null`
 /// included — or an array holding a non-string element is a malformed call
-/// → loud [`invalid_input`], matching the TS Zod schema's rejection rather
+/// → loud [`invalid_input`], matching the TS schema's rejection rather
 /// than silently coercing. (The handler's `reject_null_keys` walk refuses a
 /// `null` before this runs.) Shared by the `extra_keeper_roles` and
 /// `extra_actors` inputs — both plain ordered string lists.
@@ -632,7 +631,7 @@ mod tests {
 
     #[test]
     fn parse_string_array_rejects_null() {
-        // The twin declares the field `.optional()`, which admits an absent
+        // The twin declares the field `optional(array(string))`, which admits an absent
         // key and nothing else — the handler's `reject_null_keys` walk refuses
         // a present `null` before this parser runs, and the parser itself
         // treats it as the non-array it is.

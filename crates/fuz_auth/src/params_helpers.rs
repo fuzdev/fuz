@@ -77,11 +77,10 @@ pub(crate) fn parse_role_param<'a>(
 }
 
 /// Refuse a text field longer than `max` — the twin of a TS
-/// `z.string().max(max)`.
+/// `bounded_string({max})`.
 ///
 /// The count is UTF-16 code units, which is what `String.length` — and so
-/// the twin's `bounded_string`, whatever the installed Zod's `.max()` counts —
-/// measures: a value of exactly `max` units passes, and an astral-plane
+/// the twin's `bounded_string`, a `fuz_schema` `max_length` — measures: a value of exactly `max` units passes, and an astral-plane
 /// character costs two on both spines. The hand-decoded specs
 /// carry no schema to enforce the bound, so each one calls this on the field
 /// it bounds.

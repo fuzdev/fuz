@@ -5,7 +5,7 @@
 //! show up in invites, audit metadata, and future role-grant surfaces.
 //!
 //! [`is_valid_token_id`] and [`is_valid_fact_hash`] join them: the same
-//! twin-of-a-Zod-schema shape, for the public id and content-address
+//! twin-of-a-TS-schema shape, for the public id and content-address
 //! primitives wire surfaces decode. The wire UUID grammar is generic to every
 //! spine crate, so it lives lower, as `fuz_http::is_valid_uuid`.
 //!
@@ -146,8 +146,8 @@ pub const FACT_HASH_HEX_LENGTH: usize = 64;
 /// Whether `s` is a valid wire fact hash — the `blake3:`-prefixed address the
 /// spine decodes from a route segment or a JSON-RPC filter.
 ///
-/// Twin of the TS `FactHashSchema` (`z.string().regex(FACT_HASH_EXACT)` in
-/// `fuz_app`'s `primitive_schemas.ts`, with `FACT_HASH_EXACT` =
+/// Twin of the TS `FactHashSchema` (`brand(pipe(string, regex(FACT_HASH_EXACT)), 'FactHash')`
+/// in `fuz_app`'s `primitive_schemas.ts`, with `FACT_HASH_EXACT` =
 /// `/^blake3:[0-9a-f]{64}$/` from `fuz_util`'s `hash_schemas.ts`): the
 /// literal `blake3:` prefix followed by
 /// exactly sixty-four **lowercase** hex characters. Nothing else — no other

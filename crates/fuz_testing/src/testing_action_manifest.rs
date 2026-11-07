@@ -144,7 +144,7 @@ fn build_action_manifest(mounted: &[ActionSpec]) -> Value {
 /// The handler closes over a manifest computed once here from `mounted` (see
 /// `build_action_manifest`); each call clones and returns the cached value,
 /// so dispatch does no work beyond the daemon-token gate and the void rule its
-/// TS twin's `z.void()` input declares ([`InputShape::Void`], held by the
+/// TS twin's `s.void` input declares ([`InputShape::Void`], held by the
 /// dispatcher).
 /// Append it to the registry **last**, passing the assembled spec list — it must enumerate every
 /// method mounted above it.
@@ -220,7 +220,7 @@ mod tests {
             )
             .with_rate_limit(RateLimitClass::Account),
         );
-        // A parameterless method — the TS twin's `z.void()` input.
+        // A parameterless method — the TS twin's `s.void` input.
         specs.push(ActionSpec::read_only(
             "omicron_void_read",
             AuthSpec::public(),
@@ -371,7 +371,7 @@ mod tests {
 
         assert_eq!(input_of("omicron_void_read"), "void");
         assert_eq!(input_of("zeta_read"), "object");
-        // The manifest's own `z.void()` input is a void input.
+        // The manifest's own `s.void` input is a void input.
         assert_eq!(input_of(TESTING_ACTION_MANIFEST_METHOD), "void");
     }
 }

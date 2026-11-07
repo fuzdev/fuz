@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 
 /// Build the `_testing_drain_effects` action spec bound to `emitter`.
 ///
-/// The handler runs `drain_effects`. The TS twin's input is `z.void()`, so
+/// The handler runs `drain_effects`. The TS twin's input is `s.void`, so
 /// the spec declares [`InputShape::Void`]: the dispatcher refuses any declared
 /// parameter before the drain runs, and an absent `params` and a `{}` both
 /// call it.

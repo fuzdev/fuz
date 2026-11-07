@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 ///
 /// The handler reads every `schema_version` row ordered by
 /// `(namespace, sequence)` and returns them under an `entries` array. The TS
-/// twin's input is `z.void()`, so the spec declares [`InputShape::Void`]: the
+/// twin's input is `s.void`, so the spec declares [`InputShape::Void`]: the
 /// dispatcher reads an absent `params`, `null`, and `{}` as the call and
 /// refuses anything else (`-32602`) before the handler runs.
 #[must_use]

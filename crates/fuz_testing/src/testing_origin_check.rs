@@ -36,7 +36,7 @@ pub fn create_testing_origin_check_action_spec() -> ActionSpec {
                 .get("patterns")
                 .and_then(Value::as_str)
                 .ok_or_else(|| invalid_input_params("patterns (string) is required", None))?;
-            // `z.string().nullable()` on the twin: required, `null` or a string
+            // `nullable(string)` on the twin: required, `null` or a string
             let origin = match params.get("origin") {
                 Some(Value::Null) => None,
                 Some(Value::String(origin)) => Some(origin.as_str()),

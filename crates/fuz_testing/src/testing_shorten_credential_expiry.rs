@@ -42,7 +42,7 @@ const TESTING_SHORTEN_CREDENTIAL_EXPIRY_KEYS: &[&str] = &["account_id", "seconds
 
 /// Parse + validate `{account_id: string, seconds: number}`: a UUID, and an
 /// integer within the action's range (the twin's
-/// `z.number().int().min(1).max(60)`). Pure, so the bounds are unit-testable.
+/// `pipe(number, safe_integer, min_value(1), max_value(60))`). Pure, so the bounds are unit-testable.
 fn parse_shorten_params(params: &Value) -> Result<(uuid::Uuid, i32), JsonrpcError> {
     fuz_http::reject_unknown_keys(params, TESTING_SHORTEN_CREDENTIAL_EXPIRY_KEYS)?;
     let account_id = params

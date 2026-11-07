@@ -9,7 +9,7 @@
 //!
 //! `expires_in_seconds` is **constrained negative** (the handler refuses
 //! anything but a negative safe integer with `invalid_params`, mirroring the TS
-//! spec's `z.number().int().negative()`): the action is structurally incapable of
+//! spec's `pipe(number, safe_integer, max_value(-1))`): the action is structurally incapable of
 //! minting a *usable* session — only an already-backdated, already-dead row.
 //! The daemon-token gate (a credential only a test binary mounts) and the test
 //! binary's default loopback bind already fence the backdoor — the bind is a
@@ -51,8 +51,8 @@ const TESTING_MINT_SESSION_KEYS: &[&str] = &["account_id", "expires_in_seconds"]
 /// (`{account_id: string, expires_in_seconds: number}`).
 ///
 /// `expires_in_seconds` is **constrained negative** — mirroring the TS spec's
-/// `z.number().int().negative()`, whose `int()` also bounds it to the safe
-/// integers (no smaller than `-SAFE_INTEGER_MAX`) — so the action can only
+/// `pipe(number, safe_integer, max_value(-1))`, whose `safe_integer` also
+/// bounds it to the safe integers (no smaller than `-SAFE_INTEGER_MAX`) — so the action can only
 /// mint an already-expired (backdated) row, never a usable session for an
 /// arbitrary account, and never an offset past what Postgres can add to
 /// `NOW()`. Returns the parsed pair, or the generic `invalid params` the twin's
@@ -211,7 +211,7 @@ mod tests {
     }
 
     /// The gate the `params.get` chain cannot carry: the twin's input is a
-    /// `z.strictObject`, so a key it does not declare — `acting` included, the
+    /// strict `object`, so a key it does not declare — `acting` included, the
     /// spec having no actor axis — is `-32602` rather than ignored.
     #[test]
     fn rejects_an_unknown_key() {
@@ -231,9 +231,9 @@ mod tests {
         );
     }
 
-    /// The twin's `z.number().int().negative()`: an integer, below zero, and
-    /// no smaller than `-SAFE_INTEGER_MAX` (`int()` refuses past the safe
-    /// range) — so no offset reaches Postgres that it can't add to `NOW()`.
+    /// The twin's `pipe(number, safe_integer, max_value(-1))`: an integer,
+    /// below zero, and no smaller than `-SAFE_INTEGER_MAX` (`safe_integer`
+    /// refuses past the safe range) — so no offset reaches Postgres that it can't add to `NOW()`.
     /// Every refusal is the twin's generic reason-less `invalid params`.
     #[test]
     fn the_expiry_is_a_negative_safe_integer() {
