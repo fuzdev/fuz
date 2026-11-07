@@ -217,7 +217,7 @@ async fn seed_admin(pool: &Pool, keyring: &Keyring, username: &str) -> AdminFixt
 /// credentials at all.
 ///
 /// `?acting=` is the only key the twin's `AuditStreamQuery`
-/// (`z.strictObject({acting})`) declares; the strict object 400s an
+/// (`object({acting})`) declares; the strict object 400s an
 /// undeclared one, and before this route read its query at all it answered
 /// `200` to `?foo=bar` — a shape divergence with no test that could see it.
 #[tokio::test]

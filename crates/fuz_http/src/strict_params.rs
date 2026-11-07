@@ -41,7 +41,7 @@ pub fn parse_strict_params<T: DeserializeOwned>(params: Value) -> Result<T, Json
 }
 
 /// Parse JSON-RPC `params` into a typed input, refusing an explicit `null` on
-/// any key the twin does **not** declare `.nullish()` / `.nullable()`.
+/// any key the twin does **not** declare `optional(nullable(...))` / `nullable(...)`.
 ///
 /// The escape hatch [`parse_strict_params`] delegates to. Passing the
 /// nullable keys explicitly — rather than opting the whole input out of the
@@ -51,7 +51,7 @@ pub fn parse_strict_params<T: DeserializeOwned>(params: Value) -> Result<T, Json
 ///
 /// The named keys are only exempted from the walk; whether `null` then
 /// decodes depends on the field, so pair a nullable UUID with
-/// [`crate::deserialize_nullish_wire_uuid`] rather than the `.optional()`
+/// [`crate::deserialize_nullish_wire_uuid`] rather than the `optional`
 /// deserializer.
 ///
 /// # Errors
@@ -85,10 +85,10 @@ pub fn parse_strict_params_allowing_null<T: DeserializeOwned>(
 /// **Top-level only — and what covers the nested fields is not this walk.**
 /// The spine's nested inputs are discriminated unions of strict objects, and
 /// they are *not* all-required: `CellGrantPrincipalInput::Role.scope_id` is
-/// optional, and it is one of the three `.nullish()` keys named above. What
+/// optional, and it is one of the three `optional(nullable(...))` keys named above. What
 /// makes a nested optional safe is that every one of them carries an explicit
 /// serde adapter that decides `null` itself — `deserialize_optional_wire_uuid`
-/// refuses a present `null` ("expected a string", the `.optional()` answer),
+/// refuses a present `null` ("expected a string", the `optional(...)` answer),
 /// `deserialize_nullish_wire_uuid` maps it to `None` on purpose. A **bare**
 /// `Option<T>` is the lenient shape, and there are none nested.
 ///

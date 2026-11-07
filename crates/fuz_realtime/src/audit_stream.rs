@@ -15,7 +15,7 @@
 //! That pipeline is the one `fuz_db_admin` and `fuz_fact_serving`'s bare route
 //! already ran, down to the shared pieces:
 //! [`assert_known_query_keys`] + [`parse_acting_query`] for the `?acting=`
-//! query the twin declares (`z.strictObject({acting})`), and
+//! query the twin declares (`object({acting})`), and
 //! [`require_acting_actor`] for the authorization phase. A multi-actor admin
 //! therefore **picks a persona** here rather than being refused, and the role
 //! check reads that persona's grants.
@@ -242,7 +242,7 @@ async fn audit_stream(
     // Query shape before auth — the TS pipeline's phase order, so the two
     // backends answer a malformed query identically whatever the caller's
     // credentials. `?acting=` is the only key the twin's
-    // `AuditStreamQuery` (`z.strictObject({acting})`) declares; first
+    // `AuditStreamQuery` (`object({acting})`) declares; first
     // occurrence wins on a duplicate, as it does on every other spine surface.
     if let Err(response) = assert_known_query_keys(&query_pairs, &["acting"]) {
         return response;

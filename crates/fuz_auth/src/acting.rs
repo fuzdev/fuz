@@ -9,8 +9,7 @@
 //! `fuz_fact_serving`'s cell-scoped public route is not among them: it
 //! declares no `acting` slot, reads no query, and treats a multi-actor caller
 //! as anonymous. The TS `ActingActor` is a bare optional `Uuid`
-//! (`primitive_schemas.ts`, a `fuz_schema` schema; `ZodActingActor` its Zod
-//! form), so the only accepted spelling is a bare uuid under the strict wire
+//! (`primitive_schemas.ts`, a `fuz_schema` schema), so the only accepted spelling is a bare uuid under the strict wire
 //! grammar of `Uuid`, which takes the max UUID in any case — [`fuz_http::is_valid_uuid`] is that grammar's Rust
 //! twin and gates this parser. The TS status route and WS upgrade read the
 //! raw query through `parse_acting`, and the TS REST query routes validate
@@ -140,7 +139,7 @@ mod tests {
         }
     }
 
-    /// Every spelling the twin grammar refuses (the TS `ZodUuid` too). The JSON-quoted
+    /// Every spelling the twin grammar refuses. The JSON-quoted
     /// form is the load-bearing row: `?acting=%22<uuid>%22` must be a 400 on
     /// both spines across every REST family that resolves the selector.
     #[test]

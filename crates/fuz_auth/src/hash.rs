@@ -56,8 +56,8 @@ pub const SESSION_ID_LENGTH: usize = 64;
 /// [`hash_session_token`] produces, and the only shape `auth_session.id`
 /// ever holds.
 ///
-/// Twin of the TS `SessionId` brand (`Blake3Hash.brand('SessionId')`, whose
-/// shape is `z.string().regex(/^[0-9a-f]{64}$/)`): exactly 64 **lowercase**
+/// Twin of the TS `SessionId` brand (`brand(Blake3Hash, 'SessionId')`, whose
+/// shape is a string matching `/^[0-9a-f]{64}$/`): exactly 64 **lowercase**
 /// hex characters. Uppercase hex is refused on both spines — a digest that
 /// did not come from the hasher is not a session id, whatever it decodes to.
 ///

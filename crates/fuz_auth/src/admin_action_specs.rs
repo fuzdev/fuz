@@ -331,7 +331,7 @@ impl AdminActionSpecs {
 }
 
 /// Declared input keys per method, each the exact key set of the TS twin's
-/// `z.strictObject` in `auth/admin_action_specs.ts`.
+/// `object` in `auth/admin_action_specs.ts`.
 ///
 /// [`reject_unknown_keys`] runs each list at the top of its handler, so a key
 /// the twin refuses is `-32602` here too rather than a field nothing reads.
@@ -369,15 +369,16 @@ mod keys {
     /// `app_settings_update`.
     pub const APP_SETTINGS_UPDATE: &[&str] = &["open_signup", "acting"];
 
-    /// `account_purge.confirm` is `z.boolean().optional()` on the twin — the
-    /// one admin key whose modifier is `.optional()` rather than `.nullish()`,
+    /// `account_purge.confirm` is `optional(boolean)` on the twin — the
+    /// one admin key wrapped in `optional` alone rather than
+    /// `optional(nullable(...))`,
     /// so an explicit `null` is refused rather than read as absent.
     pub const ACCOUNT_PURGE_NON_NULLABLE: &[&str] = &["confirm"];
 }
 
 /// Wire input for the three admin reads whose only declared key is the
 /// dispatcher-owned actor selector — `admin_session_list`, `invite_list` and
-/// `app_settings_get`, each `z.strictObject({acting: ActingActor}).default({})`
+/// `app_settings_get`, each `with_default_fn(object({acting: ActingActor}), () => ({}))`
 /// on the TS twin.
 ///
 /// It carries no field a handler reads; it exists so an unknown key and an
@@ -458,7 +459,7 @@ struct InviteCreateParams {
 
 fn parse_invite_create_params(params: &Value) -> Result<InviteCreateParams, JsonrpcError> {
     reject_unknown_keys(params, keys::INVITE_CREATE)?;
-    // Both fields are `.nullish()` on the twin, so `null` reads as absent — but
+    // Both fields are `optional(nullable(...))` on the twin, so `null` reads as absent — but
     // a present value of any other type is `-32602` there and must be here.
     let email = parse_optional_str_param(params, "email")?.map(str::to_owned);
     let username = parse_optional_str_param(params, "username")?.map(str::to_owned);
@@ -1188,7 +1189,7 @@ async fn handle_admin_account_list(
     )?;
     // Active-only unless the caller opts into tombstoned rows (admin UI
     // "show deleted" view). Absent / `null` → false; any other non-boolean is
-    // the `-32602` the twin's `z.boolean().nullish()` answers.
+    // the `-32602` the twin's `optional(nullable(boolean))` answers.
     let include_deleted = parse_optional_bool_param(params, "include_deleted")?.unwrap_or(false);
     let accounts = query_admin_account_list(db, page.limit, page.offset, include_deleted)
         .await
@@ -1433,7 +1434,7 @@ mod tests {
     ];
 
     /// Each list names a real method, and each method's list refuses a key the
-    /// twin's `z.strictObject` does not declare.
+    /// twin's `object` does not declare.
     #[test]
     fn every_admin_key_list_belongs_to_a_registered_method_and_refuses_a_stray_key() {
         for (method, allowed) in KEY_TABLE {
@@ -1467,9 +1468,9 @@ mod tests {
         }
     }
 
-    /// `account_purge.confirm` is the family's one `.optional()` key, so an
-    /// explicit `null` is refused where the `.nullish()` filters read it as
-    /// absent.
+    /// `account_purge.confirm` is the family's one `optional`-only key, so an
+    /// explicit `null` is refused where the `optional(nullable(...))` filters
+    /// read it as absent.
     #[test]
     fn account_purge_refuses_a_null_confirm() {
         let params = json!({"account_id": ACTOR, "confirm": Value::Null});
@@ -1488,7 +1489,7 @@ mod tests {
         );
     }
 
-    /// `invite_create` reads two `.nullish()` strings; a present wrong type is
+    /// `invite_create` reads two `optional(nullable(...))` strings; a present wrong type is
     /// `-32602` on the twin rather than a silently dropped field.
     #[test]
     fn invite_create_refuses_a_wrong_typed_address() {
@@ -1507,7 +1508,7 @@ mod tests {
         }
     }
 
-    /// The same handler's unknown-key half, and its `.nullish()` half — a
+    /// The same handler's unknown-key half, and its `optional(nullable(...))` half — a
     /// `null` address is the absent one, which then trips the at-least-one
     /// refinement rather than a type error.
     #[test]
@@ -1523,7 +1524,7 @@ mod tests {
     }
 
     /// The three `acting`-only admin reads take an absent `params` (the
-    /// `.default({})` half) and a well-formed selector, and nothing else.
+    /// `with_default_fn` half) and a well-formed selector, and nothing else.
     #[test]
     fn the_acting_only_input_takes_the_default_and_the_selector() {
         for params in [Value::Null, json!({}), json!({"acting": ACTOR})] {
@@ -1549,8 +1550,8 @@ mod tests {
         }
     }
 
-    /// `acting` is `Uuid.optional()`, which admits an absent key and nothing
-    /// else, and holds a present value to the `z.uuid()` grammar rather than
+    /// `acting` is `optional(Uuid)`, which admits an absent key and nothing
+    /// else, and holds a present value to the wire UUID grammar rather than
     /// `Uuid::parse_str`'s permissive spellings.
     #[test]
     fn the_acting_only_input_holds_the_selector_to_the_wire_grammar() {

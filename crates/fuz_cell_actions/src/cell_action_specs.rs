@@ -303,7 +303,7 @@ pub const ERROR_CELL_POLICY_INVALID: &str = "cell_policy_invalid";
 /// those to the same `-32602` the twin gives.
 const CELL_CREATE_NULLABLE: &[&str] = &["kind", "path", "parent_id", "policy"];
 
-/// `cell_policy_set` keys whose TS twin is `.nullable()` — `policy: null`
+/// `cell_policy_set` keys whose TS twin is `nullable(...)` — `policy: null`
 /// clears the root's policy.
 const CELL_POLICY_SET_NULLABLE: &[&str] = &["policy"];
 
@@ -1764,7 +1764,7 @@ pub fn build_cell_spec_set(options: CellSpecSetOptions) -> Vec<ActionSpec> {
             {
                 let handler: ActionHandler = Arc::new(|params, ctx| {
                     Box::pin(async move {
-                        // The wire schema is `.default({})`, and
+                        // The wire schema is `with_default_fn(..., () => ({}))`, and
                         // `parse_strict_params` maps absent params (and a direct
                         // `Value::Null` caller) to `{}`, so this decodes to an
                         // empty filter.

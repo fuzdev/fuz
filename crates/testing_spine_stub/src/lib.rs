@@ -311,7 +311,7 @@ impl StubConfig {
     }
 }
 
-/// Read a Zod-`stringbool()`-shaped var through the spine parser
+/// Read a stringbool var through the spine parser
 /// ([`fuz_sys::env::parse_stringbool`]). Unset → `false`; an unknown value is
 /// refused so a typo doesn't silently flip behavior.
 fn parse_stringbool(

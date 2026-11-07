@@ -528,7 +528,7 @@ pub struct CellCloneInput {
 
 /// `cell_list` input. Every dimension optional and AND-combined.
 ///
-/// The whole input defaults to empty (the TS schema is `.default({})`), so
+/// The whole input defaults to empty (the TS schema is `with_default_fn(..., () => ({}))`), so
 /// an **absent** params decodes to `CellListInput::default()`. A wire
 /// `null` is refused at the envelope on the classified transports; the
 /// unclassified GET query-string path decodes it as `{}` via

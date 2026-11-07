@@ -117,7 +117,7 @@ async fn handle_actor_search(
     Ok(serde_json::json!({ "actors": actors }))
 }
 
-/// Parsed + validated `actor_search` input. Mirrors the TS Zod bounds
+/// Parsed + validated `actor_search` input. Mirrors the TS schema's bounds
 /// (`query` 1..=50, `scope_ids` optional uuid array, `limit` 1..=50).
 #[derive(Debug)]
 struct SearchInput {
@@ -131,8 +131,8 @@ struct SearchInput {
 /// twin declares no selector and a well-formed one is an unrecognized key.
 const ACTOR_SEARCH_KEYS: &[&str] = &["query", "scope_ids", "limit"];
 
-/// `scope_ids` and `limit` are `.optional()` on the twin — not `.nullish()` —
-/// so an explicit `null` is refused rather than read as absent.
+/// `scope_ids` and `limit` are `optional(...)` on the twin — not
+/// `optional(nullable(...))` — so an explicit `null` is refused rather than read as absent.
 const ACTOR_SEARCH_NON_NULLABLE: &[&str] = &["scope_ids", "limit"];
 
 fn parse_search_input(params: &Value) -> Result<SearchInput, JsonrpcError> {
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(error.code, JsonrpcErrorCode::InvalidParams);
     }
 
-    /// `query` is the twin's `z.string().min(1).max(50)`: exactly the bound
+    /// `query` is the twin's `bounded_string({min: 1, max: 50})`: exactly the bound
     /// passes, one unit past it is refused in the spine's shared words, and
     /// the units are UTF-16 — an astral-plane character costs two.
     #[test]
@@ -250,8 +250,8 @@ mod tests {
         assert_eq!(error.code, JsonrpcErrorCode::InvalidParams);
     }
 
-    /// `scope_ids` and `limit` are `.optional()` on the twin — not
-    /// `.nullish()` — so an explicit `null` is refused rather than read as
+    /// `scope_ids` and `limit` are `optional(...)` on the twin — not
+    /// `optional(nullable(...))` — so an explicit `null` is refused rather than read as
     /// "no filter" / "the default".
     #[test]
     fn actor_search_refuses_a_null_on_an_optional_key() {
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(defaults.limit, ACTOR_SEARCH_LIMIT_DEFAULT);
     }
 
-    /// `limit` is `z.number().int()` on the twin: any integral spelling.
+    /// `limit` is `pipe(number, integer, ...)` on the twin: any integral spelling.
     #[test]
     fn actor_search_reads_an_integral_float_limit() {
         for (text, expected) in [("5.0", 5), ("1e1", 10)] {

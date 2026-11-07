@@ -428,13 +428,12 @@ fn check_params_proto_key(params: &Value) -> Option<JsonrpcError> {
 /// The second half of a two-step port. [`read_acting`] plays `fuz_app`'s
 /// `parse_acting` — a malformed selector reads as omitted so the authorization
 /// phase can still run — and this plays the typed input schema that follows
-/// it, where `acting` is `ActingActor` (`Uuid.optional()`) and refuses the
+/// it, where `acting` is `ActingActor` (an optional `Uuid`) and refuses the
 /// value. Without this half an actor-axis call would fall back to the caller's
 /// sole actor and **succeed** where the twin answers `-32602`.
 ///
 /// The grammar is the `fuz_schema` `ActingActor`'s, which takes the max UUID in
-/// any case; a Zod `ActingActor` input takes only the lowercase max. The
-/// uppercase max never reaches this step on an actor-axis spec on either
+/// any case. The uppercase max never reaches this step on an actor-axis spec on either
 /// spine: [`read_acting`] and `parse_acting` both read it as a selector, which
 /// names no actor on the account, so step 3 refuses it first.
 ///
@@ -469,7 +468,7 @@ fn check_acting_selector(params: &Value) -> Option<JsonrpcError> {
 /// works alone.
 ///
 /// "Malformed" is the [`fuz_http::is_valid_uuid`] grammar — the twin of the TS
-/// `ActingActor` (`Uuid.optional()`), not `Uuid::parse_str`, which also admits
+/// `ActingActor` (an optional `Uuid`), not `Uuid::parse_str`, which also admits
 /// hyphenless, braced and URN spellings and any version/variant nibbles.
 fn read_acting(spec: &AuthSpec, params: &Value) -> Option<Uuid> {
     if !spec.needs_actor() {
@@ -687,7 +686,7 @@ mod tests {
     use uuid::Uuid;
 
     /// A `gen_random_uuid()`-shaped v4 — the all-ones id every hand-written
-    /// fixture reaches for is itself refused by the `z.uuid()` grammar
+    /// fixture reaches for is itself refused by the wire UUID grammar
     /// (variant nibble `1`), so it can't stand in for a well-formed one.
     const UUID: &str = "3f8a1c2e-1234-4abc-9def-0123456789ab";
 
@@ -860,7 +859,7 @@ mod tests {
         assert!(check_acting_selector(&json!({"other": 1})).is_none());
         assert!(check_acting_selector(&json!({"acting": UUID})).is_none());
         // The nil and max specials, the max in any case (RFC 9562 §4, as the
-        // fuz_schema `ActingActor`; the Zod one takes only the lowercase max).
+        // fuz_schema `ActingActor`).
         for special in [
             "00000000-0000-0000-0000-000000000000",
             "ffffffff-ffff-ffff-ffff-ffffffffffff",

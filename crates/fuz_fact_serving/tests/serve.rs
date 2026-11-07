@@ -315,7 +315,7 @@ async fn cell_fact_uppercase_hex_of_a_served_hash_is_400() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_fact_serving_test database"]
 async fn cell_fact_malformed_cell_id_is_400() {
-    // The `{cell_id}` half of the params gate: judged under the `z.uuid()`
+    // The `{cell_id}` half of the params gate: judged under the wire UUID
     // grammar the TS twin declares, so the hyphenless spelling of a real id —
     // which `Uuid::parse_str` and Postgres both accept — is refused too, with
     // the same body a garbage segment gets.
@@ -960,7 +960,7 @@ async fn bare_fact_foreign_acting_actor_is_400_opaquely() {
     assert!(body.get("available").is_none());
 }
 
-// -- Bare-hash route: query shape (TS z.strictObject twin) ------------------
+// -- Bare-hash route: query shape (TS `object` twin) ------------------
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_fact_serving_test database"]

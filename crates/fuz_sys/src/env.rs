@@ -20,7 +20,7 @@ pub struct StringboolParseError {
     pub value: String,
 }
 
-/// Parse a Zod-`stringbool()`-shaped value: case-insensitive truthy
+/// Parse a stringbool value: case-insensitive truthy
 /// (`true`/`1`/`yes`/`on`/`y`/`enabled`) / falsy
 /// (`false`/`0`/`no`/`off`/`n`/`disabled`).
 ///
@@ -28,7 +28,7 @@ pub struct StringboolParseError {
 /// silently flip an env-driven feature. The error carries the offending
 /// value; callers prepend the env var name when surfacing it.
 ///
-/// Mirrors the TS spine's `z.stringbool()` semantics — the env contract
+/// Mirrors the TS spine's `EnvStringbool` — the env contract
 /// shared with `fuz_app`'s `BaseServerEnv`.
 ///
 /// # Errors

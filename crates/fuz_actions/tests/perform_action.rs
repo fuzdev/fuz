@@ -198,7 +198,7 @@ fn protocol_specs_carry_the_transport_marker_the_ts_mount_shape_implies() {
 #[tokio::test]
 async fn heartbeat_spec_composes() {
     // Heartbeat returns the canonical empty object `{}` (mirrors
-    // fuz_app's `z.strictObject({})` output). This test only checks the
+    // fuz_app's `object({})` output). This test only checks the
     // spec composes — the dispatch wrap needs a real pool which we can't
     // justify in a non-#[ignore] test, and heartbeat doesn't touch ctx.db.
     let spec = fuz_actions::heartbeat_action_spec();

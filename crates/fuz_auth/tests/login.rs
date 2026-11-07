@@ -213,7 +213,7 @@ fn pool_no_db() -> Pool {
 
 #[tokio::test]
 async fn login_rejects_invalid_input() {
-    // The input guards at the top of the handler mirror the TS `LoginInput` Zod
+    // The input guards at the top of the handler mirror the TS `LoginInput`
     // schema (`UsernameProvided` non-empty / max 255 / non-empty-after-trim,
     // `PasswordProvided` non-empty / max 300): every malformed-body shape 400s
     // *before* any DB lookup or password verify, never falling through to a
@@ -258,7 +258,7 @@ async fn login_rejects_invalid_input() {
 
 #[tokio::test]
 async fn login_rejects_unknown_body_field() {
-    // `deny_unknown_fields` on `LoginInput` mirrors the TS `z.strictObject`: an
+    // `deny_unknown_fields` on `LoginInput` mirrors the TS `object`: an
     // extra body key fails deserialization and the handler maps it to 400
     // `invalid_request_body` (not axum's default 422, not a silent ignore),
     // before any DB / verify work.

@@ -375,7 +375,7 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   - the wire UUID grammar (`is_valid_uuid`, and the `deserialize_*wire_uuid*`
     serde adapters that put it in front of `Uuid`'s permissive parser);
   - the `deserialize_*wire_int` adapters, which read a typed integer as
-    `z.number().int()` does (any integral spelling, within the safe-integer
+    `pipe(number, integer)` does (any integral spelling, within the safe-integer
     range);
   - `json_has_own_proto_key`, the walk behind the dispatcher's
     `params_proto_key` refusal.
@@ -405,8 +405,8 @@ both).
 
 ### `fuz_auth`
 
-The auth surface (twin of fuz_app's `auth/`): ingress validation (the zod
-grammar twins for usernames, emails, token ids, role names, and fact hashes),
+The auth surface (twin of fuz_app's `auth/`): ingress validation (the TS
+schema grammar twins for usernames, emails, token ids, role names, and fact hashes),
 `AuthGate` (origin check, then credential resolution: daemon token → cookie
 → bearer), token scopes, global roles, capped sessions and tokens, Argon2id
 passwords, rate limiting, the REST routes (`/status`, `/login`, `/logout`,
@@ -502,7 +502,7 @@ keep:
 - A server refuses to boot unless Postgres's `default_transaction_isolation` is
   `read committed` (`REQUIRED_TRANSACTION_ISOLATION` has why).
 - Every `ActionSpec` declares its `fuz_http::InputShape` (no default): `Void`
-  for a method whose twin's input is `z.void()`, `Object` otherwise.
+  for a method whose twin's input is `void`, `Object` otherwise.
   `perform_action` holds a `Void` method to the no-arg call (absent, `null`,
   or `{}`) after the authority gates and before the handler, so a
   parameterless handler never checks `params` itself;

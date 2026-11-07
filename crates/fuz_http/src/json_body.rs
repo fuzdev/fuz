@@ -33,7 +33,7 @@ use crate::rest_error::{invalid_json_body_response, invalid_request_body_respons
 
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
-/// The ceiling `z.number().int()` enforces: `Number.MAX_SAFE_INTEGER`.
+/// The ceiling the twin's safe-integer schemas enforce: `Number.MAX_SAFE_INTEGER`.
 ///
 /// The largest integer a JSON number survives a JS round-trip at. An integer input
 /// the twin declares `int()` is refused past it on both spines, rather than

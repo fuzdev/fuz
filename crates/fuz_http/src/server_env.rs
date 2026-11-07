@@ -36,8 +36,9 @@
 //!   failed-login row a request waits on included, so that request can wait up
 //!   to the audit bound. Each is a whole number of milliseconds in
 //!   `1..=600000` when set; anything else, blank included, fails the read
-//!   naming the var — there is no "0 = off" (the TS twin's `z.coerce` reads
-//!   `5e3` as 5000; this reader refuses it, as it does for `PORT`).
+//!   naming the var — there is no "0 = off" (the TS twin's `env_integer` takes
+//!   decimal digits only, so `5e3` is refused there as it is here and for
+//!   `PORT`).
 //!
 //! The cookie keys and database URL are carried as read; the keyring and the
 //! pool are built from them by the server, which knows whether it needs them.

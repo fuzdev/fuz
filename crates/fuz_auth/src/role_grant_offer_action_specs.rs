@@ -504,7 +504,7 @@ pub(crate) async fn emit_supersede_audits(
 }
 
 /// Declared input keys per method, each the exact key set of the TS twin's
-/// `z.strictObject` in `auth/role_grant_offer_action_specs.ts`.
+/// `object` in `auth/role_grant_offer_action_specs.ts`.
 ///
 /// [`reject_unknown_keys`] runs each list at the top of its handler. Every
 /// spec in this family carries an actor axis, so every list declares `acting`
@@ -589,7 +589,7 @@ fn builtin_scoped_error() -> JsonrpcError {
 
 /// Parse the optional `scope_kind` both grant inputs carry: a scope-kind name
 /// ([`is_valid_name`], the shared name grammar and its length cap), twin of the
-/// shared `ScopeKindName.nullish()`. Off the grammar is `-32602` with no
+/// shared `optional(nullable(ScopeKindName))`. Off the grammar is `-32602` with no
 /// reason, as an off-grammar `role` is — the index-side `'GLOBAL'` token
 /// among it, which with the all-zeros `scope_id` would otherwise equal a
 /// global grant's key in the partial unique indexes.
@@ -1682,7 +1682,7 @@ mod tests {
         }
     }
 
-    /// `scope_kind` and `message` are `.nullish()` strings on the twin, so a
+    /// `scope_kind` and `message` are `optional(nullable(...))` strings on the twin, so a
     /// present wrong type is `-32602` there rather than a dropped field.
     #[test]
     fn offer_create_refuses_wrong_typed_optionals_and_unknown_keys() {
@@ -1837,7 +1837,7 @@ mod tests {
         assert_eq!(error.code, JsonrpcErrorCode::InvalidParams);
     }
 
-    /// The free-text bound is the twin's `z.string().max(n)`: inclusive at
+    /// The free-text bound is the twin's `bounded_string({max: n})`: inclusive at
     /// the bound, refused one past it, and counted in **characters** — a
     /// 500-character multibyte note is under the cap even though its byte
     /// length is far over.

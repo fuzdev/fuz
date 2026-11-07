@@ -3,7 +3,7 @@
 //!
 //! Action handlers that read `params: &serde_json::Value` field by field share
 //! these helpers: pull a string field, parse it as a UUID, refuse an
-//! undeclared key, refuse a present `null` the twin's `.optional()` refuses.
+//! undeclared key, refuse a present `null` the twin's `optional` refuses.
 //! Every check here is one the TS twin makes in an action's input schema, so
 //! every refusal is [`invalid_input_params`]: the generic `invalid params`
 //! message the twin answers, the per-field detail logged at debug, and a
@@ -18,7 +18,7 @@
 //!
 //! [`deserialize_wire_int`], [`deserialize_optional_wire_int`] and
 //! [`deserialize_nullish_wire_int`] read a typed
-//! integer field as the twin's `z.number().int()` does — any integral
+//! integer field as the twin's `pipe(number, integer)` does — any integral
 //! spelling (`5.0`, `1e1`, `-0`) within the safe-integer range — where
 //! serde's own integer impls refuse every float token.
 //! Floats parse correctly rounded (the workspace enables `serde_json`'s
@@ -59,7 +59,7 @@ pub fn serialize_result<T: serde::Serialize>(value: T) -> Result<Value, JsonrpcE
 ///
 /// The hand-decoded action specs read their fields with `params.get(..)`
 /// chains, which ignore a key nothing looks for — where the twin's
-/// `z.strictObject` answers `-32602 Unrecognized key`. Calling this at the top
+/// `object` answers `-32602 Unrecognized key`. Calling this at the top
 /// of a handler, against a `const` listing exactly the twin's input keys, is
 /// what closes that without giving up the per-field `data.reason` codes a
 /// serde struct could not carry.
@@ -99,17 +99,17 @@ pub fn reject_unknown_keys(params: &Value, allowed: &[&str]) -> Result<(), Jsonr
 
 /// Refuse an explicit JSON `null` on any of the named keys.
 ///
-/// Zod's `.optional()` admits an absent key and nothing else, while
-/// `.nullish()` reads `null` as absent. The hand-decoders collapse both onto
-/// `None`, so a `null` on an `.optional()` field answers 200 on this spine and
-/// `-32602` on the twin. Name those keys here — the `.nullish()` ones are the
-/// majority and stay off the list.
+/// A TS `optional` field admits an absent key and nothing else, while a
+/// nullable optional one reads `null` as absent. The hand-decoders collapse
+/// both onto `None`, so a `null` on an `optional` field answers 200 on this
+/// spine and `-32602` on the twin. Name those keys here — the nullable ones
+/// are the majority and stay off the list.
 ///
 /// The polarity is the inverse of [`crate::parse_strict_params`]'s walk,
 /// and deliberately so: that one guards serde-typed inputs, where every
 /// optional field is null-coercible and the exemptions are few, so it denies
-/// by default. Here the twin's modifier is `.nullish()` on nearly every
-/// hand-decoded field, so naming the few `.optional()` ones keeps each call
+/// by default. Here the twin's modifier is `optional(nullable(...))` on nearly every
+/// hand-decoded field, so naming the few `optional`-only ones keeps each call
 /// site as short as the divergence is.
 ///
 /// `acting` never needs listing: the dispatcher's own selector gate refuses a
@@ -135,7 +135,7 @@ pub fn reject_null_keys(params: &Value, non_nullable: &[&str]) -> Result<(), Jso
 /// Parse an optional string field. [`Value::Null`] and a missing key both
 /// decode to `None`; a present non-string surfaces `invalid_params`.
 ///
-/// The string sibling of [`parse_optional_i64_param`], for the `.nullish()`
+/// The string sibling of [`parse_optional_i64_param`], for the `optional(nullable(...))`
 /// free-text and filter fields. Reading these with
 /// `params.get(name).and_then(Value::as_str)` instead would read a
 /// present-but-wrong-typed value as absent, so `{"message": 42}` would be
@@ -164,7 +164,7 @@ pub fn parse_optional_str_param<'a>(
 ///
 /// The boolean sibling of [`parse_optional_str_param`], with the same reason
 /// for existing: `and_then(Value::as_bool)` reads `{"include_deleted": "yes"}`
-/// as absent where the twin's `z.boolean()` refuses it.
+/// as absent where the twin's `boolean` refuses it.
 ///
 /// # Errors
 ///
@@ -199,10 +199,9 @@ pub fn parse_str_param<'a>(params: &'a Value, name: &'static str) -> Result<&'a 
 /// Whether `s` is a valid wire UUID — the canonical grammar for every UUID
 /// the spine decodes from a request (query values, JSON-RPC params).
 ///
-/// Twin of both TS `Uuid` schemas in `fuz_app` — the `@fuzdev/fuz_schema`
-/// `Uuid` in `primitive_schemas.ts` (`pipe(string, uuid, to_lower_case)`)
-/// and its Zod form `ZodUuid` in `zod_schemas.ts` (`z.uuid()` with that
-/// grammar as its `pattern`): hyphenated 8-4-4-4-12 hex (case-insensitive) with the
+/// Twin of the TS `Uuid` schema in `fuz_app` — the `@fuzdev/fuz_schema`
+/// `Uuid` in `primitive_schemas.ts` (`pipe(string, uuid, to_lower_case)`):
+/// hyphenated 8-4-4-4-12 hex (case-insensitive) with the
 /// RFC 9562 version nibble in `1..=8` and the variant nibble in `[89abAB]`,
 /// plus the two special values — nil (all zeros) and max (all `f`s, in any
 /// case, as RFC 9562 §4 reads a UUID case-insensitively).
@@ -347,7 +346,7 @@ pub fn deserialize_wire_uuid<'de, D: serde::Deserializer<'de>>(
 /// satisfies the same requirement and is the right spelling when every field
 /// is optional (the `acting`-only admin inputs are the case). A present `null`
 /// therefore fails as "expected a string", which is what the TS twin's
-/// `.optional()` answers: it admits an absent key and nothing else, where
+/// `optional(...)` answers: it admits an absent key and nothing else, where
 /// serde's bare `Option<Uuid>` would quietly read `null` as "no value".
 ///
 /// # Errors
@@ -363,12 +362,12 @@ pub fn deserialize_optional_wire_uuid<'de, D: serde::Deserializer<'de>>(
 /// Deserialize a **nullish** wire UUID field under the strict
 /// [`is_valid_uuid`] grammar, mapping an explicit `null` to `None`.
 ///
-/// The twin of the TS `Uuid.nullish()` — the handful of input fields whose
+/// The twin of the TS `optional(nullable(Uuid))` — the handful of input fields whose
 /// schema admits `null` as a spelling of "absent" (`cell_create.parent_id`,
 /// the grant principal's `scope_id`). Pair it with `#[serde(default)]` the
 /// same way [`deserialize_optional_wire_uuid`] is paired; the difference is
 /// only which of the two TS modifiers the field carries, so read the schema
-/// before choosing. Prefer the `.optional()` form — a field that admits
+/// before choosing. Prefer the `optional` form — a field that admits
 /// `null` has two spellings for one meaning.
 ///
 /// # Errors
@@ -391,7 +390,7 @@ pub fn deserialize_nullish_wire_uuid<'de, D: serde::Deserializer<'de>>(
 /// [`is_valid_uuid`] grammar, refusing any non-string element.
 ///
 /// The list twin of [`deserialize_wire_uuid`], for the id lists the TS twin
-/// declares as `z.array(Uuid)`. A bare `Vec<Uuid>` field decodes each element
+/// declares as `array(Uuid)`. A bare `Vec<Uuid>` field decodes each element
 /// through `uuid::Uuid`'s permissive `Deserialize`; annotating it
 /// `#[serde(deserialize_with = "fuz_http::deserialize_wire_uuid_vec")]` puts
 /// the grammar in front of every element. Without `#[serde(default)]` an
@@ -419,7 +418,7 @@ pub fn deserialize_wire_uuid_vec<'de, D: serde::Deserializer<'de>>(
 ///
 /// The list twin of [`deserialize_optional_wire_uuid`], for the
 /// id-list filters (`cell_list.ids`) the TS twin declares as
-/// `z.array(Uuid).optional()`. Same pairing with `#[serde(default)]`, and the
+/// `optional(array(Uuid))`. Same pairing with `#[serde(default)]`, and the
 /// same `null` refusal — here reported as "expected a sequence".
 ///
 /// # Errors
@@ -434,7 +433,7 @@ pub fn deserialize_optional_wire_uuid_vec<'de, D: serde::Deserializer<'de>>(
 }
 
 /// Deserialize a **required** wire integer field the way the TS twin's
-/// `z.number().int()` reads it.
+/// `pipe(number, integer)` reads it.
 ///
 /// The twin admits any finite JSON number with no fractional part whose
 /// magnitude is at most `Number.MAX_SAFE_INTEGER` ([`crate::SAFE_INTEGER_MAX`]),
@@ -472,12 +471,12 @@ where
 }
 
 /// Deserialize an **optional** wire integer field the way the TS twin's
-/// `z.number().int().optional()` reads it, refusing an explicit `null`.
+/// `optional(pipe(number, integer))` reads it, refusing an explicit `null`.
 ///
 /// Pair it with `#[serde(default)]` (on the field, or on a container deriving
 /// `Default`) so an absent key is `None` without calling this function, the
 /// same contract as [`deserialize_optional_wire_uuid`]: a present `null` then
-/// fails as "expected an integer", which is what `.optional()` answers.
+/// fails as "expected an integer", which is what `optional(...)` answers.
 ///
 /// # Errors
 ///
@@ -491,12 +490,12 @@ where
 }
 
 /// Deserialize a **nullish** wire integer field the way the TS twin's
-/// `z.number().int().nullable()` reads it, mapping an explicit `null` to
+/// `nullable(pipe(number, integer))` reads it, mapping an explicit `null` to
 /// `None`.
 ///
 /// Without `#[serde(default)]` the key stays required — `null` or an integer
-/// — which is `.nullable()`; with it an absent key reads as `None` too, which
-/// is `.nullish()`. Read the schema before choosing, as for
+/// — which is `nullable(...)`; with it an absent key reads as `None` too, which
+/// is `optional(nullable(...))`. Read the schema before choosing, as for
 /// [`deserialize_nullish_wire_uuid`].
 ///
 /// # Errors
@@ -604,7 +603,7 @@ fn wire_uuid_message(raw: &str) -> String {
 }
 
 /// The shape an action's input takes, as the dispatcher enforces it — the
-/// Rust spine's twin of whether a TS action spec's `input` is `z.void()`.
+/// Rust spine's twin of whether a TS action spec's `input` is `void`.
 ///
 /// Every `ActionSpec` declares one (there is no default: a parameterless
 /// method that forgot to say so would answer any params at all), and
@@ -618,15 +617,15 @@ fn wire_uuid_message(raw: &str) -> String {
 /// [`reject_unknown_keys`] and the field helpers for a hand-decoded one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputShape {
-    /// A parameterless method — the twin of a TS `z.void()` input. The
+    /// A parameterless method — the twin of a TS `void` input. The
     /// dispatcher refuses every params shape but the no-arg call
     /// ([`require_void_params`]) before the handler runs.
     Void,
     /// A by-name object input — any other TS input schema. The dispatcher
     /// holds `params` to absent-or-object; the fields are the handler's.
     ///
-    /// A `z.strictObject({})` input is `Object` too, though it admits the same
-    /// calls a `z.void()` one does: the descriptor mirrors the twin's schema,
+    /// An `object({})` input is `Object` too, though it admits the same
+    /// calls a `void` one does: the descriptor mirrors the twin's schema,
     /// not the set it accepts. Its handler refuses keys with
     /// `reject_unknown_keys(&params, &[])`.
     Object,
@@ -658,7 +657,7 @@ impl InputShape {
 }
 
 /// Refuse any declared parameter on a method that takes none — the void rule
-/// [`InputShape::Void`] holds a method to, and the twin of a TS `z.void()`
+/// [`InputShape::Void`] holds a method to, and the twin of a TS `void`
 /// input.
 ///
 /// Two shapes are the no-arg call:
@@ -669,7 +668,7 @@ impl InputShape {
 /// - `{}` — JSON-RPC 2.0 lets `params` be omitted, and an empty by-name
 ///   structure carries no parameters. Published `fuz_app` WebSocket clients
 ///   send `{}` for a parameterless call, so refusing it breaks every void
-///   method over WS; the TS dispatcher reads it as absent for a `z.void()`
+///   method over WS; the TS dispatcher reads it as absent for a `void`
 ///   input too.
 ///
 /// Everything else is `invalid_params`: a non-empty object (a declared key the
@@ -728,7 +727,7 @@ pub fn json_has_own_proto_key(value: &Value) -> bool {
 }
 
 /// Read a JSON number with an integral value as an `i64`, as the TS twin's
-/// `z.number().int()` does.
+/// `pipe(number, integer)` does.
 ///
 /// `5`, `5.0`, `1e1` and `-0` are all integers there, so `Value::as_i64`
 /// alone (integer literals only) would be stricter than the twin.
@@ -756,8 +755,8 @@ pub fn as_integral_i64(value: &Value) -> Option<i64> {
 /// missing key both decode to `None`; any number with an integral value is
 /// admitted ([`as_integral_i64`]); anything else surfaces `invalid_params`.
 ///
-/// TS `nullish()` (the Zod modifier on `limit` / `offset` / `since_seq`)
-/// collapses `undefined | null` to absent on the wire, matching this
+/// The TS nullable optional fields (`limit` / `offset` / `since_seq`)
+/// collapse `undefined | null` to absent on the wire, matching this
 /// shape.
 ///
 /// # Errors
@@ -946,7 +945,7 @@ mod tests {
         assert_eq!(read(r#"{"n":null}"#).unwrap(), None);
         assert_eq!(read(r#"{"n":12.0}"#).unwrap(), Some(12));
         assert_eq!(read(r#"{"n":-0}"#).unwrap(), Some(0));
-        // `.nullable()` without a default: the key is required
+        // `nullable(...)` without a default: the key is required
         assert!(read("{}").is_err());
         for text in [r#"{"n":1.5}"#, r#"{"n":"1"}"#, r#"{"n":2147483648}"#] {
             assert!(read(text).is_err(), "{text}");
@@ -1066,7 +1065,7 @@ mod tests {
         const NON_NULLABLE: &[&str] = &["confirm"];
         assert!(reject_null_keys(&json!({"confirm": true}), NON_NULLABLE).is_ok());
         assert!(reject_null_keys(&json!({}), NON_NULLABLE).is_ok());
-        // An unnamed key is `.nullish()` on the twin, so its `null` stands.
+        // An unnamed key is `optional(nullable(...))` on the twin, so its `null` stands.
         assert!(reject_null_keys(&json!({"reason": Value::Null}), NON_NULLABLE).is_ok());
 
         let e = reject_null_keys(&json!({"confirm": Value::Null}), NON_NULLABLE)
@@ -1083,7 +1082,7 @@ mod tests {
                 .flatten(),
             Some("why")
         );
-        // `.nullish()` semantics: absent and `null` are both "no value".
+        // `optional(nullable(...))` semantics: absent and `null` are both "no value".
         assert_eq!(
             parse_optional_str_param(&json!({}), "reason")
                 .ok()
@@ -1298,7 +1297,7 @@ mod tests {
         serde_json::from_str(text).expect("valid JSON")
     }
 
-    /// The twin's `z.number().int()` reads every integral number as an
+    /// The twin's `pipe(number, integer)` reads every integral number as an
     /// integer — a float spelling, an exponent, a negative zero.
     #[test]
     fn integral_numbers_read_as_integers() {
@@ -1371,10 +1370,10 @@ mod tests {
     }
 
     /// Twin of a consumer's repo-id test table outside this workspace, which
-    /// is in turn the twin of the TS `Uuid` schemas' vectors. The grammar rows
+    /// is in turn the twin of the TS `Uuid` schema's vectors. The grammar rows
     /// must stay identical across the three, but for the max UUID in upper or
     /// mixed case, which this grammar and the `fuz_schema` `Uuid` take and that
-    /// table and the Zod `Uuid` refuse (declared in each); each side keeps its
+    /// table refuses (declared in each); each side keeps its
     /// own domain negatives besides (a repo slug there, none here).
     #[test]
     fn uuid_accepts_rfc_uuids() {
@@ -1395,8 +1394,7 @@ mod tests {
         assert!(is_valid_uuid("00000000-0000-0000-0000-000000000000"));
         assert!(is_valid_uuid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
         // RFC 9562 §4 reads a UUID case-insensitively, the max too, as the
-        // fuz_schema `Uuid` does; Zod's `z.uuid()` takes only the lowercase max
-        // (a declared difference on the TS side).
+        // fuz_schema `Uuid` does.
         assert!(is_valid_uuid("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"));
         assert!(is_valid_uuid("ffffffff-FFFF-ffff-FFFF-ffffffffffff"));
         // A near-max still needs a valid version or variant nibble.
@@ -1448,7 +1446,7 @@ mod tests {
     #[test]
     fn uuid_rejects_bad_nibbles() {
         // Version nibble 0 — the synthetic near-nil id that exposed the
-        // grammar split (`Uuid::parse_str` accepted it, `z.uuid()` did not).
+        // grammar split (`Uuid::parse_str` accepted it, the wire grammar does not).
         assert!(!is_valid_uuid("00000000-0000-0000-0000-000000000001"));
         // The all-ones id every hand-written fixture reaches for is itself
         // rejected: version nibble `1` is fine, variant nibble `1` is not.

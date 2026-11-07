@@ -286,8 +286,8 @@ mod tests {
         assert!(is_valid_email("user+tag@example.co.uk"));
         assert!(is_valid_email("Mixed.Case+Tag@Foo.Bar"));
         // Single-char TLD + consecutive dots are deliberately accepted by the
-        // loose rule — all rejected by Zod's `z.email()`, the divergence the
-        // TS side adopted. Pinned here so a future tighten is a visible change.
+        // loose rule — rejected by stricter email grammars, the rule the TS
+        // side shares. Pinned here so a future tighten is a visible change.
         assert!(is_valid_email("a@b.c")); // single-char TLD
         assert!(is_valid_email("a..b@c.d")); // consecutive dots in local
         assert!(is_valid_email("a@b..c")); // consecutive dots in domain

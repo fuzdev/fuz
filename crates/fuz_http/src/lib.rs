@@ -78,7 +78,7 @@ pub mod jsonrpc_error;
 // === hand-decoded params: field helpers, wire-UUID grammar, the input shape ===
 pub mod params;
 
-// === strict typed-params decoding (the `.optional()`-refuses-null half) ===
+// === strict typed-params decoding (the `optional`-refuses-null half) ===
 pub mod strict_params;
 
 // === flat-REST error responses ===

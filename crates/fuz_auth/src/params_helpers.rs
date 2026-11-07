@@ -174,7 +174,7 @@ pub fn parse_pagination_params(
 
 /// Parse the optional `since_seq` gap-fill cursor, bounded at zero.
 ///
-/// The twin declares it `z.number().int().min(0).nullish()`, so a negative
+/// The twin declares it `optional(nullable(pipe(number, integer, min_value(0), ...)))`, so a negative
 /// cursor is `invalid_params` there rather than a query predicate that admits
 /// every row. Every refusal — negative, past [`SAFE_INTEGER_MAX`], or not an
 /// integer — carries [`ERROR_SINCE_SEQ_INVALID`], the field's declared
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_negative_since_seq_is_refused_and_zero_is_not() {
-        // The twin bounds the cursor `z.number().int().min(0)`, so `-1` is
+        // The twin bounds the cursor `pipe(number, integer, min_value(0), ...)`, so `-1` is
         // `invalid_params` there rather than a predicate matching every row.
         let e = parse_optional_since_seq_param(&json!({"since_seq": -1}))
             .expect_err("-1 must be refused");

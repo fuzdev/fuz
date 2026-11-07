@@ -331,7 +331,7 @@ async fn rpc_get_dispatch(
 /// hand-decoded handler reads `?params=null` exactly as `?params={}`. A void
 /// input reads either one — and an absent `params`, which reaches the handler
 /// as `Value::Null` — as the no-arg call: `fuz_http::require_void_params`
-/// accepts `null` and `{}`, as the TS twin's dispatcher does for `z.void()`.
+/// accepts `null` and `{}`, as the TS twin's dispatcher does for a `void` input.
 ///
 /// The GET query string is not a JSON-RPC envelope, so [`fuz_http::classify`]
 /// never runs over it and its `params` contract (present ⇒ object) is not

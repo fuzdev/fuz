@@ -18,7 +18,7 @@ use crate::action_rate_limit::RateLimitClass;
 /// One row in an authenticated action registry.
 ///
 /// Fields mirror TS `RequestResponseActionSpec`'s required attributes
-/// (the wire-shape input/output Zod schemas live alongside in the TS
+/// (the wire-shape input/output schemas live alongside in the TS
 /// spec; in Rust they're erased post-codegen, so the entry carries
 /// only the dispatch-time metadata).
 #[derive(Debug, Clone, Copy)]
@@ -29,7 +29,7 @@ pub struct AuthActionEntry {
     /// Auth axis required to reach this method's handler.
     pub auth: AuthSpec,
     /// Whether the method takes params — [`InputShape::Void`] for a twin
-    /// whose input is `z.void()`. The `fuz_actions` adapter copies it onto the
+    /// whose input is `void`. The `fuz_actions` adapter copies it onto the
     /// `ActionSpec` it builds, where the dispatcher enforces it.
     pub input: InputShape,
     /// `true` → dispatcher wraps the handler in a DB transaction;

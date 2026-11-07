@@ -3,7 +3,7 @@
 //!
 //! `fuz_app`'s route pipeline reads queries through Hono's `c.req.query()` —
 //! a duplicated key resolves to its **first** occurrence, and routes that
-//! declare a `z.strictObject` query schema 400 unknown keys in the
+//! declare an `object` query schema 400 unknown keys in the
 //! params → query → 401 → authz → 403 phase order. axum's derived-serde
 //! `Query<T>` extractor diverges on every axis: it answers a duplicated
 //! known key with a plain-text "duplicate field" 400 **before the handler
@@ -27,7 +27,7 @@ use axum::response::Response;
 
 use crate::rest_error::invalid_query_params_response;
 
-/// Refuse unknown query keys — the twin of a TS route's `z.strictObject`
+/// Refuse unknown query keys — the twin of a TS route's `object`
 /// query schema, where an undeclared key is a 400 `invalid_query_params`.
 ///
 /// Call before any auth resolution so the phase order matches the TS

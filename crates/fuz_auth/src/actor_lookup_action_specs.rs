@@ -93,8 +93,8 @@ async fn handle_actor_lookup(
 /// `ActorLookupInput`. No `acting`: the spec's actor axis is `none`.
 const ACTOR_LOOKUP_KEYS: &[&str] = &["ids"];
 
-/// Parse + validate the `{ids}` input. Mirrors the TS Zod bound
-/// `array(Uuid).min(1).max(ACTOR_LOOKUP_IDS_MAX)`.
+/// Parse + validate the `{ids}` input. Mirrors the TS schema's bound, 1 to
+/// `ACTOR_LOOKUP_IDS_MAX` `Uuid`s.
 fn parse_ids(params: &Value) -> Result<Vec<uuid::Uuid>, JsonrpcError> {
     reject_unknown_keys(params, ACTOR_LOOKUP_KEYS)?;
     let arr = params

@@ -950,7 +950,7 @@ async fn non_object_params_from_an_anonymous_caller_are_the_401() {
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_void_spec_takes_only_the_no_arg_call() {
-    // The twin's `z.void()` input: absent, `null`, and `{}` are the call; a
+    // The twin's `void` input: absent, `null`, and `{}` are the call; a
     // declared key, a scalar, and any array are -32602 "invalid params" with no
     // reason — refused by the dispatcher from the spec's `InputShape::Void`,
     // so the handler, which never reads `params`, does not run.

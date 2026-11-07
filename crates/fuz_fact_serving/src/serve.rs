@@ -135,8 +135,8 @@
 //! middleware emits, which is what lets a consumer put these routes on its
 //! round-trip-validated surface.
 //!
-//! The twin declares that 400 as `z.looseObject({error, issues:
-//! z.array(z.unknown()).optional()})` — `issues` is a development-only
+//! The twin declares that 400 with `error` and an optional `issues`
+//! array of wire issues — `issues` is a development-only
 //! diagnostic its own production build omits — so the flat body the spine
 //! returns, carrying no `issues` like every other flat-REST refusal here,
 //! satisfies the round-trip surface a consumer mounts both twins on.
@@ -258,15 +258,13 @@ pub fn fact_routers(state: FactServingRouteState) -> Router {
 /// Handler for `GET /api/cells/{cell_id}/facts/{hash}` — per-reference read.
 ///
 /// Both path params are decoded as raw strings and judged here rather than by
-/// a typed extractor: the TS twin declares `params: z.strictObject({cell_id:
-/// Uuid, hash: FactHashSchema})`, so a refusal has to be the spine's flat 400
+/// a typed extractor: the TS twin declares `params: object({cell_id: Uuid,
+/// hash: FactHashSchema})`, so a refusal has to be the spine's flat 400
 /// `invalid_route_params` (an extractor rejection is axum's own plain-text
 /// body), `cell_id` has to take the wire UUID grammar rather than
 /// `Uuid::parse_str`'s wider one, and `hash` the `FactHashSchema` grammar
-/// ([`ContentHash::parse_fact_hash`]). The one string the grammar takes and
-/// the twin's Zod `Uuid` refuses is the max UUID in upper or mixed case,
-/// which names no cell, so it is this route's 404 where the twin answers the
-/// 400.
+/// ([`ContentHash::parse_fact_hash`]). The grammar takes the max UUID in any
+/// case, as the twin's `Uuid` does; it names no cell, so it is a 404.
 async fn cell_fact_handler(
     State(state): State<FactServingRouteState>,
     AxumPath((cell_id_str, hash_str)): AxumPath<(String, String)>,
@@ -382,7 +380,7 @@ async fn cell_fact_handler(
 ///
 /// Phase order matches the TS pipeline: params (hash) → query shape → 401 →
 /// token scope → acting resolution → 403 role. The TS twin declares
-/// `query: z.strictObject({acting: ActingActor})`, so an unknown query key or
+/// `query: object({acting: ActingActor})`, so an unknown query key or
 /// a malformed `acting` is a 400 `invalid_query_params` **before** auth
 /// resolves — the query is read as raw pairs (first occurrence wins on a
 /// duplicated key, like Hono's `c.req.query()`) so a duplicated `acting`
@@ -816,7 +814,7 @@ mod tests {
     /// The params refusal is the spine's flat `invalid_route_params` envelope,
     /// pinned **byte-for-byte** on both routes and on both path params.
     ///
-    /// The TS twin declares `params: z.strictObject({cell_id: Uuid, hash:
+    /// The TS twin declares `params: object({cell_id: Uuid, hash:
     /// FactHashSchema})` and answers that body from its params middleware, so a
     /// consumer mounting these routes on the round-trip-validated surface gets
     /// the same bytes from either backend. A `Value` comparison would pass on a

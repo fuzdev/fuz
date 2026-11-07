@@ -114,7 +114,7 @@ fn cancel_notification_malformed_params_is_a_noop() {
 
 /// An **extra key** alongside a valid `request_id` fails the parse and
 /// cancels nothing — the twin's params schema is a
-/// `z.strictObject`, so a frame it rejects must be rejected here too.
+/// strict `object`, so a frame it rejects must be rejected here too.
 /// Reading `request_id` out of the object and ignoring the rest would
 /// honor a frame the reference impl drops.
 #[test]
