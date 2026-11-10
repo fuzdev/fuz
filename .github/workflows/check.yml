@@ -25,7 +25,7 @@
 # (`scripts/fuzi-gate.sh --musl-only`).
 #
 # `install-test` — drives scripts/install.sh end-to-end against a local HTTPS
-# server (deno + a throwaway self-signed cert) and then the mutation gate that
+# server (Node + a throwaway self-signed cert) and then the mutation gate that
 # proves the e2e suite would notice if install.sh's download/checksum/TLS checks
 # regressed. Needs no Rust build. The mutation gate also carries the `redirect`
 # case's non-vacuity — a silently-regressed HTTP listener would leave `redirect`
@@ -153,9 +153,10 @@ jobs:
         env:
           FUZI_GATE_STRICT: "1"
 
-  # Exercises scripts/install.sh without a Rust build. deno is installed via its
-  # official install script rather than a third-party setup action (fewer
-  # pinned actions to audit); openssl + curl are preinstalled on ubuntu-latest.
+  # Exercises scripts/install.sh without a Rust build. The test server is
+  # TypeScript run by Node's type stripping, so Node is pinned rather than left
+  # to the runner's preinstalled one; openssl + curl are preinstalled on
+  # ubuntu-latest.
   install-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -166,15 +167,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Deno
-        run: |
-          curl -fsSL https://deno.land/install.sh | sh
-          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
-
-      # Fail loud if deno didn't land on PATH — otherwise both scripts below
-      # SKIP (exit 0) on missing deno and the whole gate goes vacuously green.
-      - name: Verify Deno on PATH
-        run: deno --version
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.14"
 
       - name: install.sh end-to-end
         run: scripts/install-test.sh

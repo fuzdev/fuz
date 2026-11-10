@@ -11,10 +11,14 @@ path (`FUZ_RELEASE_LOG_URL` set).
 scripts/install-test.sh
 ```
 
-Needs `deno`, `openssl`, and `curl` (skips cleanly with `SKIP:` if one is
-absent); `install.sh` itself uses `curl`. Because `install.sh` forces `--proto '=https'
+Needs `node`, `openssl`, and `curl` (skips cleanly with `SKIP:` if one is
+absent); `install.sh` itself uses `curl`. The server, `serve.ts`, is TypeScript
+that Node runs by type stripping, with no dependencies: a `node` without type
+stripping on by default (an older Node, or one run with `--no-strip-types`) fails the
+suite rather than skipping it. Because `install.sh` forces `--proto '=https'
 --tlsv1.2`, the server speaks TLS with a throwaway self-signed `localhost` cert,
-trusted for the run via `CURL_CA_BUNDLE`. The downloaded "binary" is a stub
+trusted for the run via `CURL_CA_BUNDLE`, and offers HTTP/2 and HTTP/1.1 by
+ALPN, as a real release host does. The downloaded "binary" is a stub
 shell script — `install.sh` only `chmod +x`'s it and runs `<it> self bootstrap`,
 so no build is needed. (Real `self bootstrap` behavior — artifact creation,
 symlinks, rc editing, corrupt-state recovery — is covered by the Rust
@@ -75,7 +79,7 @@ most 8), each a whole suite run with its own server and port.
 ## CI
 
 Both scripts run in CI as the `install-test` job (`.github/workflows/check.yml`),
-which installs `deno` and runs `scripts/install-test.sh` then
+which sets up Node with `actions/setup-node` and runs `scripts/install-test.sh` then
 `scripts/install-test-mutants.sh` (`openssl` + `curl` are preinstalled on the
 runner). The mutation gate matters here beyond testing the tests: it is what
 keeps the `redirect` case non-vacuous — a silently-regressed HTTP listener would

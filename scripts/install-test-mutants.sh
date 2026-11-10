@@ -14,7 +14,8 @@
 # nothing. Fix the expression or retire the row.
 #
 # Usage:  scripts/install-test-mutants.sh
-# Needs:  the same deno + openssl + curl as install-test.sh (skips if absent).
+# Needs:  the same node + openssl + curl as install-test.sh (skips if absent,
+#         fails on a node that does not strip TypeScript types).
 #         Mutants run under the default `sh` only — shell portability is the
 #         e2e suite's job (INSTALL_SH_SHELL), not this one's.
 # Env:    INSTALL_MUTANT_JOBS — how many mutants run at once (default: the CPU
@@ -32,7 +33,9 @@ REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 INSTALL="$REPO/scripts/install.sh"
 SUITE="$REPO/scripts/install-test.sh"
 
-command -v deno >/dev/null 2>&1 || { echo "SKIP: deno not found"; exit 0; }
+command -v node >/dev/null 2>&1 || { echo "SKIP: node not found"; exit 0; }
+node -e 'process.exit(process.features.typescript ? 0 : 1)' 2>/dev/null ||
+	{ echo "FAIL: node $(node --version) does not strip TypeScript types (an older Node, or one run with --no-strip-types)"; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo "SKIP: openssl not found"; exit 0; }
 command -v curl >/dev/null 2>&1 || { echo "SKIP: curl not found"; exit 0; }
 

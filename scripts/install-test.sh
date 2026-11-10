@@ -5,13 +5,14 @@
 # a throwaway self-signed localhost cert is generated and trusted for the run
 # via CURL_CA_BUNDLE. The "fuz binary" is a stub shell script — install.sh only
 # chmod+x's it and runs `<it> self bootstrap`, so no build is needed (real
-# bootstrap behavior is covered by the Rust self_cli suite). One Deno server
+# bootstrap behavior is covered by the Rust self_cli suite). One Node server
 # (scripts/install-test/serve.ts) path-routes the scenarios; this script varies
 # FUZ_INSTALL_BASE_URL — and, for the release log cases, FUZ_RELEASE_LOG_URL /
 # FUZ_RELEASE_LOG — per case and asserts exit code + output.
 #
 # Usage:  scripts/install-test.sh
-# Needs:  deno + openssl + curl (skips cleanly if one is absent).
+# Needs:  node + openssl + curl (skips cleanly if one is absent); node must run
+#         TypeScript by type stripping (fails loudly if it doesn't).
 # Env:    INSTALL_SH_SHELL (shell under test), INSTALL_SH_PATH (script under test)
 set -u
 
@@ -41,7 +42,11 @@ case "${1:-}" in
 	*) echo "unknown flag: $1" >&2; exit 64 ;;
 esac
 
-command -v deno >/dev/null 2>&1 || { echo "SKIP: deno not found"; exit 0; }
+command -v node >/dev/null 2>&1 || { echo "SKIP: node not found"; exit 0; }
+# serve.ts is TypeScript, which node runs only with type stripping on. A node
+# without it is present but unusable: a failure to report, not a reason to skip.
+node -e 'process.exit(process.features.typescript ? 0 : 1)' 2>/dev/null ||
+	{ echo "FAIL: node $(node --version) does not strip TypeScript types (an older Node, or one run with --no-strip-types)"; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo "SKIP: openssl not found"; exit 0; }
 command -v curl >/dev/null 2>&1 || { echo "SKIP: curl not found"; exit 0; }
 
@@ -76,7 +81,7 @@ openssl req -x509 -newkey rsa:2048 -keyout "$WORK/key.pem" -out "$WORK/cert.pem"
 
 # --- start the HTTPS server, wait for it to report its port -----------------
 PORT=0 CERT="$WORK/cert.pem" KEY="$WORK/key.pem" STUB_PATH="$STUB" \
-	deno run --quiet --allow-net --allow-read --allow-env "$SERVE" \
+	node "$SERVE" \
 	>"$WORK/server.out" 2>"$WORK/server.err" &
 SERVER_PID=$!
 
