@@ -9,10 +9,15 @@ description = "PTY library — a safe Rust API over the libc PTY calls"
 [dependencies]
 libc.workspace = true
 
-# Cannot use workspace lints because workspace sets unsafe_code = "forbid"
-# and this crate requires unsafe for its libc calls (posix_openpt, fork, execvpe, read, write, ioctl).
+# The workspace's lint tables, re-declared whole (Cargo replaces a crate's
+# `[lints]` table, so a partial override would drop the rest), with two
+# differences: `unsafe_code` at `deny` instead of `forbid`, so each item that
+# needs `unsafe` for its libc calls (posix_openpt, fork, execvpe, read, write,
+# ioctl) lifts it with its own `#[expect]`, and every `unsafe` block required
+# to say why it's sound. `cargo xtask check-release` holds every other lint to
+# the workspace's `[workspace.lints]`.
 [lints.rust]
-unsafe_code = "allow"
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
@@ -46,3 +51,5 @@ expect_used = "warn"
 panic = "warn"
 todo = "warn"
 unwrap_used = "warn"
+# every `unsafe` block carries a `// SAFETY:` comment
+undocumented_unsafe_blocks = "warn"

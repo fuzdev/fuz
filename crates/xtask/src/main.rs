@@ -7,7 +7,7 @@
 //! cargo xtask install --no-restart # Build and install only
 //! cargo xtask install --build-only # Build only (no install)
 //! cargo xtask clean                # Stop daemon, remove ~/.fuz/
-//! cargo xtask check-release        # Dep-graph audit: forbidden crates, layering, test_* features on release edges
+//! cargo xtask check-release        # Release audit: forbidden crates, layering, test_* features on release edges, re-declared lint tables
 //! cargo xtask key generate | info | export | list-trusted  # Signing keys (docs/signing.md)
 //! cargo xtask publish self --storage <uri>            # Sign + publish the fuz-only self artifact
 //! cargo xtask publish tool fuzd <bin> --version <v> --storage <uri>  # Bootstrap a tool artifact
@@ -91,7 +91,8 @@ struct Clean {}
 /// not in a `dev_only` package) may reach `fuz_testing`, `fuz_audit`, or
 /// `fuz_sign`; `fuz` / `fuzd` may not reach `fuzi` / `fuzi_core`; plus the
 /// built-in per-crate layering rules. Walks `cargo metadata` and reports any dep
-/// chain reaching a forbidden crate.
+/// chain reaching a forbidden crate, and holds any crate that re-declares its
+/// lint tables to the workspace's.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check-release")]
 struct CheckRelease {}

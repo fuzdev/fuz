@@ -26,8 +26,10 @@ other platforms.
 4. **Record what's platform-specific** in § Platform-Specific Code.
 
 **Unsafe code**: `unsafe_code = "forbid"` workspace-wide, except `fuz_pty`,
-which allows it for its libc PTY calls and re-declares the other workspace
-lints. Unsafe is justified only when the alternative has a material security
+which sets it to `deny` for its libc PTY calls, lifting it per item with
+`#[expect]` and documenting every block with `// SAFETY:`, and otherwise
+re-declares the workspace lints (held to them by `cargo xtask
+check-release`). Unsafe is justified only when the alternative has a material security
 gap (attacker capabilities change, not a slightly wider timing window) that
 can't be mitigated otherwise, and the unsafe code is minimal and auditable.
 Performance alone doesn't justify it.

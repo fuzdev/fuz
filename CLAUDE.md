@@ -186,7 +186,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 (umask 000; cargo test --workspace)   # CI's umask leg: the ~/.fuz mode assertions
-cargo xtask check-release        # dep-graph audit: forbidden crates, layering, test_* features on release edges
+cargo xtask check-release        # release audit: forbidden crates, layering, test_* features on release edges, re-declared lint tables
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items
 
 # Development
@@ -277,11 +277,21 @@ not here.
 - ★ Layering (`BUILTIN_CRATE_LAYERING`): `fuz_fact` ⊥ `{axum, fuz_http,
   fuz_cell, fuz_auth, fuz_actions}`; `fuz_cell` ⊥ `fuz_actions`; `fuz_sys` ⊥
   `{axum, fuz_http}`; `fuz_home` ⊥ `{axum, fuz_db, fuz_http}`.
+- ★ A member that re-declares its own `[lints.<tool>]` tables keeps the
+  workspace's: the same tool tables as `[workspace.lints.*]`, and every
+  workspace lint at the same level and priority except `rust.unsafe_code`,
+  which, where the workspace sets it, it declares at `deny` or `forbid` at the
+  workspace's priority (`allow` / `warn` fail; no opt-out). Additions are listed in the output. When
+  `unsafe_code` isn't `forbid`, no lib or bin crate root lifts it with a
+  top-of-file `#![allow(unsafe_code)]` / `#![expect(unsafe_code, …)]` (a
+  submodule's own lift isn't checked).
 - `testing_`-prefixed binaries never ship (packaging filter +
   `check_no_test_binaries`).
 - The spine crates are **twins of fuz_app** — wire literals, close codes, DDL,
   and error bodies match it (§ Values and policy).
-- `fuz_pty` is the one crate allowing `unsafe_code`.
+- `fuz_pty` is the one crate allowed `unsafe`: `unsafe_code = "deny"`, lifted
+  per item with `#[expect(unsafe_code, reason = "…")]`, and a `// SAFETY:`
+  comment on every `unsafe` block (`clippy::undocumented_unsafe_blocks`).
 - `fuz` never drives fuzd's lifecycle: it doesn't link `fuz_daemon`, probes
   fuzd passively, and speaks the wire only for `workload observe`.
 
@@ -305,7 +315,8 @@ shipped).
 - `fuz_storage` — the `Storage` backends.
 - `fuz_archive` — hardened streaming `.tar.gz` extraction.
 - `fuz_release` — fetch / verify / install and the release log reader.
-- `fuz_audit` — the `check-release` dep-graph audit.
+- `fuz_audit` — the `check-release` audit: the dep graph, and re-declared
+  lint tables held to the workspace's.
 
 **Daemon**
 
@@ -429,7 +440,10 @@ rustc lints.
 `clippy.toml` (the exec-free disallows), which replaces the root one rather
 than merging; `fuzi_core/tests/exec_free.rs` checks they carry its settings
 and stay byte-identical.
-`fuz_pty` re-declares the workspace lints (Cargo can't partially override).
+`fuz_pty` re-declares the workspace lint tables (Cargo replaces a crate's
+`[lints]` whole), differing only in `unsafe_code = "deny"` and an added
+`clippy::undocumented_unsafe_blocks = "warn"`; `check-release` holds the copy
+to the workspace's.
 Release profile: `lto`, `codegen-units = 1`, `panic = "abort"`
 (`catch_unwind` is dead), `strip` —
 abort fits this workspace's binaries (CLIs, the local daemon, test stubs);

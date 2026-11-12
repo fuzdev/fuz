@@ -130,7 +130,7 @@ deps.
 ### `fuz_audit`
 
 **Build tooling only — never in a production binary (audited,
-self-protecting).** The `check-release` dep-graph audit over
+self-protecting).** The `check-release` audit over
 `cargo metadata --all-features`: forbidden crates on a normal or build edge
 outside `testing_*` / `dev_only`, `BUILTIN_CRATE_LAYERING`, and any local
 `test_*` feature on a release edge. It prints the subjects it checked, so a
@@ -138,6 +138,59 @@ renamed crate shows up rather than passing silently. Each workspace's xtask
 enters through `run_check_release_cli`, `xtask_main`, or
 `run_check_release_cli_with_rules`; a package opts out with
 `[package.metadata.fuz_audit] dev_only = true`.
+
+It also holds every workspace member that re-declares its own
+`[lints.<tool>]` tables (instead of `[lints] workspace = true`) to the
+workspace's, since Cargo replaces a crate's `[lints]` whole and a hand-kept
+copy drifts:
+
+- the same set of tool tables as `[workspace.lints.*]`;
+- every workspace lint at the same level and priority, except
+  `rust.unsafe_code` (`fuz_audit::UNSAFE_CODE`): where the workspace sets it,
+  the crate declares it at `deny` or `forbid`, at the workspace's priority.
+  `deny` is the boundary-crate setting, each item that needs `unsafe` lifting
+  it with `#[expect(unsafe_code, reason = "…")]`; `allow` or `warn` fails, and
+  there is no opt-out;
+- lints the crate adds pass and are listed with its `unsafe_code` difference
+  in the output;
+- a crate whose `unsafe_code` isn't `forbid` carries no inner attribute at the
+  top of a lib or bin crate root whose `allow(…)` / `expect(…)` / `warn(…)`
+  argument list names `unsafe_code`, a `cfg_attr` of one included. The
+  boundary is the crate root: a lift at the top of a submodule file or on a
+  `mod` declaration isn't seen (a module that is entirely ABI surface may lift
+  the lint for itself).
+
+`cargo metadata` has no lint tables, so the manifests are read by a
+line-based reader (comments and strings skipped quote-aware, multi-line
+strings included). It understands a lint as `"level"`, as an inline
+`{ level, priority, check-cfg }` table on one line (its `check-cfg` array may
+span lines), or as a `[lints.<tool>.<lint>]` sub-table of those keys; values
+compare by level and priority only, so `check-cfg` lists are read past. It
+fails the audit as a tooling error, never a pass, on any other shape under a
+lint header:
+
+- an inline table spanning lines outside its `check-cfg` array;
+- a dotted key (`rust.unsafe_code = …` under `[lints]`, `a.b = …`), or a lint
+  table set outside a `[lints.<tool>]` header (`lints.rust.x = …`,
+  `lints = { … }`);
+- any key in a lint's table but `level`, `priority`, and `check-cfg`;
+- a value that is neither a level string nor such a table (an array, a
+  multi-line string), or a level Cargo doesn't accept;
+- a table nested below a lint's (`[lints.rust.x.y]`), a repeated table or
+  lint, `workspace = ` anything but `true`, or both forms in one manifest;
+- a multi-line string still open at the end of the file, or an unclosed
+  string anywhere in a manifest (every member manifest is scanned whole for
+  its section headers).
+
+The root manifest is read only once a member re-declares, so a workspace where
+every member inherits never depends on the reader understanding its
+`[workspace.lints]`. A workspace with no
+`[workspace.lints]` doesn't check its re-declaring members (the output names
+them), and a member with no `[lints]` at all is named in a note.
+
+Exit codes: `0` clean, `65` a policy violation, `69` `cargo metadata`
+unavailable, `70` its output unusable, a manifest or crate root it names
+unreadable, or a lint table in a shape the audit doesn't understand.
 
 ## Distribution
 
@@ -320,7 +373,16 @@ the integration suites; the real-fgro suites are `#[ignore]` and take
 ### `fuz_pty`
 
 A safe PTY API over libc. **Linux-only** (kernel ≥ 4.13; `execvpe` is a GNU
-extension). The one crate allowing `unsafe_code`; sole consumer `zzz_server`.
+extension). The one crate allowed `unsafe`: `unsafe_code = "deny"` in its
+re-declared lint tables (otherwise the workspace's, plus
+`clippy::undocumented_unsafe_blocks`), each item that needs it lifting the lint
+with `#[expect]`, and a `// SAFETY:` comment on every block. `Pty` is not
+sound as written: its methods act on a public, unowned descriptor and pid,
+`close` takes `&self`, and the type is `Send + Sync`, so a second `close`, a
+use after `close` (on any thread), or a hand-built `Pty` reaches a descriptor
+or process it doesn't own, and `resize` on a reused descriptor can make another
+driver write through its pointer (its rustdoc's Soundness section). Sole
+consumer `zzz_server`.
 
 ## Spine
 

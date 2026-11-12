@@ -34,6 +34,22 @@
 //!   package a release build compiles is refused (see
 //!   [`TEST_ONLY_FEATURE_PREFIX`]). Only local packages are read: the
 //!   `test_*` features of registry and git packages are not derived or checked.
+//! - **Lint tables** (the `lint_tables` module). A workspace member that
+//!   re-declares its own `[lints.<tool>]` tables instead of
+//!   `[lints] workspace = true` (a crate that needs `unsafe`, since Cargo
+//!   replaces a crate's `[lints]` whole) must keep the workspace's: the same set
+//!   of tool tables as `[workspace.lints.*]`, and every workspace lint at the
+//!   same level and priority, except `rust.unsafe_code` ([`UNSAFE_CODE`]), which
+//!   it declares at `deny` or `forbid` at the workspace's priority. When its
+//!   `unsafe_code` isn't `forbid`, no lib or bin crate root may lift it with a
+//!   top-of-file `#![allow(unsafe_code)]` / `#![expect(unsafe_code, …)]` (or a
+//!   `cfg_attr` of one). Lints it adds pass and are listed. `cargo metadata`
+//!   carries no lint tables, so this pass reads the manifests with a line-based
+//!   reader that refuses, as a tooling failure, any lint-table shape it doesn't
+//!   understand; the root manifest is read only once a member re-declares. A
+//!   workspace without `[workspace.lints]` doesn't check its re-declaring
+//!   members (the output names them), and a member with no `[lints]` at all is
+//!   named in a note.
 //!
 //! What it cannot see: a local package outside this workspace that no edge in
 //! the resolved graph reaches (one behind a path dependency's optional edge
@@ -88,10 +104,16 @@
 //! and `fuz_audit` is forbidden in production binary dep trees).
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 use serde_json::Value;
 use thiserror::Error;
+
+mod lint_tables;
+
+use lint_tables::LintTablesReport;
+pub use lint_tables::UNSAFE_CODE;
 
 /// Crate names whose presence in a production binary's transitive dep
 /// tree is a release-safety violation.
@@ -121,6 +143,27 @@ enum AuditError {
     /// `cargo metadata` output is missing a field the audit expects.
     #[error("unexpected `cargo metadata` shape: {0}")]
     MetadataShape(&'static str),
+
+    /// A manifest or crate root the lint-table pass reads couldn't be read.
+    #[error("failed to read {}", path.display())]
+    ReadFile {
+        /// The file.
+        path: PathBuf,
+        /// The read's error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A manifest's lint tables are in a shape the lint-table reader doesn't
+    /// understand, so it can't vouch for them.
+    #[error("the lint-table reader can't read {}", path.display())]
+    LintTableShape {
+        /// The manifest.
+        path: PathBuf,
+        /// The line and shape refused.
+        #[source]
+        source: lint_tables::LintShapeError,
+    },
 }
 
 impl AuditError {
@@ -138,8 +181,13 @@ impl AuditError {
             // to run, or ran but exited non-zero. The metadata is unavailable.
             Self::CargoRun(_) | Self::CargoFailed { .. } => 69, // EX_UNAVAILABLE
             // `cargo metadata` ran but its output didn't parse / lacked an
-            // expected field — an unexpected internal/tooling state.
-            Self::Parse(_) | Self::MetadataShape(_) => 70, // EX_SOFTWARE
+            // expected field, a manifest or crate root it names couldn't be
+            // read, or a manifest's lint tables are in a shape the reader
+            // doesn't understand — an unexpected internal/tooling state.
+            Self::Parse(_)
+            | Self::MetadataShape(_)
+            | Self::ReadFile { .. }
+            | Self::LintTableShape { .. } => 70, // EX_SOFTWARE
         }
     }
 }
@@ -302,18 +350,23 @@ struct AuditReport {
     /// Test-only features (`crate/feature`) whose crate is in this workspace
     /// and that were actually checked — surfaced like `layering_checked`.
     test_features_checked: Vec<String>,
+    /// The lint-table pass (see the `lint_tables` module): the re-declaring
+    /// members checked, their permitted differences, and any rule broken.
+    lint_tables: LintTablesReport,
 }
 
 impl AuditReport {
     /// `true` when no production binary reaches a forbidden crate, no local
     /// package declares a release edge to one, no per-crate layering rule is
-    /// violated, and no test-only feature is enabled on a release edge.
+    /// violated, no test-only feature is enabled on a release edge, and every
+    /// re-declared lint table keeps the workspace's.
     #[must_use]
     const fn is_clean(&self) -> bool {
         self.violations.is_empty()
             && self.declared_violations.is_empty()
             && self.layering_violations.is_empty()
             && self.test_feature_violations.is_empty()
+            && self.lint_tables.is_clean()
     }
 
     /// Process exit code for the audit outcome (sysexits-style): clean → `0`;
@@ -486,7 +539,12 @@ fn audit_release(rules: &AuditRules) -> Result<AuditReport, AuditError> {
     let metadata = run_cargo_metadata()?;
     let mut global: Vec<&str> = FORBIDDEN_CRATES.to_vec();
     global.extend_from_slice(rules.extra_forbidden);
-    audit_metadata_with_rules(&metadata, &global, rules.per_binary, BUILTIN_CRATE_LAYERING)
+    let lint_tables =
+        lint_tables::audit_lint_tables(&metadata, &|path| std::fs::read_to_string(path))?;
+    let mut report =
+        audit_metadata_with_rules(&metadata, &global, rules.per_binary, BUILTIN_CRATE_LAYERING)?;
+    report.lint_tables = lint_tables;
+    Ok(report)
 }
 
 /// Convenience CLI entry point: runs the audit against the cwd, prints
@@ -508,10 +566,12 @@ pub fn run_check_release_cli() -> ExitCode {
 /// threading positional forbid lists. The no-arg [`run_check_release_cli`] is
 /// `run_check_release_cli_with_rules(&AuditRules::default())`.
 ///
-/// The exit code is three-way (sysexits): clean → `0`, a policy violation →
-/// `65` (`EX_DATAERR`), a tooling failure → `69` (`EX_UNAVAILABLE`: `cargo
-/// metadata` could not be produced) or `70` (`EX_SOFTWARE`: its output did not
-/// parse or lacked an expected field).
+/// The exit code (sysexits): clean → `0`, a policy violation → `65`
+/// (`EX_DATAERR`), a tooling failure → `69` (`EX_UNAVAILABLE`: `cargo
+/// metadata` could not be produced) or `70` (`EX_SOFTWARE`: its output did
+/// not parse or lacked an expected field, a manifest or crate root it names
+/// could not be read, or a manifest's lint tables are in a shape the
+/// lint-table reader doesn't understand).
 #[must_use]
 pub fn run_check_release_cli_with_rules(rules: &AuditRules) -> ExitCode {
     let report = match audit_release(rules) {
@@ -538,11 +598,23 @@ pub fn run_check_release_cli_with_rules(rules: &AuditRules) -> ExitCode {
         );
     }
 
+    // a member with no `[lints]` takes no lint table at all, which the
+    // lint-table pass can't hold to the workspace's
+    if !report.lint_tables.without_lints.is_empty() {
+        eprintln!(
+            "note: {} workspace member(s) declare no [lints], so no lint table applies to them \
+             and the lint-table check skips them: {}. Add `[lints] workspace = true` unless \
+             this is intended.",
+            report.lint_tables.without_lints.len(),
+            report.lint_tables.without_lints.join(", "),
+        );
+    }
+
     if report.is_clean() {
         println!(
             "OK: no production binary depends on forbidden crates, no local package declares a \
-             release edge to one, no crate-layering rule is violated, and no test-only feature \
-             is enabled on a release edge"
+             release edge to one, no crate-layering rule is violated, no test-only feature is \
+             enabled on a release edge, and every re-declared lint table keeps the workspace's"
         );
         for (bin, pkg) in &report.scanned {
             println!("  {bin} (package {pkg})");
@@ -560,6 +632,7 @@ pub fn run_check_release_cli_with_rules(rules: &AuditRules) -> ExitCode {
                 report.test_features_checked.join(", ")
             );
         }
+        print_lint_tables_checked(&report.lint_tables);
     } else {
         for v in &report.violations {
             eprintln!("error: {v}");
@@ -573,16 +646,60 @@ pub fn run_check_release_cli_with_rules(rules: &AuditRules) -> ExitCode {
         for v in &report.test_feature_violations {
             eprintln!("error: {v}");
         }
+        for v in &report.lint_tables.violations {
+            eprintln!("error: {v}");
+        }
         let total = report.violations.len()
             + report.declared_violations.len()
             + report.layering_violations.len()
-            + report.test_feature_violations.len();
+            + report.test_feature_violations.len()
+            + report.lint_tables.violations.len();
         eprintln!(
             "audit failed: {total} violation{}",
             if total == 1 { "" } else { "s" },
         );
     }
     ExitCode::from(report.exit_code())
+}
+
+/// The clean run's lint-table lines: each re-declaring member checked, with its
+/// permitted differences from the workspace's tables, so a crate that stops
+/// being checked shows up.
+fn print_lint_tables_checked(report: &LintTablesReport) {
+    if !report.unchecked.is_empty() {
+        println!(
+            "  lint tables: not checked, the workspace manifest has no [workspace.lints] \
+             (re-declaring: {})",
+            report.unchecked.join(", ")
+        );
+    }
+    if report.checked.is_empty() {
+        if !report.unchecked.is_empty() {
+            return;
+        }
+        println!(
+            "  lint tables checked: none re-declared ({} member(s) inherit the workspace's)",
+            report.inheriting.len()
+        );
+        return;
+    }
+    let names: Vec<&str> = report.checked.iter().map(|c| c.package.as_str()).collect();
+    println!(
+        "  lint tables checked: {} ({} other member(s) inherit the workspace's)",
+        names.join(", "),
+        report.inheriting.len()
+    );
+    for checked in &report.checked {
+        if checked.differences.is_empty() {
+            println!("    {}: same as the workspace's", checked.package);
+        } else {
+            println!(
+                "    {}: {}",
+                checked.package,
+                checked.differences.join("; ")
+            );
+        }
+    }
 }
 
 /// Single-subcommand xtask entry point: dispatches `cargo xtask
@@ -836,6 +953,7 @@ fn audit_metadata_with_rules(
         layering_checked,
         test_feature_violations,
         test_features_checked,
+        lint_tables: LintTablesReport::default(),
     })
 }
 
@@ -2791,6 +2909,7 @@ mod tests {
             layering_checked: vec![],
             test_feature_violations: vec![],
             test_features_checked: vec![],
+            lint_tables: LintTablesReport::default(),
         };
         assert_eq!(clean.exit_code(), 0);
 
@@ -2809,6 +2928,7 @@ mod tests {
             layering_checked: vec![],
             test_feature_violations: vec![],
             test_features_checked: vec![],
+            lint_tables: LintTablesReport::default(),
         };
         // EX_DATAERR — a forbidden dep is well-formed-but-wrong data.
         assert_eq!(violated.exit_code(), 65);
@@ -2828,6 +2948,7 @@ mod tests {
             layering_checked: vec!["fuz_fact".into()],
             test_feature_violations: vec![],
             test_features_checked: vec![],
+            lint_tables: LintTablesReport::default(),
         };
         assert!(!layered.is_clean());
         assert_eq!(layered.exit_code(), 65);
@@ -2847,9 +2968,25 @@ mod tests {
             layering_checked: vec![],
             test_feature_violations: vec![],
             test_features_checked: vec![],
+            lint_tables: LintTablesReport::default(),
         };
         assert!(!declared.is_clean());
         assert_eq!(declared.exit_code(), 65);
+
+        // and so does a lint-table violation alone
+        let lint_drift = AuditReport {
+            lint_tables: LintTablesReport {
+                violations: vec![lint_tables::LintTableViolation::Tools {
+                    package: "fuz_pty".into(),
+                    missing: vec!["rustdoc".into()],
+                    extra: vec![],
+                }],
+                ..LintTablesReport::default()
+            },
+            ..clean
+        };
+        assert!(!lint_drift.is_clean());
+        assert_eq!(lint_drift.exit_code(), 65);
     }
 
     #[test]
