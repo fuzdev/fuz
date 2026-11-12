@@ -23,7 +23,7 @@ use argon2::password_hash::{
 use futures::future::{BoxFuture, FutureExt};
 use tokio::sync::Semaphore;
 
-use crate::password_hasher::{HashedPassword, PasswordHasher};
+use crate::password_hasher::{HashedPassword, PasswordHashError, PasswordHasher};
 
 /// Process-wide bound on concurrent Argon2 work: one permit per available
 /// core (`std::thread::available_parallelism`, 1 when unknown).
@@ -47,9 +47,10 @@ static ARGON2_PERMITS: LazyLock<Semaphore> = LazyLock::new(|| {
 ///
 /// # Errors
 ///
-/// A message when `permits` is closed (never, for [`ARGON2_PERMITS`]) or when
-/// `work` panicked, carrying the panic's payload.
-async fn run_bounded<T, F>(permits: &'static Semaphore, work: F) -> Result<T, String>
+/// [`PasswordHashError::PermitsClosed`] when `permits` is closed (never, for
+/// [`ARGON2_PERMITS`]), or [`PasswordHashError::Task`] when `work` did not
+/// complete — a panic, whose payload the error carries.
+async fn run_bounded<T, F>(permits: &'static Semaphore, work: F) -> Result<T, PasswordHashError>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
@@ -57,13 +58,13 @@ where
     let permit = permits
         .acquire()
         .await
-        .map_err(|e| format!("argon2 permits unavailable: {e}"))?;
+        .map_err(PasswordHashError::PermitsClosed)?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         work()
     })
     .await
-    .map_err(|e| format!("argon2 task failed: {e}"))
+    .map_err(PasswordHashError::Task)
 }
 
 /// Dummy Argon2 hash for enumeration prevention — run argon2 verify
@@ -88,18 +89,20 @@ impl Argon2idHasher {
 }
 
 impl PasswordHasher for Argon2idHasher {
-    fn hash(&self, password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         async move {
             run_bounded(&ARGON2_PERMITS, move || {
                 let mut salt_bytes = [0u8; 16];
-                getrandom::fill(&mut salt_bytes)
-                    .map_err(|e| format!("salt generation failed: {e}"))?;
-                let salt = SaltString::encode_b64(&salt_bytes)
-                    .map_err(|e| format!("salt encoding failed: {e}"))?;
+                getrandom::fill(&mut salt_bytes).map_err(PasswordHashError::Salt)?;
+                let salt =
+                    SaltString::encode_b64(&salt_bytes).map_err(PasswordHashError::Argon2)?;
                 let argon2 = Argon2::default();
                 let hash = argon2
                     .hash_password(password.as_bytes(), &salt)
-                    .map_err(|e| format!("hash failed: {e}"))?;
+                    .map_err(PasswordHashError::Argon2)?;
                 Ok(HashedPassword::new(hash.to_string()))
             })
             .await?
@@ -121,7 +124,10 @@ impl PasswordHasher for Argon2idHasher {
             .unwrap_or_else(|e| {
                 // Refused, as a wrong password is — and logged, since only a
                 // fault gets here.
-                tracing::error!(error = %e, "password verify did not complete");
+                tracing::error!(
+                    error = %fuz_sys::cli::format_error_chain(&e),
+                    "password verify did not complete"
+                );
                 false
             })
         }
@@ -159,7 +165,7 @@ mod tests {
             })));
         }
         for call in calls {
-            assert_eq!(call.await.unwrap(), Ok(()));
+            call.await.unwrap().unwrap();
         }
         // At the bound, not under it: twelve 20 ms calls on a pool of 512
         // blocking threads overlap, so a peak of 1 would mean the bound
@@ -204,7 +210,10 @@ mod tests {
             ran_in_work.fetch_add(1, Ordering::SeqCst);
         })
         .await;
-        assert!(result.is_err());
+        assert!(
+            matches!(result, Err(PasswordHashError::PermitsClosed(_))),
+            "{result:?}"
+        );
         assert_eq!(ran.load(Ordering::SeqCst), 0);
     }
 
@@ -239,7 +248,9 @@ mod tests {
         #[allow(clippy::panic)] // the panic is the input under test
         let result = run_bounded(&PERMITS, || -> () { panic!("argon2 exploded") }).await;
         let error = result.expect_err("a panic is an error");
-        assert!(error.contains("argon2 exploded"), "{error}");
+        assert!(matches!(error, PasswordHashError::Task(_)), "{error:?}");
+        let chain = fuz_sys::cli::format_error_chain(&error);
+        assert!(chain.contains("argon2 exploded"), "{chain}");
         assert!(
             PERMITS.try_acquire().is_ok(),
             "the permit frees with the task"

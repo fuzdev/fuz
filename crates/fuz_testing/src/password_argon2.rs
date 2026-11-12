@@ -18,7 +18,7 @@ use argon2::password_hash::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use futures::future::{BoxFuture, FutureExt};
 
-use fuz_auth::{HashedPassword, PasswordHasher};
+use fuz_auth::{HashedPassword, PasswordHashError, PasswordHasher};
 
 /// Argon2id parameters: RFC 9106 floor. `m_cost` in KiB.
 const TEST_M_COST: u32 = 8;
@@ -44,9 +44,9 @@ pub const TESTING_DUMMY_HASH: &str =
     "$argon2id$v=19$m=8,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// Construct an [`Argon2`] configured with the test params.
-fn testing_argon2() -> Result<Argon2<'static>, String> {
+fn testing_argon2() -> Result<Argon2<'static>, PasswordHashError> {
     let params = Params::new(TEST_M_COST, TEST_T_COST, TEST_P_COST, None)
-        .map_err(|e| format!("invalid argon2 test params: {e}"))?;
+        .map_err(PasswordHashError::Params)?;
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
@@ -91,22 +91,24 @@ impl TestingArgon2idHasher {
 }
 
 impl PasswordHasher for TestingArgon2idHasher {
-    fn hash(&self, password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         async move {
             tokio::task::spawn_blocking(move || {
                 let mut salt_bytes = [0u8; 16];
-                getrandom::fill(&mut salt_bytes)
-                    .map_err(|e| format!("salt generation failed: {e}"))?;
-                let salt = SaltString::encode_b64(&salt_bytes)
-                    .map_err(|e| format!("salt encoding failed: {e}"))?;
+                getrandom::fill(&mut salt_bytes).map_err(PasswordHashError::Salt)?;
+                let salt =
+                    SaltString::encode_b64(&salt_bytes).map_err(PasswordHashError::Argon2)?;
                 let argon2 = testing_argon2()?;
                 let hash = argon2
                     .hash_password(password.as_bytes(), &salt)
-                    .map_err(|e| format!("hash failed: {e}"))?;
+                    .map_err(PasswordHashError::Argon2)?;
                 Ok(HashedPassword::new(hash.to_string()))
             })
             .await
-            .map_err(|e| format!("hash task panicked: {e}"))?
+            .map_err(PasswordHashError::Task)?
         }
         .boxed()
     }

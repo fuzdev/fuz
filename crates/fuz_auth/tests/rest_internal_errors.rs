@@ -67,9 +67,9 @@ use fuz_auth::bootstrap_routes::bootstrap_router;
 use fuz_auth::signup_routes::signup_router;
 use fuz_auth::{
     AccountRouteState, AuditEmitter, BootstrapOptions, BootstrapRouteState, BootstrapTokenStore,
-    ConnectionCloseTarget, ConnectionCloser, HashedPassword, NoopConnectionCloser, PasswordHasher,
-    RateLimitResult, RateLimiter, RateLimiterOptions, SESSION_COOKIE_NAME, SignupOptions,
-    SignupRouteState, TokenScopeDocument, account_router,
+    ConnectionCloseTarget, ConnectionCloser, HashedPassword, NoopConnectionCloser,
+    PasswordHashError, PasswordHasher, RateLimitResult, RateLimiter, RateLimiterOptions,
+    SESSION_COOKIE_NAME, SignupOptions, SignupRouteState, TokenScopeDocument, account_router,
 };
 use fuz_db::{Pool, create_pool};
 use fuz_http::ClientIp;
@@ -134,11 +134,16 @@ impl StubHasher {
 }
 
 impl PasswordHasher for StubHasher {
-    fn hash(&self, _password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        _password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         let fails = self.hash_fails;
         async move {
             if fails {
-                Err("injected hashing fault".to_owned())
+                Err(PasswordHashError::Argon2(
+                    argon2::password_hash::Error::Crypto,
+                ))
             } else {
                 Ok(HashedPassword::new(STUB_HASH.to_owned()))
             }
@@ -169,7 +174,10 @@ struct SupersedingHasher {
 const SUPERSEDING_HASH: &str = "superseding-hash";
 
 impl PasswordHasher for SupersedingHasher {
-    fn hash(&self, _password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        _password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         let pool = self.pool.clone();
         let account_id = self.account_id;
         async move {
@@ -215,7 +223,10 @@ impl PoolWatchingHasher {
 }
 
 impl PasswordHasher for PoolWatchingHasher {
-    fn hash(&self, _password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        _password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         self.record("hash");
         async { Ok(HashedPassword::new(STUB_HASH.to_owned())) }.boxed()
     }
@@ -2183,7 +2194,10 @@ impl ParkedHasher {
 }
 
 impl PasswordHasher for ParkedHasher {
-    fn hash(&self, _password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        _password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         let started = Arc::clone(&self.started);
         async move {
             started.notify_one();

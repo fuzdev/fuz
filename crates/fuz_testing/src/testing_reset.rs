@@ -80,9 +80,7 @@ use fuz_auth::session_queries::create_capped_session;
 use fuz_auth::token_scope::TokenScopeDocument;
 use fuz_auth::{ROLE_ADMIN, ROLE_KEEPER, SharedDaemonTokenState};
 use fuz_db::{ActionDb, action_db_dispatch};
-use fuz_http::{
-    InputShape, JsonrpcError, internal_error, internal_error_with_source, invalid_input_params,
-};
+use fuz_http::{InputShape, JsonrpcError, internal_error_with_source, invalid_input_params};
 use serde_json::{Value, json};
 
 /// The canonical test password the in-process + cross-process harnesses
@@ -451,11 +449,7 @@ where
     let password_hash = password_hasher
         .hash(password.to_owned())
         .await
-        .map_err(|e| {
-            // the hasher's error is a `String`, with no cause chain to walk
-            tracing::warn!(error = %e, "hash_password");
-            internal_error("hash_password")
-        })?;
+        .map_err(|e| internal_error_with_source("hash_password", &e))?;
 
     let username = username.to_lowercase();
     let account = query_create_account(db, &username, password_hash.as_str())

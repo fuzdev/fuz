@@ -6,6 +6,8 @@
 //!
 //! Held as `Arc<dyn PasswordHasher>` on the consumer's auth state.
 
+use thiserror::Error;
+
 /// Hashed password bytes. Newtype so call sites can't confuse a hash
 /// with a raw password. `Debug` redacts it — an argon2 hash is an offline
 /// guessing target.
@@ -37,6 +39,42 @@ impl HashedPassword {
     }
 }
 
+/// Why [`PasswordHasher::hash`] produced no hash.
+///
+/// Callers don't branch on the variant: any of them is an internal failure,
+/// answered and audited as one, so the variants exist for the log. No
+/// variant carries the password or a hash.
+///
+/// The argon2, password-hash, and getrandom errors implement
+/// `std::error::Error` only under their `std` feature, which this crate
+/// doesn't enable, so their text rides in the message rather than
+/// `#[source]`; the tokio errors stay in `source()`.
+#[derive(Debug, Error)]
+pub enum PasswordHashError {
+    /// The OS random source failed to fill the salt.
+    #[error("salt generation failed: {0}")]
+    Salt(getrandom::Error),
+
+    /// The hashing library refused: encoding the salt or hashing the
+    /// password.
+    #[error("argon2 hashing failed: {0}")]
+    Argon2(argon2::password_hash::Error),
+
+    /// The Argon2 cost parameters were refused as invalid.
+    #[error("argon2 parameters invalid: {0}")]
+    Params(argon2::Error),
+
+    /// The bound on concurrent hashing work is closed, so no permit can be
+    /// taken.
+    #[error("argon2 permits unavailable")]
+    PermitsClosed(#[source] tokio::sync::AcquireError),
+
+    /// The blocking task running the hash did not complete: it panicked, or
+    /// the runtime shut down and cancelled it.
+    #[error("argon2 task failed")]
+    Task(#[source] tokio::task::JoinError),
+}
+
 /// Password hashing capability.
 ///
 /// Implementations must run on a blocking-friendly executor — Argon2id
@@ -51,10 +89,14 @@ impl HashedPassword {
 /// hash.
 pub trait PasswordHasher: Send + Sync {
     /// Hash a raw password. Boxed future for `dyn`-trait compatibility.
+    ///
+    /// # Errors
+    ///
+    /// [`PasswordHashError`] when no hash was produced.
     fn hash(
         &self,
         password: String,
-    ) -> futures::future::BoxFuture<'static, Result<HashedPassword, String>>;
+    ) -> futures::future::BoxFuture<'static, Result<HashedPassword, PasswordHashError>>;
 
     /// Verify a raw password against a stored hash. Boxed future for
     /// `dyn`-trait compatibility.

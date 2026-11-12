@@ -236,7 +236,10 @@ async fn password_inner(
         .hash(input.new_password.clone())
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "password: hashing failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "password: hashing failed"
+            );
             internal_error_response()
         })?;
 

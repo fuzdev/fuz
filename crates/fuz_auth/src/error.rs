@@ -6,8 +6,8 @@ use thiserror::Error;
 ///
 /// [`Classified`](Self::Classified) carries the failures the REST wrapper
 /// maps to a wire error; every other variant is an unclassified internal
-/// failure carrying its cause (a driver, pool or commit error, or the
-/// hasher's message), answered `500 internal_error`.
+/// failure carrying its cause (a driver, pool, commit, or hasher error),
+/// answered `500 internal_error`.
 #[derive(Debug, Error)]
 pub enum SignupError {
     /// A classified signup failure.
@@ -23,8 +23,8 @@ pub enum SignupError {
     Query(#[from] tokio_postgres::Error),
 
     /// The password hasher failed.
-    #[error("password hashing error: {0}")]
-    PasswordHash(String),
+    #[error("password hashing error")]
+    PasswordHash(#[source] crate::password_hasher::PasswordHashError),
 
     /// The `COMMIT` failed, or [`fuz_db::commit_checked`]'s pre-commit probe
     /// found the transaction aborted and rolled it back.
@@ -36,8 +36,8 @@ pub enum SignupError {
 ///
 /// [`Classified`](Self::Classified) carries the failures the REST wrapper
 /// maps to a wire error; every other variant is an unclassified internal
-/// failure carrying its cause (a driver, pool or commit error, or the
-/// hasher's message), answered `500 internal_error`.
+/// failure carrying its cause (a driver, pool, commit, or hasher error),
+/// answered `500 internal_error`.
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     /// A classified bootstrap failure.
@@ -53,8 +53,8 @@ pub enum BootstrapError {
     Query(#[from] tokio_postgres::Error),
 
     /// The password hasher failed.
-    #[error("password hashing error: {0}")]
-    PasswordHash(String),
+    #[error("password hashing error")]
+    PasswordHash(#[source] crate::password_hasher::PasswordHashError),
 
     /// The `COMMIT` failed, or [`fuz_db::commit_checked`]'s pre-commit probe
     /// found the transaction aborted and rolled it back.

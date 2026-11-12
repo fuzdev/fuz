@@ -1031,7 +1031,10 @@ impl PasswordHasher for ParkedHasher {
     fn hash(
         &self,
         _password: String,
-    ) -> futures::future::BoxFuture<'static, Result<fuz_auth::HashedPassword, String>> {
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<fuz_auth::HashedPassword, fuz_auth::PasswordHashError>,
+    > {
         let started = Arc::clone(&self.started);
         Box::pin(async move {
             started.notify_one();
@@ -1095,7 +1098,10 @@ impl PasswordHasher for PoolHoldingHasher {
     fn hash(
         &self,
         _password: String,
-    ) -> futures::future::BoxFuture<'static, Result<fuz_auth::HashedPassword, String>> {
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<fuz_auth::HashedPassword, fuz_auth::PasswordHashError>,
+    > {
         let pool = self.pool.clone();
         let held = Arc::clone(&self.held);
         let hashed = Arc::clone(&self.hashed);

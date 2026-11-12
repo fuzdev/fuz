@@ -265,7 +265,7 @@ pub use password::{
     PasswordLengthError, PasswordProvided, password_length,
 };
 pub use password_argon2::Argon2idHasher;
-pub use password_hasher::{HashedPassword, PasswordHasher};
+pub use password_hasher::{HashedPassword, PasswordHashError, PasswordHasher};
 pub use primitive_schemas::{
     EMAIL_LENGTH_MAX, FACT_HASH_HEX_LENGTH, FACT_HASH_PREFIX, TOKEN_ID_PREFIX,
     TOKEN_ID_SUFFIX_LENGTH, USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN, USERNAME_PROVIDED_LENGTH_MAX,

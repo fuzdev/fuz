@@ -54,8 +54,8 @@ use futures::future::{BoxFuture, FutureExt};
 use fuz_auth::account_login::{DEFAULT_LOGIN_FAIL_FLOOR_MS, DEFAULT_LOGIN_FAIL_JITTER_MS};
 use fuz_auth::{
     AccountRouteState, AuditEmitter, ConnectionCloseTarget, ConnectionCloser, DEFAULT_MAX_SESSIONS,
-    HashedPassword, NoopConnectionCloser, PASSWORD_LENGTH_MAX, PasswordHasher, RateLimitResult,
-    RateLimiter, RateLimiterOptions, USERNAME_PROVIDED_LENGTH_MAX, login_handler,
+    HashedPassword, NoopConnectionCloser, PASSWORD_LENGTH_MAX, PasswordHashError, PasswordHasher,
+    RateLimitResult, RateLimiter, RateLimiterOptions, USERNAME_PROVIDED_LENGTH_MAX, login_handler,
     query_session_enforce_limit,
 };
 use fuz_db::{Pool, create_pool};
@@ -93,7 +93,10 @@ impl RecordingHasher {
 }
 
 impl PasswordHasher for RecordingHasher {
-    fn hash(&self, _password: String) -> BoxFuture<'static, Result<HashedPassword, String>> {
+    fn hash(
+        &self,
+        _password: String,
+    ) -> BoxFuture<'static, Result<HashedPassword, PasswordHashError>> {
         async move { Ok(HashedPassword::new("recording-hash".to_owned())) }.boxed()
     }
 
