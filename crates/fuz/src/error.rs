@@ -2,7 +2,8 @@
 
 use fuz_artifact::ArtifactError;
 use fuz_home::FuzHomeError;
-use fuz_sys::cli::{EXIT_USAGE, HintMessage};
+use fuz_sys::cli::EXIT_USAGE;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -131,37 +132,34 @@ impl CliError {
     /// Artifact hints are single-sourced in `ArtifactError::hint()` and the
     /// release chain in `ReleaseError::hint()` — this just delegates to them;
     /// only the `fuz`-CLI-native variants carry their own hint here.
-    pub fn hint(&self) -> Option<HintMessage> {
+    pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
-            Self::FuzHome(e) => e.hint().map(HintMessage::Static),
+            Self::FuzHome(e) => e.hint().map(Cow::Borrowed),
             Self::Artifact(e) => e.hint(),
             Self::ReleaseCommand(e) => e.hint(),
             // Surface the daemon-client hint (e.g. "fuzd start" when fuzd
             // isn't listening) so `fuz workload observe` degrades with an action.
-            Self::Client(e) => match e.hint() {
-                "" => None,
-                hint => Some(HintMessage::Static(hint)),
-            },
-            Self::SourceRepoNotFound { searched } => Some(HintMessage::Owned(format!(
+            Self::Client(e) => e.hint().map(Cow::Borrowed),
+            Self::SourceRepoNotFound { searched } => Some(Cow::Owned(format!(
                 "set {} or clone to ~/{}\nsearched: {}",
                 crate::build::REPO_ENV_VAR,
                 crate::build::DEFAULT_REPO_PATH,
                 searched.join(", ")
             ))),
-            Self::InvalidSourceRepo { .. } => Some(HintMessage::Static(
+            Self::InvalidSourceRepo { .. } => Some(Cow::Borrowed(
                 "ensure the path points to the fuz repository",
             )),
-            Self::CargoBuild(e) => e.hint().map(HintMessage::Static),
-            Self::VerifyTargetDir { .. } => Some(HintMessage::Static(
+            Self::CargoBuild(e) => e.hint().map(Cow::Borrowed),
+            Self::VerifyTargetDir { .. } => Some(Cow::Borrowed(
                 "check that the temp directory ($TMPDIR, default /tmp) exists and is writable",
             )),
-            Self::NoCurrentArtifact => Some(HintMessage::Static(
+            Self::NoCurrentArtifact => Some(Cow::Borrowed(
                 "run 'fuz artifact build' to create and install an artifact",
             )),
-            Self::IntegrityCheckFailed { .. } => Some(HintMessage::Static(
+            Self::IntegrityCheckFailed { .. } => Some(Cow::Borrowed(
                 "rebuild with 'fuz artifact build' or use a different artifact",
             )),
-            Self::UnknownObserverDomain { .. } => Some(HintMessage::Static(
+            Self::UnknownObserverDomain { .. } => Some(Cow::Borrowed(
                 "available domains: process, network, services",
             )),
             _ => None,
@@ -266,7 +264,7 @@ mod tests {
         assert!(
             missing
                 .hint()
-                .is_some_and(|hint| hint.to_string().contains("never creates one"))
+                .is_some_and(|hint| hint.contains("never creates one"))
         );
 
         // The store-shape refusals keep their bad-data code through the release
@@ -504,7 +502,6 @@ mod tests {
             source: std::io::Error::other("x"),
         }
         .hint()
-        .map(|h| h.to_string())
         .unwrap();
         assert!(hint.contains("TMPDIR") && !hint.contains("cargo"));
         // SourceRepoNotFound interpolates the searched list into an Owned hint.
@@ -513,7 +510,7 @@ mod tests {
         }
         .hint();
         assert!(
-            matches!(hint, Some(HintMessage::Owned(ref s)) if s.contains("repo-a, repo-b")),
+            matches!(hint, Some(Cow::Owned(ref s)) if s.contains("repo-a, repo-b")),
             "searched list interpolated: {hint:?}"
         );
     }

@@ -1250,7 +1250,7 @@ fn errors_have_hints() {
     assert!(
         relative
             .hint()
-            .is_some_and(|hint| hint.to_string().contains("FUZ_HOME"))
+            .is_some_and(|hint| hint.contains("FUZ_HOME"))
     );
 }
 

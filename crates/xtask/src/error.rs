@@ -1,6 +1,7 @@
 //! Xtask error types
 
 use fuz_artifact::ArtifactError;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -51,38 +52,28 @@ impl XtaskError {
     /// store's, the release build's, the signing key loader's, the release chain's, the backfill's,
     /// the revoke's, and the storage backend's; the `--storage` and `--tool`
     /// refusals carry theirs here.
-    pub fn hint(&self) -> Option<fuz_sys::cli::HintMessage> {
+    pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
-            Self::FuzHome(e) => e.hint().map(fuz_sys::cli::HintMessage::Static),
+            Self::FuzHome(e) => e.hint().map(Cow::Borrowed),
             Self::Artifact(e) => e.hint(),
-            Self::CargoBuild(e) => e.hint().map(fuz_sys::cli::HintMessage::Static),
-            Self::Publish(crate::publish::PublishError::Storage(e)) => {
-                e.hint().map(fuz_sys::cli::HintMessage::Static)
-            }
+            Self::CargoBuild(e) => e.hint().map(Cow::Borrowed),
+            Self::Publish(crate::publish::PublishError::Storage(e)) => e.hint().map(Cow::Borrowed),
             Self::Key(crate::key::KeyCommandError::Key(e))
-            | Self::Publish(crate::publish::PublishError::Key(e)) => {
-                e.hint().map(fuz_sys::cli::HintMessage::Static)
-            }
+            | Self::Publish(crate::publish::PublishError::Key(e)) => e.hint().map(Cow::Borrowed),
             Self::Publish(crate::publish::PublishError::Release(e)) => e.hint(),
-            Self::Publish(crate::publish::PublishError::Backfill(e)) => {
-                e.hint().map(fuz_sys::cli::HintMessage::Static)
-            }
-            Self::Publish(crate::publish::PublishError::Revoke(e)) => {
-                e.hint().map(fuz_sys::cli::HintMessage::Static)
-            }
+            Self::Publish(crate::publish::PublishError::Backfill(e)) => e.hint().map(Cow::Borrowed),
+            Self::Publish(crate::publish::PublishError::Revoke(e)) => e.hint().map(Cow::Borrowed),
             Self::Publish(crate::publish::PublishError::StorageMissing { .. }) => {
-                Some(fuz_sys::cli::HintMessage::Static(
+                Some(Cow::Borrowed(
                     "Check the path: this command works on a store that is already there and \
                      never creates one (`cargo xtask publish` does)",
                 ))
             }
-            Self::Publish(crate::publish::PublishError::ToolNotFirstParty { .. }) => {
-                Some(fuz_sys::cli::HintMessage::Static(
-                    "prune works on the stream of a first-party tool; check the name",
-                ))
-            }
+            Self::Publish(crate::publish::PublishError::ToolNotFirstParty { .. }) => Some(
+                Cow::Borrowed("prune works on the stream of a first-party tool; check the name"),
+            ),
             Self::Publish(crate::publish::PublishError::StorageNotDir { .. }) => {
-                Some(fuz_sys::cli::HintMessage::Static(
+                Some(Cow::Borrowed(
                     "A local store is a directory: check the path, or move what is there",
                 ))
             }
@@ -99,36 +90,33 @@ mod tests {
     #[test]
     fn publish_release_errors_carry_the_release_hint() {
         let release = || ReleaseError::from(LogWriteError::DetachedHead);
-        let expected = release().hint().map(|hint| hint.to_string());
+        let expected = release().hint();
         assert!(expected.is_some());
         let error = XtaskError::Publish(crate::publish::PublishError::Release(release()));
-        assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+        assert_eq!(error.hint(), expected);
     }
 
     #[test]
     fn backfill_errors_carry_the_backfill_hint() {
         let backfill = || fuz_sign::BackfillError::HeadExists;
-        let expected = backfill().hint().map(str::to_string);
+        let expected = backfill().hint();
         assert!(expected.is_some());
         let error = XtaskError::Publish(crate::publish::PublishError::Backfill(backfill()));
-        assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+        assert_eq!(error.hint().as_deref(), expected);
 
         // A log write failure inside a backfill keeps the log write's hint.
         let log = || fuz_sign::BackfillError::Log(LogWriteError::DetachedHead);
         let error = XtaskError::Publish(crate::publish::PublishError::Backfill(log()));
-        assert_eq!(
-            error.hint().map(|hint| hint.to_string()),
-            LogWriteError::DetachedHead.hint().map(str::to_string)
-        );
+        assert_eq!(error.hint().as_deref(), LogWriteError::DetachedHead.hint());
     }
 
     #[test]
     fn revoke_errors_carry_the_revoke_hint() {
         let revoke = || fuz_sign::RevokeError::NoHead;
-        let expected = revoke().hint().map(str::to_string);
+        let expected = revoke().hint();
         assert!(expected.is_some());
         let error = XtaskError::Publish(crate::publish::PublishError::Revoke(revoke()));
-        assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+        assert_eq!(error.hint().as_deref(), expected);
     }
 
     /// A signing key that cannot be loaded carries the loader's hint through
@@ -141,23 +129,21 @@ mod tests {
             path: PathBuf::from("/k"),
             source: SecureFileError::NotFound(PathBuf::from("/k")),
         };
-        let expected = missing().hint().map(str::to_string);
+        let expected = missing().hint();
         assert!(expected.is_some());
         for error in [
             XtaskError::Key(crate::key::KeyCommandError::Key(missing())),
             XtaskError::Publish(crate::publish::PublishError::Key(missing())),
         ] {
-            assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+            assert_eq!(error.hint().as_deref(), expected);
         }
 
         // A malformed key file: the parser's own hint, through the loader.
         let malformed = || fuz_sign::KeyFileError::from(fuz_sign::KeyError::TrailingContent);
-        let expected = fuz_sign::KeyError::TrailingContent
-            .hint()
-            .map(str::to_string);
+        let expected = fuz_sign::KeyError::TrailingContent.hint();
         assert!(expected.is_some());
         let error = XtaskError::Publish(crate::publish::PublishError::Key(malformed()));
-        assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+        assert_eq!(error.hint().as_deref(), expected);
     }
 
     #[test]
@@ -165,19 +151,14 @@ mod tests {
         let relative = || fuz_home::FuzHomeError::RelativeFuzHome {
             path: PathBuf::from("relhome"),
         };
-        let expected = relative().hint().map(str::to_string);
+        let expected = relative().hint();
         assert!(expected.is_some());
-        assert_eq!(
-            XtaskError::FuzHome(relative())
-                .hint()
-                .map(|hint| hint.to_string()),
-            expected
-        );
+        assert_eq!(XtaskError::FuzHome(relative()).hint().as_deref(), expected);
         // The default key location is under the home: the same hint.
         let error = XtaskError::Key(crate::key::KeyCommandError::Key(
             fuz_sign::KeyFileError::ConfigDir(relative()),
         ));
-        assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+        assert_eq!(error.hint().as_deref(), expected);
     }
 
     /// `cargo xtask install` works on the artifact store: its errors keep the
@@ -185,18 +166,13 @@ mod tests {
     #[test]
     fn artifact_errors_carry_the_artifact_hint() {
         let busy = || ArtifactError::InProgress { pid: Some(4242) };
-        let expected = busy().hint().map(|hint| hint.to_string());
+        let expected = busy().hint();
         assert!(
             expected
                 .as_deref()
                 .is_some_and(|hint| hint.contains("4242"))
         );
-        assert_eq!(
-            XtaskError::Artifact(busy())
-                .hint()
-                .map(|hint| hint.to_string()),
-            expected
-        );
+        assert_eq!(XtaskError::Artifact(busy()).hint(), expected);
     }
 
     /// A storage error keeps the backend's hint, where the backend has one.
@@ -207,10 +183,10 @@ mod tests {
             backend: fuz_storage::StorageBackendKind::Https,
             operation: "upload",
         };
-        let expected = unsupported().hint().map(str::to_string);
+        let expected = unsupported().hint();
         assert!(expected.is_some());
         let error = XtaskError::Publish(crate::publish::PublishError::Storage(unsupported()));
-        assert_eq!(error.hint().map(|hint| hint.to_string()), expected);
+        assert_eq!(error.hint().as_deref(), expected);
 
         // A `--storage` that does not parse has none to give.
         let malformed = StorageError::InvalidConfig {
@@ -231,12 +207,10 @@ mod tests {
         let missing = || fuz_artifact::CargoBuildError::MissingBinary {
             name: "fuzd".to_string(),
         };
-        let expected = missing().hint().map(str::to_string);
+        let expected = missing().hint();
         assert!(expected.is_some());
         assert_eq!(
-            XtaskError::CargoBuild(missing())
-                .hint()
-                .map(|hint| hint.to_string()),
+            XtaskError::CargoBuild(missing()).hint().as_deref(),
             expected
         );
     }

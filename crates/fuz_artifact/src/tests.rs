@@ -835,16 +835,11 @@ fn history_previous_none_when_empty() {
 fn error_hint_for_common_errors() {
     let err = ArtifactError::NotFound("abc".to_string());
     assert!(err.hint().is_some());
-    assert!(
-        err.hint()
-            .unwrap()
-            .to_string()
-            .contains("fuz artifact list")
-    );
+    assert!(err.hint().unwrap().contains("fuz artifact list"));
 
     // InProgress interpolates the holder pid into an owned hint.
     let err = ArtifactError::InProgress { pid: Some(123) };
-    let hint = err.hint().expect("InProgress has a hint").to_string();
+    let hint = err.hint().expect("InProgress has a hint");
     assert!(hint.contains("wait"));
     assert!(hint.contains("123"), "interpolates the holder pid");
 
@@ -853,7 +848,7 @@ fn error_hint_for_common_errors() {
         minimum: 8,
     };
     assert!(err.hint().is_some());
-    assert!(err.hint().unwrap().to_string().contains("8 characters"));
+    assert!(err.hint().unwrap().contains("8 characters"));
 
     let err = ArtifactError::AmbiguousPrefix {
         prefix: "abc".to_string(),

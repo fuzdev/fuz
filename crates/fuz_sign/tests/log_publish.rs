@@ -950,12 +950,7 @@ async fn a_pre_tag_existing_head_fails_the_publish_with_the_recreate_hint() {
     let hint = error.hint().unwrap();
     assert!(hint.contains("release-log backfill"), "{hint}");
     assert!(!hint.contains("git revert"), "{hint}");
-    assert_eq!(
-        ReleaseError::from(error)
-            .hint()
-            .map(|hint| hint.to_string()),
-        Some(hint.to_string())
-    );
+    assert_eq!(ReleaseError::from(error).hint().as_deref(), Some(hint));
     assert_eq!(fixture.storage_files(), []);
     assert_eq!(fixture.state(), before);
 }
@@ -2110,7 +2105,6 @@ async fn an_untrusted_key_cannot_republish_a_logged_release() {
         ))
         .hint()
         .unwrap()
-        .to_string()
         .contains("public_keys.json")
     );
 

@@ -844,10 +844,7 @@ mod tests {
                     .contains("release version cannot be part of a storage key"),
                 "{err}"
             );
-            assert!(
-                err.hint()
-                    .is_some_and(|hint| hint.to_string().contains('+'))
-            );
+            assert!(err.hint().is_some_and(|hint| hint.contains('+')));
         }
         assert!(!root.exists(), "storage was written to");
         assert!(!not_a_checkout.exists(), "the log checkout was touched");
@@ -902,7 +899,7 @@ mod tests {
             "storage error: HTTPS: upload is not supported on a read-only backend"
         );
         assert_eq!(
-            err.hint().map(|hint| hint.to_string()).as_deref(),
+            err.hint().as_deref(),
             Some("Use a writable backend: a local path, forge://, or ssh://")
         );
         assert_eq!(fs::read_dir(&scratch_root).unwrap().count(), 0);
@@ -1166,7 +1163,6 @@ mod tests {
         assert!(
             err.hint()
                 .unwrap()
-                .to_string()
                 .starts_with(&format!("pass --target {other} ")),
             "{err:?}"
         );

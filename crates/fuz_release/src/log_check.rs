@@ -1576,7 +1576,7 @@ mod tests {
             let error = ReleaseLogPolicy::from_env_values(Some(url), None, &[]).unwrap_err();
             let wrapped = ReleaseError::from(error);
             let message = wrapped.to_string();
-            let hint = wrapped.hint().map(|h| h.to_string()).unwrap_or_default();
+            let hint = wrapped.hint().unwrap_or_default();
             assert!(message.contains("entry 1"), "{url}: {message}");
             assert!(
                 !message.contains("hunter2"),

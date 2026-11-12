@@ -123,12 +123,7 @@ fn main() -> ExitCode {
 fn result_to_exit(result: Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            // `hint()` is a `HintMessage` (some hints interpolate), and
-            // `report_failure` takes the text
-            let hint = e.hint().map(|hint| hint.to_string());
-            report_failure(&e, hint.as_deref(), 1)
-        }
+        Err(e) => report_failure(&e, e.hint().as_deref(), 1),
     }
 }
 

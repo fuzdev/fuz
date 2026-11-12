@@ -27,8 +27,9 @@ use fuz_release::{
     StorageError, UpdateCheck, UpdateStatus, check_latest_self, compute_update_check, fetch_latest,
     parse_existing_storage,
 };
-use fuz_sys::cli::{EXIT_USAGE, HintMessage};
+use fuz_sys::cli::EXIT_USAGE;
 use serde::Serialize;
+use std::borrow::Cow;
 use thiserror::Error;
 
 use crate::CliError;
@@ -99,11 +100,11 @@ impl ReleaseCommandError {
     }
 
     /// User-facing hint
-    pub fn hint(&self) -> Option<HintMessage> {
+    pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
             Self::Release(e) => e.hint(),
-            Self::Storage(e) => e.hint().map(HintMessage::Static),
-            Self::StorageNotDir { .. } => Some(HintMessage::Static(
+            Self::Storage(e) => e.hint().map(Cow::Borrowed),
+            Self::StorageNotDir { .. } => Some(Cow::Borrowed(
                 "Check the path: fuz only reads a store and never creates one. \
                  A local store exists once a release is published to it",
             )),
@@ -503,8 +504,7 @@ mod tests {
             "got {err:?}"
         );
         assert!(
-            err.hint()
-                .is_some_and(|hint| hint.to_string().contains("--force")),
+            err.hint().is_some_and(|hint| hint.contains("--force")),
             "the refusal names --force"
         );
         assert!(

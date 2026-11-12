@@ -699,7 +699,7 @@ mod tests {
             format!("no release of fuz is published for {target}: latest-{target}.json not found")
         );
         assert_eq!(
-            err.hint().unwrap().to_string(),
+            err.hint().unwrap(),
             format!("no release published for {target}; publish one")
         );
         assert!(!err.is_security_violation());
@@ -712,7 +712,7 @@ mod tests {
             "{err:?}"
         );
         assert_eq!(
-            err.hint().unwrap().to_string(),
+            err.hint().unwrap(),
             format!(
                 "no release published for {target}; publish one, or install a published version \
                  with `fuz tool install fuzd --version <version>`"
@@ -836,7 +836,7 @@ mod tests {
             );
             assert!(!err.is_security_violation(), "{err:?}");
             assert_eq!(
-                err.hint().unwrap().to_string(),
+                err.hint().unwrap(),
                 format!(
                     "this release's binaries are not for {host}: the signature is valid but the \
                      label is wrong; report it to the publisher, don't retry"

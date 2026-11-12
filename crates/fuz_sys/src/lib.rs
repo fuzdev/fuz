@@ -2,7 +2,7 @@
 //!
 //! The reusable, home-agnostic leaf: filesystem helpers, advisory file locks,
 //! TOCTOU-safe secure-file ops, pid liveness and signal sending, randomness,
-//! RFC 3339 timestamps, env parsing, CLI hint messages and argument parsing,
+//! RFC 3339 timestamps, env parsing, CLI error rendering and argument parsing,
 //! the escaping of untrusted text for a message (`text`), and the user's home
 //! directory (`home_dir`, the one `$HOME` lookup) with its `~` renderings.
 //! Nothing here knows about `~/.fuz` — those conventions live

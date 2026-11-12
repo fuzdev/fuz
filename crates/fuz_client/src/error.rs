@@ -84,23 +84,20 @@ pub enum ClientError {
 }
 
 impl ClientError {
-    /// Returns a hint for how to resolve this error; empty when there is none.
+    /// Returns a hint for how to resolve this error, if there is one.
     ///
     /// An unresolvable home carries the home layer's own hint.
     #[must_use]
-    pub const fn hint(&self) -> &'static str {
+    pub const fn hint(&self) -> Option<&'static str> {
         match self {
-            Self::DaemonNotRunning { .. } | Self::Connect { .. } => "fuzd start",
-            Self::ProtocolMismatch { .. } => PROTOCOL_MISMATCH_HINT,
-            Self::StreamEndedBeforeSnapshot => STREAM_ENDED_HINT,
-            Self::FuzHome(e) => match e.hint() {
-                Some(hint) => hint,
-                None => "",
-            },
+            Self::DaemonNotRunning { .. } | Self::Connect { .. } => Some("fuzd start"),
+            Self::ProtocolMismatch { .. } => Some(PROTOCOL_MISMATCH_HINT),
+            Self::StreamEndedBeforeSnapshot => Some(STREAM_ENDED_HINT),
+            Self::FuzHome(e) => e.hint(),
             Self::WatchRefused {
                 reason: WatchRefusal::RootsTooLarge { .. },
-            } => "watch fewer or shorter roots per subscription",
-            Self::Wire(_) | Self::UnexpectedAction { .. } | Self::MalformedSnapshot { .. } => "",
+            } => Some("watch fewer or shorter roots per subscription"),
+            Self::Wire(_) | Self::UnexpectedAction { .. } | Self::MalformedSnapshot { .. } => None,
         }
     }
 }
@@ -116,15 +113,15 @@ mod tests {
                 path: "/x".to_string()
             }
             .hint(),
-            "fuzd start"
+            Some("fuzd start")
         );
         assert_eq!(
             ClientError::ProtocolMismatch { ours: 5, theirs: 4 }.hint(),
-            PROTOCOL_MISMATCH_HINT
+            Some(PROTOCOL_MISMATCH_HINT)
         );
         assert_eq!(
             ClientError::StreamEndedBeforeSnapshot.hint(),
-            STREAM_ENDED_HINT
+            Some(STREAM_ENDED_HINT)
         );
     }
 
@@ -142,9 +139,9 @@ mod tests {
         assert_eq!(error.to_string(), relative().to_string());
         let hint = relative().hint().expect("the home error has a hint");
         assert!(hint.contains("FUZ_HOME"), "{hint}");
-        assert_eq!(error.hint(), hint);
+        assert_eq!(error.hint(), Some(hint));
 
         let hintless = ClientError::from(FuzHomeError::DaemonInfoInvalidPid(0));
-        assert_eq!(hintless.hint(), "");
+        assert_eq!(hintless.hint(), None);
     }
 }

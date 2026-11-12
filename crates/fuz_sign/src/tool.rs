@@ -317,7 +317,7 @@ mod tests {
             "{err:?}"
         );
         assert_eq!(
-            err.hint().map(|hint| hint.to_string()).as_deref(),
+            err.hint().as_deref(),
             Some("Use a writable backend: a local path, forge://, or ssh://")
         );
         assert_eq!(std::fs::read_dir(&scratch_root).unwrap().count(), 0);
@@ -637,7 +637,7 @@ mod tests {
         );
         let musl = ReleaseTarget::linux(host.arch(), Libc::Musl);
         assert_eq!(
-            err.hint().unwrap().to_string(),
+            err.hint().unwrap(),
             format!("pass --target {musl}, or --target {host} for a static glibc build")
         );
         assert!(!root.exists(), "storage was written to");

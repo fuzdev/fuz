@@ -13,8 +13,6 @@
 //!
 //! [`format_error_chain`] is the message each binary prints after `error:`.
 
-use std::fmt;
-
 use crate::text::{escape_message, truncate};
 
 /// Most bytes of one cause [`format_error_chain`] prints, before it is
@@ -123,29 +121,6 @@ pub fn parse_env_args<T: argh::TopLevelCommand>(
     parse_args(&argv).map_err(|exit| exit.report(usage_exit))
 }
 
-/// A user-facing hint — advice for fixing the error just printed.
-///
-/// `Cow`-shaped (`Static` | `Owned`) so the common compile-time-constant case
-/// stays allocation-free while interpolated hints still own their `String`.
-/// Hint strings carry *advice only*: the print site owns the `hint:` label, so
-/// don't embed `"hint:"` in the message.
-#[derive(Debug)]
-pub enum HintMessage {
-    /// A compile-time constant hint — no allocation.
-    Static(&'static str),
-    /// An interpolated hint that owns its string.
-    Owned(String),
-}
-
-impl fmt::Display for HintMessage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Static(s) => write!(f, "{s}"),
-            Self::Owned(s) => write!(f, "{s}"),
-        }
-    }
-}
-
 /// The message a CLI prints after `error:` — `error`'s text, then each cause
 /// in its source chain, `: `-joined.
 ///
@@ -190,6 +165,12 @@ pub fn format_error_chain(error: &dyn std::error::Error) -> String {
 /// The lines a binary prints to stderr for a failure: `error: ` and the
 /// [`format_error_chain`] of `error`, then `hint: ` and `hint` when there is
 /// one. Each line ends in a newline.
+///
+/// `hint` is advice for fixing the error, and only advice: this function owns
+/// the `hint:` label, so the text doesn't carry one. An error's `hint()`
+/// returns `Option<&'static str>` when every hint is a constant, or
+/// `Option<Cow<'static, str>>` when some interpolate; a call site passes
+/// `e.hint().as_deref()` for the latter.
 #[must_use]
 pub fn format_failure(error: &dyn std::error::Error, hint: Option<&str>) -> String {
     let mut text = format!("error: {}\n", format_error_chain(error));
@@ -214,6 +195,8 @@ pub fn report_failure(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt;
+
     use super::*;
 
     /// A CLI in the shape of the fuz binaries' top-level commands.
@@ -298,17 +281,6 @@ mod tests {
 
         let exit = parse_args::<TestCli>(&[]).unwrap_err();
         assert!(matches!(exit, ArgsExit::Usage(_)), "{exit:?}");
-    }
-
-    #[test]
-    fn display_renders_both_variants_as_the_bare_advice() {
-        // Both arms render the advice verbatim — no `hint:` label (the print
-        // site owns that).
-        assert_eq!(HintMessage::Static("run foo").to_string(), "run foo");
-        assert_eq!(
-            HintMessage::Owned("run bar".to_string()).to_string(),
-            "run bar"
-        );
     }
 
     /// An error with a fixed message and an optional source, standing in for

@@ -7,8 +7,8 @@ use crate::platform::{
 use crate::vcs::VcsError;
 use fuz_crypto::ContentHash;
 use fuz_home::FuzHomeError;
-use fuz_sys::cli::HintMessage;
 use fuz_sys::file_lock::FileLockError;
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 /// Errors specific to artifact operations
@@ -292,46 +292,46 @@ impl ArtifactError {
     /// `CliError::hint()` delegates here, and the release chain reaches it via
     /// `ReleaseError::hint()`, so the same error reads identically on every path.
     #[must_use]
-    pub fn hint(&self) -> Option<HintMessage> {
+    pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
             // The holder pid is interpolated, so this case owns its `String`.
-            Self::InProgress { pid } => Some(HintMessage::Owned(pid.map_or_else(
+            Self::InProgress { pid } => Some(Cow::Owned(pid.map_or_else(
                 || "wait for the other fuz operation to finish (holder pid unknown)".to_string(),
                 |p| format!("wait for the other fuz operation to finish or kill pid {p}"),
             ))),
-            Self::NotFound(_) => Some(HintMessage::Static(
+            Self::NotFound(_) => Some(Cow::Borrowed(
                 "use 'fuz artifact list' to see available artifacts",
             )),
             Self::AmbiguousPrefix { .. } => {
-                Some(HintMessage::Static("use more characters to disambiguate"))
+                Some(Cow::Borrowed("use more characters to disambiguate"))
             }
-            Self::PrefixTooShort { .. } => Some(HintMessage::Static(
+            Self::PrefixTooShort { .. } => Some(Cow::Borrowed(
                 "use at least 8 characters (e.g. 'fuz artifact use abc123de')",
             )),
             Self::IntegrityFailed { .. } | Self::BinaryIntegrityFailed { .. } => {
-                Some(HintMessage::Static(
+                Some(Cow::Borrowed(
                     "the artifact may be corrupted; run 'fuz artifact build' for a fresh one",
                 ))
             }
-            Self::StoreEntryNotDir { .. } => Some(HintMessage::Static(
+            Self::StoreEntryNotDir { .. } => Some(Cow::Borrowed(
                 "fuz keeps each artifact and tool install as a real directory; remove this entry, then rebuild or reinstall",
             )),
-            Self::CurrentNotStoreLink { .. } => Some(HintMessage::Static(
+            Self::CurrentNotStoreLink { .. } => Some(Cow::Borrowed(
                 "fuz did not write this `current`; remove it, then reinstall or switch with fuz",
             )),
-            Self::InvalidStoreName { .. } => Some(HintMessage::Static(
+            Self::InvalidStoreName { .. } => Some(Cow::Borrowed(
                 "an artifact or tool install is named by its content hash: `v1-` and 64 hex characters",
             )),
-            Self::NotRegularFile(_) => Some(HintMessage::Static(
+            Self::NotRegularFile(_) => Some(Cow::Borrowed(
                 "the install was modified after fuz wrote it; rebuild or reinstall it",
             )),
-            Self::MetadataTooLarge { .. } => Some(HintMessage::Static(
+            Self::MetadataTooLarge { .. } => Some(Cow::Borrowed(
                 "the meta.json file appears corrupted or tampered",
             )),
-            Self::ReservedBinaryName { .. } => Some(HintMessage::Static(
+            Self::ReservedBinaryName { .. } => Some(Cow::Borrowed(
                 "a tool cannot install a binary under a name the fuz self artifact links in ~/.fuz/bin; do not install it",
             )),
-            Self::InvalidBinaryName { .. } => Some(HintMessage::Static(
+            Self::InvalidBinaryName { .. } => Some(Cow::Borrowed(
                 "a binary name is A-Za-z0-9._-, starting with a letter or digit; do not install it",
             )),
             // The producer-side refusal: the hint names the `--target` that
@@ -341,29 +341,25 @@ impl ArtifactError {
                 found,
                 mismatch,
                 ..
-            } => Some(HintMessage::Owned(publish_target_hint(
-                *found, *target, *mismatch,
-            ))),
-            Self::BinaryUnreadable { .. } => Some(HintMessage::Static(
+            } => Some(Cow::Owned(publish_target_hint(*found, *target, *mismatch))),
+            Self::BinaryUnreadable { .. } => Some(Cow::Borrowed(
                 "a release binary is a 64-bit ELF (x86_64 or aarch64 Linux, glibc or musl) or \
                  Mach-O (x86_64 or arm64 macOS) executable; publish the built executable itself",
             )),
-            Self::UnsupportedTarget(_) => Some(HintMessage::Static(
+            Self::UnsupportedTarget(_) => Some(Cow::Borrowed(
                 "name one of the supported targets, exactly as listed",
             )),
-            Self::MissingBinary { .. } | Self::InvalidBinary { .. } => Some(HintMessage::Static(
+            Self::MissingBinary { .. } | Self::InvalidBinary { .. } => Some(Cow::Borrowed(
                 "run 'fuz artifact build' to create a new artifact",
             )),
-            Self::RustcFailed => Some(HintMessage::Static(
-                "ensure rustc is installed and in your PATH",
-            )),
-            Self::InsufficientSpace { .. } => Some(HintMessage::Static(
-                "free up disk space and re-run the command",
-            )),
-            Self::Vcs(VcsError::UnreadableFile { .. }) => Some(HintMessage::Static(
-                "fix file permissions or add to .gitignore",
-            )),
-            Self::FuzHome(e) => e.hint().map(HintMessage::Static),
+            Self::RustcFailed => Some(Cow::Borrowed("ensure rustc is installed and in your PATH")),
+            Self::InsufficientSpace { .. } => {
+                Some(Cow::Borrowed("free up disk space and re-run the command"))
+            }
+            Self::Vcs(VcsError::UnreadableFile { .. }) => {
+                Some(Cow::Borrowed("fix file permissions or add to .gitignore"))
+            }
+            Self::FuzHome(e) => e.hint().map(Cow::Borrowed),
             _ => None,
         }
     }

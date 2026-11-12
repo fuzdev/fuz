@@ -1,8 +1,8 @@
 //! Error types for release operations
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 
-use fuz_sys::cli::HintMessage;
 use fuz_sys::text::quoted;
 
 use crate::release_log::{
@@ -813,28 +813,26 @@ pub enum ReleaseError {
 impl ReleaseError {
     /// Returns user-facing hint for how to fix this error.
     ///
-    /// `HintMessage` so the `ArtifactError` arm can carry its interpolated
-    /// `Owned` hint; the static-leaf siblings adapt at this crate boundary.
-    pub fn hint(&self) -> Option<HintMessage> {
+    /// A `Cow` so the `ArtifactError` arm can carry its interpolated `Owned`
+    /// hint; the static-leaf siblings lift theirs with `Cow::Borrowed`.
+    pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
-            Self::Manifest(e) => e.hint().map(HintMessage::Static),
-            Self::Tarball(e) => e.hint().map(HintMessage::Static),
-            Self::ReleaseLog(e) => e.hint().map(HintMessage::Static),
-            Self::LogWrite(e) => e.hint().map(HintMessage::Static),
+            Self::Manifest(e) => e.hint().map(Cow::Borrowed),
+            Self::Tarball(e) => e.hint().map(Cow::Borrowed),
+            Self::ReleaseLog(e) => e.hint().map(Cow::Borrowed),
+            Self::LogWrite(e) => e.hint().map(Cow::Borrowed),
             Self::Artifact(e) => e.hint(),
-            Self::Storage(e) => e.hint().map(HintMessage::Static),
-            Self::FuzHome(e) => e.hint().map(HintMessage::Static),
-            Self::ToolManifestMismatch { .. } => Some(HintMessage::Static(
+            Self::Storage(e) => e.hint().map(Cow::Borrowed),
+            Self::FuzHome(e) => e.hint().map(Cow::Borrowed),
+            Self::ToolManifestMismatch { .. } => Some(Cow::Borrowed(
                 "the published manifest doesn't match the tool name - do not install",
             )),
-            Self::ToolNotInstalled(_) => {
-                Some(HintMessage::Static("run 'fuz tool install <name>' first"))
-            }
-            Self::CurrentUnreadable { .. } => Some(HintMessage::Static(
+            Self::ToolNotInstalled(_) => Some(Cow::Borrowed("run 'fuz tool install <name>' first")),
+            Self::CurrentUnreadable { .. } => Some(Cow::Borrowed(
                 "re-run with --force to reinstall over the unreadable state, or re-bootstrap",
             )),
             Self::NoReleaseForTarget { tool, target, .. } => {
-                Some(HintMessage::Owned(tool.as_deref().map_or_else(
+                Some(Cow::Owned(tool.as_deref().map_or_else(
                     || format!("no release published for {target}; publish one"),
                     |tool| {
                         format!(
@@ -845,7 +843,7 @@ impl ReleaseError {
                     },
                 )))
             }
-            Self::MislabelledBinary { target, .. } => Some(HintMessage::Owned(format!(
+            Self::MislabelledBinary { target, .. } => Some(Cow::Owned(format!(
                 "this release's binaries are not for {target}: the signature is valid but the \
                  label is wrong; report it to the publisher, don't retry"
             ))),
@@ -1696,8 +1694,8 @@ mod tests {
             assert_eq!(hint.is_none(), silent, "hint for: {description}");
             let wrapped = ReleaseError::from(error);
             assert_eq!(
-                wrapped.hint().map(|h| h.to_string()),
-                hint.map(str::to_string),
+                wrapped.hint().as_deref(),
+                hint,
                 "wrapper hint differs for: {description}"
             );
         }

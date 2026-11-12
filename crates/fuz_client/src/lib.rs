@@ -1082,7 +1082,7 @@ mod tests {
         let err = result.expect_err("refused");
         assert!(matches!(err, ClientError::WatchRefused { .. }), "{err:?}");
         assert!(err.to_string().contains("roots"), "{err}");
-        assert!(!err.hint().is_empty());
+        assert!(err.hint().is_some());
     }
 
     #[tokio::test]

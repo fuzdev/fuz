@@ -3062,7 +3062,7 @@ mod tests {
             fuz_sys::cli::format_error_chain(&wrapped),
             wrapped.to_string()
         );
-        let hint = wrapped.hint().map(|h| h.to_string()).unwrap_or_default();
+        let hint = wrapped.hint().unwrap_or_default();
         assert!(hint.contains("https://"), "{hint}");
         assert!(
             hint.ends_with("or an existing local directory (a path or file:// URI)"),
@@ -3146,8 +3146,8 @@ mod tests {
             );
             let wrapped = crate::ReleaseError::from(error);
             assert_eq!(
-                wrapped.hint().map(|h| h.to_string()),
-                hint.map(str::to_string),
+                wrapped.hint().as_deref(),
+                hint,
                 "wrapper hint differs for: {description}"
             );
         }

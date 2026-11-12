@@ -755,7 +755,10 @@ through `report_failure`, a server with `StartupError`'s hint and exit code): ea
   own message shows bounded — stays out of `source()`.
 - **Hints** — `.hint()` exists only where some binary renders it (`fuz`,
   `fuzf`, `fuzd`, the `cargo xtask` commands, the spine servers'
-  `StartupError`); `fuzi_core`'s
+  `StartupError`). It returns `Option<&'static str>` on a leaf whose hints
+  are constants and `Option<Cow<'static, str>>` once one interpolates; the
+  first aggregator lifts a leaf's with `.map(Cow::Borrowed)`, and the print
+  site passes `e.hint().as_deref()`. `fuzi_core`'s
   `FetchError::is_permanent` drives retry classification.
 - **Classification** — `is_security_violation` (`ArchiveError` →
   `TarballError` → `ReleaseError`, plus the release log and co-signature
