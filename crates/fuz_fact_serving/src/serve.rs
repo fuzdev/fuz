@@ -313,20 +313,14 @@ async fn cell_fact_handler(
 
     let client = match state.gate.pool.get().await {
         Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = ?e, "cell_fact: pool get");
-            return fuz_http::db_unavailable_response();
-        }
+        Err(e) => return fuz_http::db_unavailable_response_with_source("cell_fact: pool get", &e),
     };
 
     // Resolve the named cell. Missing / soft-deleted → 404 (masked).
     let cell = match query_cell_get(&client, cell_id).await {
         Ok(Some(cell)) => cell,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::error!(error = ?e, "cell_fact: cell_get");
-            return fuz_http::internal_error_response();
-        }
+        Err(e) => return fuz_http::internal_error_response_with_source("cell_fact: cell_get", &e),
     };
 
     // Per-reference view check — scoped to *this* cell only. It runs before the
@@ -340,8 +334,7 @@ async fn cell_fact_handler(
         match query_cell_grant_list_for_cell(&client, cell.id).await {
             Ok(g) => Some(g),
             Err(e) => {
-                tracing::error!(error = ?e, "cell_fact: grant_list");
-                return fuz_http::internal_error_response();
+                return fuz_http::internal_error_response_with_source("cell_fact: grant_list", &e);
             }
         }
     } else {
@@ -356,8 +349,10 @@ async fn cell_fact_handler(
             // 404 (not 403) so an unviewable cell→fact edge doesn't leak.
             Ok(false) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => {
-                tracing::error!(error = ?e, "cell_fact: steward root load");
-                return fuz_http::internal_error_response();
+                return fuz_http::internal_error_response_with_source(
+                    "cell_fact: steward root load",
+                    &e,
+                );
             }
         }
     }
@@ -439,10 +434,7 @@ async fn bare_fact_handler(
 
     let client = match state.gate.pool.get().await {
         Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = ?e, "bare_fact: pool get");
-            return fuz_http::db_unavailable_response();
-        }
+        Err(e) => return fuz_http::db_unavailable_response_with_source("bare_fact: pool get", &e),
     };
 
     // Admin check, honoring `?acting=` for multi-actor admins. No actor comes
@@ -482,8 +474,7 @@ async fn resolve_admin<C: GenericClient + ?Sized>(
         fuz_auth::actor_queries::query_role_grant_find_active_for_actor(client, &actor.id)
             .await
             .map_err(|e| {
-                tracing::error!(error = ?e, "bare_fact: role_grants");
-                fuz_http::internal_error_response()
+                fuz_http::internal_error_response_with_source("bare_fact: role_grants", &e)
             })?;
     // The global grant only — a scoped `admin` row (which no grant path mints)
     // must not read every fact. Mirrors the TS route's `require_role` gate.
@@ -508,10 +499,7 @@ async fn serve_fact_bytes<C: GenericClient + ?Sized>(
     let meta = match query_get_fact_meta(client, hash).await {
         Ok(Some(m)) => m,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::error!(error = ?e, "serve_fact: get_meta");
-            return fuz_http::internal_error_response();
-        }
+        Err(e) => return fuz_http::internal_error_response_with_source("serve_fact: get_meta", &e),
     };
     let content_type = meta
         .content_type
@@ -523,8 +511,7 @@ async fn serve_fact_bytes<C: GenericClient + ?Sized>(
             Ok(Some(r)) => r,
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => {
-                tracing::error!(error = ?e, "serve_fact: get_fact");
-                return fuz_http::internal_error_response();
+                return fuz_http::internal_error_response_with_source("serve_fact: get_fact", &e);
             }
         };
         let Some(bytes) = row.bytes else {
@@ -569,7 +556,8 @@ async fn serve_fact_bytes<C: GenericClient + ?Sized>(
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
-            tracing::error!(error = %e, path = %path.display(), "serve_fact: disk open");
+            let error: &(dyn std::error::Error + 'static) = &e;
+            tracing::error!(error, path = %path.display(), "serve_fact: disk open");
             fuz_http::internal_error_response()
         }
     }

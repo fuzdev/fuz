@@ -561,7 +561,10 @@ fn process_events<W: Watcher>(
                     }
                 }
             }
-            Ok(Err(err)) => debug!(%err, "watch backend reported an error"),
+            Ok(Err(err)) => debug!(
+                error = %fuz_sys::cli::format_error_chain(&err),
+                "watch backend reported an error"
+            ),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }

@@ -448,7 +448,10 @@ pub async fn admit_upgrade(
             .map_or(UpgradeRefusal::Unavailable, UpgradeRefusal::from)
     };
     let client = pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "ws upgrade admission: pool checkout failed");
+        tracing::error!(
+            error = %fuz_sys::cli::format_error_chain(&e),
+            "ws upgrade admission: pool checkout failed"
+        );
         unavailable(&pending)
     })?;
     // The credential, then the acting actor on every endpoint (one
@@ -458,7 +461,10 @@ pub async fn admit_upgrade(
     let recheck = recheck_admission(&client, resolved, acting_actor_id, required_roles)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, "ws upgrade admission: re-check failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "ws upgrade admission: re-check failed"
+            );
             unavailable(&pending)
         })?;
     drop(client);
@@ -562,10 +568,14 @@ async fn ws_handler(
     let acting = fuz_auth::parse_acting_selector(query_first(&query_pairs, "acting"))
         .ok()
         .flatten();
-    let Ok(client) = route.dispatch.gate.pool.get().await.inspect_err(|e| {
-        tracing::error!(error = ?e, "ws upgrade actor phase: pool checkout failed");
-    }) else {
-        return fuz_http::db_unavailable_response();
+    let client = match route.dispatch.gate.pool.get().await {
+        Ok(client) => client,
+        Err(e) => {
+            return fuz_http::db_unavailable_response_with_source(
+                "ws upgrade actor phase: pool checkout failed",
+                &e,
+            );
+        }
     };
     let actor = match fuz_auth::route_helpers::require_acting_actor(
         &client,
@@ -593,8 +603,10 @@ async fn ws_handler(
             Ok(true) => {}
             Ok(false) => return fuz_http::insufficient_permissions_response(&route.required_roles),
             Err(e) => {
-                tracing::error!(error = ?e, "ws upgrade role gate: role query failed");
-                return fuz_http::internal_error_response();
+                return fuz_http::internal_error_response_with_source(
+                    "ws upgrade role gate: role query failed",
+                    &e,
+                );
             }
         }
     }

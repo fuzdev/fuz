@@ -132,7 +132,11 @@ pub fn register_audit_sse_listener(emitter: &AuditEmitter, registry: &Arc<SseReg
                     registry.broadcast(&format!("data: {json}\n\n"));
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, event_type = %event.event_type, "audit SSE: serialize failed");
+                    tracing::error!(
+                        error = %fuz_sys::cli::format_error_chain(&e),
+                        event_type = %event.event_type,
+                        "audit SSE: serialize failed"
+                    );
                 }
             }
         })
@@ -303,10 +307,14 @@ async fn audit_stream(
     // acting. (`fuz_db_admin` gates account-grain instead; that is its
     // documented deviation, not the pattern.)
     let account_id = auth.account.id;
-    let Ok(client) = state.gate.pool.get().await.inspect_err(|e| {
-        tracing::error!(error = ?e, "audit_stream: db pool error");
-    }) else {
-        return fuz_http::db_unavailable_response();
+    let client = match state.gate.pool.get().await {
+        Ok(client) => client,
+        Err(e) => {
+            return fuz_http::db_unavailable_response_with_source(
+                "audit_stream: db pool error",
+                &e,
+            );
+        }
     };
     let actor = match require_acting_actor(&client, &account_id, acting, "audit_stream").await {
         Ok(actor) => actor,
@@ -321,8 +329,10 @@ async fn audit_stream(
         Ok(true) => {}
         Ok(false) => return fuz_http::insufficient_permissions_response(&[state.required_role]),
         Err(e) => {
-            tracing::error!(error = ?e, "audit_stream: role grants query failed");
-            return fuz_http::internal_error_response();
+            return fuz_http::internal_error_response_with_source(
+                "audit_stream: role grants query failed",
+                &e,
+            );
         }
     }
 

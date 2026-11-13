@@ -651,7 +651,10 @@ pub async fn start(quiet: bool) -> Result<ExitCode, DaemonError> {
     if let Err(e) = rotate_logs(&log_path, MAX_LOG_ROTATIONS)
         && !quiet
     {
-        eprintln!("warning: failed to rotate logs: {e}");
+        eprintln!(
+            "warning: failed to rotate logs: {}",
+            fuz_sys::cli::format_error_chain(&e)
+        );
     }
 
     // No-follow, so a link planted after the check above is refused too.
@@ -1103,7 +1106,10 @@ pub async fn status(json: bool, quiet: bool, verbose: bool) -> Result<ExitCode, 
                     info.pid,
                     info.socket_path.display()
                 );
-                eprintln!("  warning: failed to get status: {e}");
+                eprintln!(
+                    "  warning: failed to get status: {}",
+                    fuz_sys::cli::format_error_chain(&e)
+                );
             }
         }
     }

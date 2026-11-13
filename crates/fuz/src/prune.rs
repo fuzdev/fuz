@@ -150,12 +150,16 @@ pub fn cmd_prune(args: &Prune) -> Result<(), CliError> {
         // always a child of `artifacts/` (the meta's hash is integrity-checked
         // too, but this does not lean on that).
         let removal = get_artifact_dir(&meta.hash)
-            .map_err(|e| std::io::Error::other(e.to_string()))
+            .map_err(std::io::Error::other)
             .and_then(|artifact_path| fs::remove_dir_all(&artifact_path));
         match removal {
             Ok(()) => removed += 1,
             Err(e) => {
-                eprintln!("warning: failed to remove {}: {e}", meta.short_hash());
+                eprintln!(
+                    "warning: failed to remove {}: {}",
+                    meta.short_hash(),
+                    fuz_sys::cli::format_error_chain(&e)
+                );
                 failed += 1;
             }
         }

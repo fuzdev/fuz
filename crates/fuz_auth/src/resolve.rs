@@ -364,14 +364,17 @@ async fn resolve_cookie_from_headers(
     let session_hash = hash_session_token(&cookie.token).as_str().to_owned();
 
     let client = pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "cookie auth pool error");
+        tracing::error!(error = %fuz_sys::cli::format_error_chain(&e), "cookie auth pool error");
         UNAVAILABLE
     })?;
 
     let Some(session) = query_session_get_valid(&client, &session_hash)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, "cookie auth session query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "cookie auth session query failed"
+            );
             FAULT
         })?
     else {
@@ -381,7 +384,10 @@ async fn resolve_cookie_from_headers(
     let Some(account) = query_account_by_id(&client, &session.account_id)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, "cookie auth account query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "cookie auth account query failed"
+            );
             FAULT
         })?
     else {
@@ -443,14 +449,17 @@ async fn resolve_bearer_from_headers(
     let token_hash = hash_api_token(raw_token);
 
     let client = pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "bearer auth pool error");
+        tracing::error!(error = %fuz_sys::cli::format_error_chain(&e), "bearer auth pool error");
         UNAVAILABLE
     })?;
 
     let Some(token_row) = query_validate_api_token(&client, &token_hash)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, "bearer auth token query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "bearer auth token query failed"
+            );
             FAULT
         })?
     else {
@@ -460,7 +469,10 @@ async fn resolve_bearer_from_headers(
     let Some(account) = query_account_by_id(&client, &token_row.account_id)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, "bearer auth account query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "bearer auth account query failed"
+            );
             FAULT
         })?
     else {
@@ -526,14 +538,20 @@ async fn resolve_daemon_token_from_headers(
     };
 
     let client = pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "daemon token auth pool error");
+        tracing::error!(
+            error = %fuz_sys::cli::format_error_chain(&e),
+            "daemon token auth pool error"
+        );
         UNAVAILABLE
     })?;
 
     let Some(account) = query_account_by_id(&client, &keeper_account_id)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, "daemon token account query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "daemon token account query failed"
+            );
             FAULT
         })?
     else {
@@ -772,7 +790,10 @@ async fn public_actor_context(
     let client = match pool.get().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(error = ?e, "public request context pool error");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "public request context pool error"
+            );
             return Err(PublicContextFault::CallerUnavailable);
         }
     };
@@ -785,7 +806,10 @@ async fn public_actor_context(
     let actors = match query_active_actors_by_account(&client, &account.id).await {
         Ok(actors) => actors,
         Err(e) => {
-            tracing::error!(error = ?e, "public request context actor query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "public request context actor query failed"
+            );
             return Err(PublicContextFault::CallerRead);
         }
     };
@@ -797,7 +821,10 @@ async fn public_actor_context(
     let role_grants = match query_role_grant_find_active_for_actor(&client, &actor.id).await {
         Ok(grants) => grants,
         Err(e) => {
-            tracing::error!(error = ?e, "public request context role-grant query failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "public request context role-grant query failed"
+            );
             return Err(PublicContextFault::CallerRead);
         }
     };

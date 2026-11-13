@@ -6,7 +6,9 @@ use axum::Json;
 use axum::extract::{Extension, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use fuz_http::{db_unavailable_response, internal_error_response, query_first};
+use fuz_http::{
+    db_unavailable_response_with_source, internal_error_response_with_source, query_first,
+};
 use serde::Serialize;
 
 use crate::account_queries::{ActorSummary, RoleGrantSummary, query_account_summary};
@@ -102,8 +104,7 @@ pub async fn status_handler(
     let client = match state.gate.pool.get().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(error = ?e, "status: db pool error");
-            return db_unavailable_response();
+            return db_unavailable_response_with_source("status: db pool error", &e);
         }
     };
 
@@ -130,8 +131,7 @@ pub async fn status_handler(
                 .into_response();
         }
         Err(e) => {
-            tracing::error!(error = ?e, "status: account summary query failed");
-            return internal_error_response();
+            return internal_error_response_with_source("status: account summary query failed", &e);
         }
     };
 
@@ -159,8 +159,7 @@ pub async fn status_handler(
     let resolved_actor = match resolved {
         Ok(a) => a,
         Err(e) => {
-            tracing::error!(error = ?e, "status: actor resolution failed");
-            return internal_error_response();
+            return internal_error_response_with_source("status: actor resolution failed", &e);
         }
     };
 
@@ -169,8 +168,10 @@ pub async fn status_handler(
             let role_grants = match query_role_grant_summaries_for_actor(&client, &actor.id).await {
                 Ok(g) => g,
                 Err(e) => {
-                    tracing::error!(error = ?e, "status: role grant summaries query failed");
-                    return internal_error_response();
+                    return internal_error_response_with_source(
+                        "status: role grant summaries query failed",
+                        &e,
+                    );
                 }
             };
             (

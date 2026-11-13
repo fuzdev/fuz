@@ -145,7 +145,10 @@ impl PostCommitEffects {
             futures::future::join_all(futures).await;
         });
         if let Err(e) = task.await {
-            tracing::error!(error = %e, "post-commit effect task failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "post-commit effect task failed"
+            );
         }
     }
 

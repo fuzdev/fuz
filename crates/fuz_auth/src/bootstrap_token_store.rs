@@ -59,7 +59,10 @@ pub trait BootstrapTokenStore: Send + Sync {
 pub(crate) async fn read_bootstrap_token_file(path: PathBuf) -> std::io::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || {
         fuz_sys::secure_file::load_secure_file(&path).map_err(|e| {
-            tracing::warn!(error = %e, "bootstrap token file rejected");
+            tracing::warn!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "bootstrap token file rejected"
+            );
             std::io::Error::other(e)
         })
     })

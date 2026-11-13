@@ -264,7 +264,10 @@ async fn handle(params: Value, ctx: ActionContext<'_>) -> Result<Value, JsonrpcE
     // server code — a malformed/wrong-shape reply becomes an error here,
     // never an unvalidated `Value` handed downstream, never a panic.
     let reply: PingResponse = serde_json::from_value(reply_value).map_err(|e| {
-        tracing::debug!(error = %e, "peer/ping reply did not match PingResponse");
+        tracing::debug!(
+            error = %fuz_sys::cli::format_error_chain(&e),
+            "peer/ping reply did not match PingResponse"
+        );
         let mut err = validation_error(PEER_PING_INVALID_REPLY_MESSAGE);
         err.data = Some(serde_json::json!({ "reason": REASON_PEER_PING_INVALID_REPLY }));
         err

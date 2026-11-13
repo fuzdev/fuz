@@ -437,14 +437,23 @@ impl FactStore for PgFactStore {
                 Ok(Some(path)) => path,
                 Ok(None) => return Ok(None),
                 Err(e) => {
-                    tracing::warn!(hash = %hash.to_prefixed(), error = %e, "PgFactStore::get disk-backed row unreadable; treating as not-found");
+                    tracing::warn!(
+                        hash = %hash.to_prefixed(),
+                        error = %fuz_sys::cli::format_error_chain(&e),
+                        "PgFactStore::get disk-backed row unreadable; treating as not-found"
+                    );
                     return Ok(None);
                 }
             };
             let bytes = match tokio::fs::read(&path).await {
                 Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!(hash = %hash.to_prefixed(), url = external_url, error = %e, "PgFactStore::get fetch failed");
+                    tracing::warn!(
+                        hash = %hash.to_prefixed(),
+                        url = external_url,
+                        error = %fuz_sys::cli::format_error_chain(&e),
+                        "PgFactStore::get fetch failed"
+                    );
                     return Ok(None);
                 }
             };

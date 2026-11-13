@@ -206,7 +206,10 @@ pub async fn run<S: Sidecar + 'static>(
     accept_task.abort();
     let _ = accept_task.await;
     if let Err(err) = remove_socket_if_exists(&config.socket_path).await {
-        warn!(error = %err, "failed to remove socket on shutdown");
+        warn!(
+            error = %fuz_sys::cli::format_error_chain(&err),
+            "failed to remove socket on shutdown"
+        );
     }
     // Release the path with the socket, not at exit: the lock guards the window
     // in which this daemon owns the path, and that window just closed. Held

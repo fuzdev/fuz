@@ -68,7 +68,10 @@ fn scan_artifact_dirs() -> Result<Vec<ArtifactDirEntry>, ArtifactError> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("warning: skipping unreadable artifact entry: {e}");
+                eprintln!(
+                    "warning: skipping unreadable artifact entry: {}",
+                    fuz_sys::cli::format_error_chain(&e)
+                );
                 continue;
             }
         };
@@ -104,7 +107,11 @@ fn read_artifact_meta(entry: &ArtifactDirEntry) -> Option<ArtifactMeta> {
     match ArtifactMeta::read(&entry.path) {
         Ok(meta) => Some(meta),
         Err(e) => {
-            eprintln!("warning: skipping corrupt artifact {}: {e}", entry.name);
+            eprintln!(
+                "warning: skipping corrupt artifact {}: {}",
+                entry.name,
+                fuz_sys::cli::format_error_chain(&e)
+            );
             None
         }
     }
@@ -272,7 +279,10 @@ pub fn cleanup_incomplete() -> Result<usize, ArtifactError> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("warning: skipping unreadable artifact entry during cleanup: {e}");
+                eprintln!(
+                    "warning: skipping unreadable artifact entry during cleanup: {}",
+                    fuz_sys::cli::format_error_chain(&e)
+                );
                 continue;
             }
         };
@@ -283,7 +293,10 @@ pub fn cleanup_incomplete() -> Result<usize, ArtifactError> {
             match fs::remove_dir_all(entry.path()) {
                 Ok(()) => removed += 1,
                 Err(e) => {
-                    eprintln!("warning: failed to remove incomplete artifact {name_str}: {e}");
+                    eprintln!(
+                        "warning: failed to remove incomplete artifact {name_str}: {}",
+                        fuz_sys::cli::format_error_chain(&e)
+                    );
                 }
             }
         }

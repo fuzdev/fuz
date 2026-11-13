@@ -457,7 +457,7 @@ async fn accept_until_cancelled(
             }
             Err(error) if is_connection_error(&error) => {}
             Err(error) => {
-                tracing::error!("accept error: {error}");
+                tracing::error!(error = %fuz_sys::cli::format_error_chain(&error), "accept error");
                 tokio::select! {
                     () = token.cancelled() => return,
                     () = tokio::time::sleep(ACCEPT_ERROR_BACKOFF) => {}

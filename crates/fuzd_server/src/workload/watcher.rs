@@ -189,7 +189,8 @@ async fn collect(
                             workload_id,
                         );
                         warn!(
-                            workload_id, %err,
+                            workload_id,
+                            error = %fuz_sys::cli::format_error_chain(&err),
                             hint = err.hint().unwrap_or("paths missing — nothing to watch"),
                             "watch source failed to start; retrying"
                         );
@@ -323,7 +324,10 @@ fn fanout(
                 );
             }
             Err(err) => {
-                warn!(error = %err, "encode watch event frame failed; resyncing subscribers");
+                warn!(
+                    error = %fuz_sys::cli::format_error_chain(&err),
+                    "encode watch event frame failed; resyncing subscribers"
+                );
                 flag_all_for_resync(subs);
             }
         }
@@ -370,7 +374,12 @@ fn snapshot_frames(
         workload_id,
         snapshot: snapshot.clone(),
     })
-    .map_err(|err| warn!(error = %err, "encode watch snapshot frame failed"))
+    .map_err(|err| {
+        warn!(
+            error = %fuz_sys::cli::format_error_chain(&err),
+            "encode watch snapshot frame failed"
+        );
+    })
     .ok()?;
     if body.len() > budget {
         warn!(
@@ -445,7 +454,10 @@ fn fanout_coverage(subs: &mut Vec<Subscriber>, coverage: WatchCoverage, workload
         Err(err) => {
             // Unreachable for this tiny POD; flag resync so the coverage still
             // reaches subscribers via the next snapshot frame.
-            warn!(error = %err, "encode watch coverage frame failed");
+            warn!(
+                error = %fuz_sys::cli::format_error_chain(&err),
+                "encode watch coverage frame failed"
+            );
             flag_all_for_resync(subs);
             return;
         }

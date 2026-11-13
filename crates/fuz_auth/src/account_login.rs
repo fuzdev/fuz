@@ -16,7 +16,7 @@ use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use fuz_db::commit_checked;
-use fuz_http::{db_unavailable_response, internal_error_response};
+use fuz_http::{db_unavailable_response_with_source, internal_error_response_with_source};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -198,16 +198,15 @@ async fn login_inner(
     // transaction, so the row could change between it and the verify either
     // way, and the session insert below runs in its own transaction.
     let account_with_hash = {
-        let client = state.gate.pool.get().await.map_err(|e| {
-            tracing::error!(error = ?e, "login: db pool error");
-            db_unavailable_response()
-        })?;
+        let client = state
+            .gate
+            .pool
+            .get()
+            .await
+            .map_err(|e| db_unavailable_response_with_source("login: db pool error", &e))?;
         query_account_with_password_hash(&client, &canonical_username)
             .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "login: account query failed");
-                internal_error_response()
-            })?
+            .map_err(|e| internal_error_response_with_source("login: account query failed", &e))?
     };
 
     let resolved_account_id: Option<uuid::Uuid> = account_with_hash.as_ref().map(|r| r.id);
@@ -286,10 +285,12 @@ async fn login_inner(
     // on a bare pooled client, where the pair would have had no atomicity at
     // all. It bounds one creator, not concurrent ones — see
     // `query_session_enforce_limit`.
-    let mut client = state.gate.pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "login: db pool error");
-        db_unavailable_response()
-    })?;
+    let mut client = state
+        .gate
+        .pool
+        .get()
+        .await
+        .map_err(|e| db_unavailable_response_with_source("login: db pool error", &e))?;
     let session = async {
         let tx = client.transaction().await?;
         let session = create_capped_session(&tx, &account.id).await?;
@@ -297,10 +298,7 @@ async fn login_inner(
         Ok::<_, fuz_db::DbError>(session)
     }
     .await
-    .map_err(|e| {
-        tracing::error!(error = ?e, "login: session creation failed");
-        internal_error_response()
-    })?;
+    .map_err(|e| internal_error_response_with_source("login: session creation failed", &e))?;
 
     // The sessions the cap evicted are gone from the table, but not from the
     // connections they opened — a WebSocket keeps the authority it resolved at

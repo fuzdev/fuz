@@ -119,7 +119,11 @@ pub fn notification<T: ?Sized + Serialize>(method: &str, params: &T) -> String {
     match serde_json::to_string(&n) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(error = %e, method, "failed to serialize JSON-RPC notification");
+            tracing::warn!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                method,
+                "failed to serialize JSON-RPC notification"
+            );
             String::new()
         }
     }
@@ -152,7 +156,11 @@ pub fn request_frame(method: &str, params: &Value, id: &Value) -> String {
     match serde_json::to_string(&r) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(error = %e, method, "failed to serialize JSON-RPC request frame");
+            tracing::warn!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                method,
+                "failed to serialize JSON-RPC request frame"
+            );
             String::new()
         }
     }

@@ -493,6 +493,8 @@ fn render_error(e: &FuziError, json: bool) -> ExitCode {
     if json {
         println!("{}", to_pretty(&error_json(e)));
     } else {
+        // `Display`, not the chain: every `FuziError` with a source prints it,
+        // escaped, in its own text
         eprintln!("error: {e}");
     }
     ExitCode::from(e.exit_code())

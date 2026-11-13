@@ -12,7 +12,7 @@ use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use fuz_http::internal_error_response;
+use fuz_http::{db_unavailable_response_with_source, internal_error_response_with_source};
 
 use crate::auth_gate::AuthGate;
 use crate::bootstrap::{BootstrapInput, BootstrapOptions, bootstrap_handler};
@@ -113,16 +113,12 @@ async fn bootstrap_route(
         },
         // a failed checkout is the database unavailable, not a fault: 503
         Err(BootstrapError::Pool(e)) => {
-            tracing::error!(error = ?e, "bootstrap failed: db pool checkout");
-            fuz_http::db_unavailable_response()
+            db_unavailable_response_with_source("bootstrap failed: db pool checkout", &e)
         }
         Err(
             e @ (BootstrapError::Query(_)
             | BootstrapError::PasswordHash(_)
             | BootstrapError::Commit(_)),
-        ) => {
-            tracing::error!(error = ?e, "bootstrap failed");
-            internal_error_response()
-        }
+        ) => internal_error_response_with_source("bootstrap failed", &e),
     }
 }

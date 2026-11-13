@@ -67,7 +67,7 @@ fn verify_binary(name: &str, path: &std::path::Path, expected: &fuz_artifact::Co
             false
         }
         Err(e) => {
-            println!("  {name}: ERROR ({e})");
+            println!("  {name}: ERROR ({})", fuz_sys::cli::format_error_chain(&e));
             false
         }
     }

@@ -763,10 +763,10 @@ pub fn dropped_row_json(input: &AuditLogInput) -> Value {
 /// Log a dropped pool write: one `error` line carrying the whole row
 /// ([`dropped_row_json`]) and the cause. Twin of the TS emitter's
 /// `audit row dropped` line.
-fn log_dropped_row(input: &AuditLogInput, error: &dyn std::fmt::Debug) {
+fn log_dropped_row(input: &AuditLogInput, error: &(dyn std::error::Error + 'static)) {
     tracing::error!(
         row = %dropped_row_json(input),
-        error = ?error,
+        error = %fuz_sys::cli::format_error_chain(error),
         "audit row dropped",
     );
 }

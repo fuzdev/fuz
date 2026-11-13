@@ -217,7 +217,8 @@ pub(crate) fn pool_config(database_url: &str) -> Result<Config, DbError> {
 pub async fn commit_checked(tx: deadpool_postgres::Transaction<'_>) -> Result<(), DbError> {
     if let Err(probe_err) = tx.batch_execute("SELECT 1").await {
         if let Err(rollback_err) = tx.rollback().await {
-            tracing::warn!(error = ?rollback_err, "db tx rollback failed");
+            let error: &(dyn std::error::Error + 'static) = &rollback_err;
+            tracing::warn!(error, "db tx rollback failed");
         }
         return Err(
             if probe_err.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) {

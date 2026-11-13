@@ -395,7 +395,10 @@ pub async fn bootstrap_handler(
     // configured location was logged at wiring time, so this log
     // line doesn't need to thread the path through the trait.
     if let Err(e) = token_store.delete_token().await {
-        tracing::error!(error = %e, "CRITICAL: failed to delete bootstrap token");
+        tracing::error!(
+            error = %fuz_sys::cli::format_error_chain(&e),
+            "CRITICAL: failed to delete bootstrap token"
+        );
     }
 
     let _ = options

@@ -140,11 +140,19 @@ async fn sample(source: &Arc<dyn ObserverSource>, domain: ObserverDomain) -> Opt
     match result {
         Ok(Ok(sample)) => Some(sample),
         Ok(Err(err)) => {
-            warn!(error = %err, ?domain, "observer sample failed");
+            warn!(
+                error = %fuz_sys::cli::format_error_chain(&err),
+                ?domain,
+                "observer sample failed"
+            );
             None
         }
         Err(err) => {
-            warn!(error = %err, ?domain, "observer sample task failed");
+            warn!(
+                error = %fuz_sys::cli::format_error_chain(&err),
+                ?domain,
+                "observer sample task failed"
+            );
             None
         }
     }
@@ -223,7 +231,7 @@ fn fanout(
     ) {
         Ok(delta) => delta,
         Err(err) => {
-            warn!(error = %err, "encode delta frame failed");
+            warn!(error = %fuz_sys::cli::format_error_chain(&err), "encode delta frame failed");
             return;
         }
     };
@@ -238,7 +246,7 @@ fn fanout(
             split_event_frame,
         )
         .unwrap_or_else(|err| {
-            warn!(error = %err, "encode event frame failed");
+            warn!(error = %fuz_sys::cli::format_error_chain(&err), "encode event frame failed");
             SplitBodies::default()
         })
     };
@@ -308,7 +316,12 @@ fn snapshot_frames(
 ) -> Option<Vec<EncodedFrame>> {
     let encode = |frame: &ObserverSnapshotFrame| {
         encode_payload(frame)
-            .map_err(|err| warn!(error = %err, "encode snapshot frame failed"))
+            .map_err(|err| {
+                warn!(
+                    error = %fuz_sys::cli::format_error_chain(&err),
+                    "encode snapshot frame failed"
+                );
+            })
             .ok()
     };
     let whole = ObserverSnapshotFrame {
@@ -345,7 +358,12 @@ fn snapshot_frames(
         keep /= 2;
     };
     let rest = split_encode(snapshot_rest(snapshot, keep), budget, split_delta_frame)
-        .map_err(|err| warn!(error = %err, "encode delta frame failed"))
+        .map_err(|err| {
+            warn!(
+                error = %fuz_sys::cli::format_error_chain(&err),
+                "encode delta frame failed"
+            );
+        })
         .ok()?;
     if rest.dropped > 0 {
         warn!(

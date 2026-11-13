@@ -12,7 +12,7 @@ use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use fuz_http::internal_error_response;
+use fuz_http::{internal_error_response, internal_error_response_with_source};
 use serde_json::json;
 
 use crate::auth_gate::AuthGate;
@@ -123,14 +123,10 @@ async fn signup_route(
         },
         // a failed checkout is the database unavailable, not a fault: 503
         Err(SignupError::Pool(e)) => {
-            tracing::error!(error = ?e, "signup failed: db pool checkout");
-            fuz_http::db_unavailable_response()
+            fuz_http::db_unavailable_response_with_source("signup failed: db pool checkout", &e)
         }
         Err(
             e @ (SignupError::Query(_) | SignupError::PasswordHash(_) | SignupError::Commit(_)),
-        ) => {
-            tracing::error!(error = ?e, "signup failed");
-            internal_error_response()
-        }
+        ) => internal_error_response_with_source("signup failed", &e),
     }
 }

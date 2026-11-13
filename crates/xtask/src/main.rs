@@ -373,7 +373,10 @@ fn install(opts: &Install) -> Result<()> {
                 );
             }
             Err(e) => {
-                eprintln!("  warning: could not run fuzd: {e}");
+                eprintln!(
+                    "  warning: could not run fuzd: {}",
+                    fuz_sys::cli::format_error_chain(&e)
+                );
             }
         }
     }

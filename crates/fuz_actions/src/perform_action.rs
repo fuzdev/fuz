@@ -538,7 +538,11 @@ async fn dispatch_in_tx<'a>(
         },
         Err(e) => {
             if let Err(rb) = tx.rollback().await {
-                tracing::warn!(error = ?rb, method = spec.method, "db tx rollback failed");
+                tracing::warn!(
+                    error = %fuz_sys::cli::format_error_chain(&rb),
+                    method = spec.method,
+                    "db tx rollback failed"
+                );
             }
             Err(e)
         }
@@ -560,7 +564,7 @@ fn commit_failure(method: &str, error: &fuz_db::DbError) -> JsonrpcError {
         fuz_db::DbError::TransactionAborted(source) => {
             tracing::error!(
                 method,
-                error = ?source,
+                error = %fuz_sys::cli::format_error_chain(source),
                 "action handler returned Ok over an aborted transaction — it swallowed a failed \
                  statement; rolled back, post-commit effects discarded"
             );

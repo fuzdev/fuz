@@ -128,7 +128,7 @@ pub async fn query_validate_api_token(
         Err(e) => {
             tracing::warn!(
                 api_token_id = %id,
-                error = %e,
+                error = %fuz_sys::cli::format_error_chain(&e),
                 "api_token.scope is unreadable; refusing the credential",
             );
             return Ok(None);
@@ -209,7 +209,7 @@ pub fn spawn_api_token_touch(pool: &deadpool_postgres::Pool, token_id: &str, ip:
         if let Ok(client) = pool.get().await
             && let Err(e) = query_api_token_touch(&client, &token_id, &ip).await
         {
-            tracing::warn!(error = ?e, "api token touch failed");
+            tracing::warn!(error = %fuz_sys::cli::format_error_chain(&e), "api token touch failed");
         }
     });
 }

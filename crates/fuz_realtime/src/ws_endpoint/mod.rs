@@ -843,10 +843,16 @@ fn classify_read_error(error: axum::Error) -> LoopExit {
         ))
     );
     if too_big {
-        tracing::warn!(error = %inner, "ws: closing socket, message exceeds the size cap");
+        tracing::warn!(
+            error = %fuz_sys::cli::format_error_chain(&*inner),
+            "ws: closing socket, message exceeds the size cap"
+        );
         LoopExit::MessageTooBig
     } else {
-        tracing::debug!(error = %inner, "ws: read failed, closing");
+        tracing::debug!(
+            error = %fuz_sys::cli::format_error_chain(&*inner),
+            "ws: read failed, closing"
+        );
         LoopExit::Ended
     }
 }

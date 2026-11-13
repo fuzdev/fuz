@@ -93,12 +93,15 @@ where
                     let shutdown = shutdown.clone();
                     connections.spawn(async move {
                         if let Err(err) = run_conn(stream, ctx, state, shutdown).await {
-                            warn!(error = %err, "uds conn ended with error");
+                            warn!(
+                                error = %fuz_sys::cli::format_error_chain(&err),
+                                "uds conn ended with error"
+                            );
                         }
                     });
                 }
                 Err(err) => {
-                    warn!(error = %err, "uds accept failed");
+                    warn!(error = %fuz_sys::cli::format_error_chain(&err), "uds accept failed");
                     tokio::time::sleep(ACCEPT_BACKOFF).await;
                 }
             }
@@ -133,14 +136,17 @@ where
             Ok(()) => {}
             Err(err @ ProtoError::FrameTooLarge { .. }) => {
                 warn!(
-                    error = %err,
+                    error = %fuz_sys::cli::format_error_chain(&err),
                     action = %frame.action,
                     "conn writer: an outgoing frame exceeds the frame limit, closing the connection"
                 );
                 break;
             }
             Err(err) => {
-                debug!(error = %err, "conn writer: write failed, closing");
+                debug!(
+                    error = %fuz_sys::cli::format_error_chain(&err),
+                    "conn writer: write failed, closing"
+                );
                 break;
             }
         }

@@ -83,7 +83,11 @@ pub async fn require_acting_actor(
     let resolved = resolve_acting_actor(client, account_id, acting)
         .await
         .map_err(|e| {
-            tracing::error!(error = ?e, context, "acting-actor resolution failed");
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                context,
+                "acting-actor resolution failed"
+            );
             fuz_http::internal_error_response()
         })?;
     match resolved {

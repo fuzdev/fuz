@@ -4,7 +4,10 @@ use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use fuz_http::{db_unavailable_response, internal_error_response};
+use fuz_http::{
+    db_unavailable_response_with_source, internal_error_response,
+    internal_error_response_with_source,
+};
 use serde::Serialize;
 
 use crate::account_route_state::AccountRouteState;
@@ -75,17 +78,16 @@ async fn logout_inner(
         internal_error_response()
     })?;
 
-    let client = state.gate.pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "logout: db pool error");
-        db_unavailable_response()
-    })?;
+    let client = state
+        .gate
+        .pool
+        .get()
+        .await
+        .map_err(|e| db_unavailable_response_with_source("logout: db pool error", &e))?;
 
     query_session_revoke_by_hash_unscoped(&client, session_hash)
         .await
-        .map_err(|e| {
-            tracing::error!(error = ?e, "logout: session deletion failed");
-            internal_error_response()
-        })?;
+        .map_err(|e| internal_error_response_with_source("logout: session deletion failed", &e))?;
 
     // Eager account-wide close — matches `fuz_app`'s widening logout to
     // account-wide invalidation. The audit write below is pool-routed and

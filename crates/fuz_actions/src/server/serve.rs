@@ -254,7 +254,7 @@ pub async fn serve_until_shutdown(
 
     for task in upkeep.into_iter().flatten() {
         if let Err(e) = task.await {
-            tracing::warn!(error = %e, "an upkeep task failed");
+            tracing::warn!(error = %fuz_sys::cli::format_error_chain(&e), "an upkeep task failed");
         }
     }
     served.map_err(StartupError::Serve)?;

@@ -185,7 +185,7 @@ where
             let sidecars = match state.sidecar.get_sidecar_status(req.target.id()) {
                 Ok(s) => s,
                 Err(err) => {
-                    warn!(error = %err, "sidecar.status failed");
+                    warn!(error = %fuz_sys::cli::format_error_chain(&err), "sidecar.status failed");
                     Vec::new()
                 }
             };

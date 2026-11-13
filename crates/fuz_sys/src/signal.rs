@@ -46,7 +46,10 @@ async fn wait_for_shutdown_signal() {
                     sig.recv().await;
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "failed to install SIGTERM handler");
+                    tracing::warn!(
+                        error = %crate::cli::format_error_chain(&e),
+                        "failed to install SIGTERM handler"
+                    );
                     std::future::pending::<()>().await;
                 }
             }

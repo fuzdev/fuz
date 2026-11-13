@@ -284,7 +284,10 @@ pub async fn cleanup_expired_role_grant_offers(
             // dropping `post_commit` undrained: nothing fans out for rows
             // that never landed
             if let Err(rollback_err) = tx.rollback().await {
-                tracing::warn!(error = ?rollback_err, "auth cleanup rollback failed");
+                tracing::warn!(
+                    error = %fuz_sys::cli::format_error_chain(&rollback_err),
+                    "auth cleanup rollback failed"
+                );
             }
             Err(e.into())
         }

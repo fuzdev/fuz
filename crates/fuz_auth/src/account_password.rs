@@ -30,7 +30,10 @@ use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use fuz_db::{Pool, commit_checked};
-use fuz_http::{db_unavailable_response, internal_error_response};
+use fuz_http::{
+    db_unavailable_response_with_source, internal_error_response,
+    internal_error_response_with_source,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
@@ -184,21 +187,21 @@ async fn password_inner(
 
     // The read's connection is scoped to the read: it is back in the pool
     // before the Argon2 verify and hash below, which hold none.
-    let account_with_hash = {
-        let client = state.gate.pool.get().await.map_err(|e| {
-            tracing::error!(error = ?e, "password: db pool error");
-            db_unavailable_response()
+    let account_with_hash =
+        {
+            let client =
+                state.gate.pool.get().await.map_err(|e| {
+                    db_unavailable_response_with_source("password: db pool error", &e)
+                })?;
+            query_account_with_password_hash_by_id(&client, &account_id)
+                .await
+                .map_err(|e| {
+                    internal_error_response_with_source("password: account query failed", &e)
+                })?
+        }
+        .ok_or_else(|| {
+            fuz_http::rest_error_response(StatusCode::UNAUTHORIZED, "invalid_credentials")
         })?;
-        query_account_with_password_hash_by_id(&client, &account_id)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "password: account query failed");
-                internal_error_response()
-            })?
-    }
-    .ok_or_else(|| {
-        fuz_http::rest_error_response(StatusCode::UNAUTHORIZED, "invalid_credentials")
-    })?;
 
     let credential_type_meta = credential_type_value(Some(resolved.credential_type()));
     let verified_hash = account_with_hash.password_hash;
@@ -373,36 +376,30 @@ async fn change_password(
     new_hash: &str,
     verified_hash: &str,
 ) -> Result<PasswordChange, Response> {
-    let mut client = pool.get().await.map_err(|e| {
-        tracing::error!(error = ?e, "password: db pool error");
-        db_unavailable_response()
-    })?;
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|e| db_unavailable_response_with_source("password: db pool error", &e))?;
     let tx = client.transaction().await.map_err(|e| {
-        tracing::error!(error = ?e, "password: transaction begin failed");
-        internal_error_response()
+        internal_error_response_with_source("password: transaction begin failed", &e)
     })?;
 
     let revoked = async {
         let updated = query_update_account_password(&tx, account_id, new_hash, verified_hash)
             .await
-            .map_err(|e| {
-                tracing::error!(error = ?e, "password: update failed");
-                internal_error_response()
-            })?;
+            .map_err(|e| internal_error_response_with_source("password: update failed", &e))?;
         if !updated {
             return Ok(None);
         }
         let sessions_revoked = query_session_revoke_all_for_account(&tx, account_id)
             .await
             .map_err(|e| {
-                tracing::error!(error = ?e, "password: session revocation failed");
-                internal_error_response()
+                internal_error_response_with_source("password: session revocation failed", &e)
             })?;
         let tokens_revoked = query_revoke_all_api_tokens_for_account(&tx, account_id)
             .await
             .map_err(|e| {
-                tracing::error!(error = ?e, "password: token revocation failed");
-                internal_error_response()
+                internal_error_response_with_source("password: token revocation failed", &e)
             })?;
         Ok::<_, Response>(Some((sessions_revoked, tokens_revoked)))
     }
@@ -410,10 +407,9 @@ async fn change_password(
 
     match revoked {
         Ok(Some((sessions_revoked, tokens_revoked))) => {
-            commit_checked(tx).await.map_err(|e| {
-                tracing::error!(error = ?e, "password: commit failed");
-                internal_error_response()
-            })?;
+            commit_checked(tx)
+                .await
+                .map_err(|e| internal_error_response_with_source("password: commit failed", &e))?;
             Ok(PasswordChange::Committed {
                 sessions_revoked,
                 tokens_revoked,
@@ -434,7 +430,10 @@ async fn change_password(
 /// own outcome is the one to report.
 async fn rollback(tx: deadpool_postgres::Transaction<'_>) {
     if let Err(e) = tx.rollback().await {
-        tracing::warn!(error = ?e, "password: transaction rollback failed");
+        tracing::warn!(
+            error = %fuz_sys::cli::format_error_chain(&e),
+            "password: transaction rollback failed"
+        );
     }
 }
 
