@@ -285,11 +285,11 @@ impl Ord for Integrity {
 }
 
 /// The materialization target — a registry tarball to fetch and place.
-// The dependency-reason flags mirror npm's per-entry boolean schema (`dev`,
-// `optional`, `devOptional`, `peer`, `hasInstallScript`); they drive
-// `retained_under` directly.
 #[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the flags mirror npm's per-entry boolean schema (`dev`, `optional`, `devOptional`, `peer`, `hasInstallScript`) and drive `retained_under` directly"
+)]
 pub struct RegistryEntry {
     /// Where the entry lands in `node_modules`.
     pub path: InstallPath,
@@ -347,9 +347,11 @@ impl RegistryEntry {
 ///
 /// A registry entry carries them itself; a `link: true` entry carries none, and
 /// its flags come from the **target** entry npm writes beside it.
-// The four bools mirror npm's per-entry flag schema 1:1.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the four bools mirror npm's per-entry flag schema 1:1"
+)]
 pub struct DepFlags {
     /// `dev`.
     pub dev: bool,
@@ -1064,8 +1066,10 @@ mod tests {
 
     // --- F: retained_under truth table ---
 
-    // The four bools mirror the dependency-reason flags under test.
-    #[allow(clippy::fn_params_excessive_bools)]
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "the four bools mirror the dependency-reason flags under test"
+    )]
     fn entry_with(dev: bool, optional: bool, dev_optional: bool, peer: bool) -> RegistryEntry {
         RegistryEntry {
             path: InstallPath::new("node_modules/x"),

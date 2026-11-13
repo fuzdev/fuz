@@ -31,7 +31,11 @@
 //!
 //! Override the DB URL with `FUZ_FACT_SERVING_TEST_URL=postgres://...`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

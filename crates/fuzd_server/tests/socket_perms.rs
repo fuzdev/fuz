@@ -3,9 +3,6 @@
 //! daemon's entire access boundary, so pin both modes against accidental
 //! loosening.
 
-// Test harness: panicking via expect on setup failure is the intended behavior.
-#![allow(clippy::expect_used)]
-
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 

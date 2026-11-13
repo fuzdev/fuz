@@ -17,7 +17,12 @@
 //! a witness with no head, a head that is not one, and a cache that cannot be
 //! used. The verdicts themselves are driven at the library level in
 //! `fuz_sign/tests/log_check.rs`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::net::UnixListener;
 use std::path::Path;

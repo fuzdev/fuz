@@ -18,10 +18,11 @@
 //!
 //! Storage backends are provided by the `fuz_storage` crate.
 
-// Allow missing errors docs for obvious Result functions
-#![allow(clippy::missing_errors_doc)]
-// Allow implicit hasher - we only use std HashMap
-#![allow(clippy::implicit_hasher)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "the `Result` fns' errors are self-explanatory"
+)]
+#![expect(clippy::implicit_hasher, reason = "the API takes std's `HashMap` only")]
 
 pub mod checksum;
 pub mod co_sign;

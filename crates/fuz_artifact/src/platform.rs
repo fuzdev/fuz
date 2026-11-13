@@ -772,7 +772,10 @@ pub mod test_stubs {
 
         /// A static `ET_EXEC` executable for `arch`.
         #[must_use]
-        #[allow(clippy::cast_possible_truncation)] // the header sizes are constants that fit
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the header sizes are constants that fit"
+        )]
         pub const fn static_exe(arch: Arch) -> Self {
             Self {
                 class: ELFCLASS64,
@@ -802,7 +805,10 @@ pub mod test_stubs {
 
         /// The stub's bytes, then `payload`.
         #[must_use]
-        #[allow(clippy::cast_possible_truncation)] // test fixture sizes are tiny
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "test fixture sizes are tiny"
+        )]
         pub fn build(&self, payload: &[u8]) -> Vec<u8> {
             let mut out = vec![0u8; STUB_LEN];
             out[..4].copy_from_slice(&ELF_MAGIC);
@@ -899,7 +905,10 @@ pub mod test_stubs {
     ///
     /// On a host outside the supported set.
     #[must_use]
-    #[allow(clippy::panic)] // a test fixture on an unsupported host
+    #[expect(
+        clippy::panic,
+        reason = "a test fixture: an unsupported host has no stub target"
+    )]
     pub fn host_target() -> ReleaseTarget {
         let arch = if cfg!(target_arch = "x86_64") {
             Arch::X86_64

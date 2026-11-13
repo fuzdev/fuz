@@ -7,8 +7,10 @@
 //! discipline are stated once. `fuz self bootstrap` activates too, but
 //! composes those steps itself around the artifact it just created.
 
-// Allow missing error docs since all errors are self-explanatory ArtifactError variants
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::SHORT_HASH_LEN;
 use super::error::ArtifactError;

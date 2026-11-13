@@ -52,8 +52,11 @@ pub enum HomeDirError {
 pub fn home_dir() -> Result<PathBuf, HomeDirError> {
     // `std::env::home_dir` is consulted only when `HOME` is unset, where it
     // falls back to `getpwuid_r` — the lookup `unsafe_code = "forbid"` keeps
-    // this crate from making itself. The workspace's one sanctioned use.
-    #[allow(clippy::disallowed_methods)]
+    // this crate from making itself.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the workspace's one sanctioned `home_dir` use, for its password-database fallback"
+    )]
     let passwd_home = std::env::home_dir;
     resolve_home_dir(std::env::var_os("HOME"), passwd_home)
 }

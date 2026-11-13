@@ -49,7 +49,7 @@ use crate::rest_error::invalid_query_params_response;
 ///
 /// Returns the flat 400 `invalid_query_params` denial `Response` (`Err`)
 /// when a non-empty key falls outside `allowed`.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
 )]
@@ -80,12 +80,6 @@ pub fn query_first<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a s
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use axum::http::StatusCode;
 

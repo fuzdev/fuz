@@ -43,13 +43,10 @@
 //! a case that sets either header passes for the wrong reason. Every suite
 //! consuming [`mint_api_token`] builds its headers without them.
 
-// This module is a test harness: every failure here is a setup fault (no
-// reachable Postgres, a missing migration, a fixture colliding with an
-// existing row) whose only useful response is a loud panic naming the step.
-// `clippy.toml`'s `allow-expect-in-tests` carve-out covers `#[test]` bodies,
-// not a library module, so the allow is explicit — the same call
-// `crate::seed` makes.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "a test harness: a setup fault panics loudly naming the step, and the in-tests carve-out doesn't reach a library module"
+)]
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

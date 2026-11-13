@@ -284,7 +284,7 @@ impl BackfillProblemKind {
     /// that is not the one a signed manifest pins are violations; a file that
     /// is missing, malformed, or unreadable is a storage fault, and a
     /// timestamp no signature covers is whatever was written there.
-    pub fn is_security_violation(&self) -> bool {
+    pub const fn is_security_violation(&self) -> bool {
         match self {
             Self::Release(e) => e.is_security_violation(),
             Self::StreamMismatch { .. }
@@ -389,7 +389,6 @@ fn describe_keys(keys: &[String]) -> String {
 
 impl BackfillError {
     /// Returns user-facing hint for how to fix this error
-    #[allow(clippy::missing_const_for_fn)] // calls non-const hint() methods
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::HeadExists => Some(

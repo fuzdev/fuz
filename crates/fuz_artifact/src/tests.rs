@@ -1,7 +1,9 @@
 //! Tests for the artifact module
 
-// Test sizes are known-bounded literals; u64→usize is safe here.
-#![allow(clippy::cast_possible_truncation)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "test sizes are known-bounded literals, so the u64 to usize cast can't truncate"
+)]
 
 use super::error::ArtifactError;
 use super::hash::hash_binary;

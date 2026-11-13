@@ -361,12 +361,6 @@ mod tests {
     //! overflow discards and refuses, and a close discards or drains as the
     //! queue was built.
 
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "tests panic on assertion failure by design"
-    )]
-
     use std::sync::Arc;
 
     use futures::FutureExt;

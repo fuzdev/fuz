@@ -9,12 +9,6 @@
 //! Drives [`run_ws_loop`] over in-memory sinks under tokio's paused
 //! clock, so every deadline is exact and costs no wall time.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

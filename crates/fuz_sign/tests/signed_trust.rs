@@ -16,7 +16,10 @@
 //! production-safety property `cargo xtask check-release` enforces by dependency
 //! graph for the `fuz_testing` / `fuz_sign` crates.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use fuz_artifact::platform::test_stubs;
 use std::os::unix::fs::PermissionsExt;

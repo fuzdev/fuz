@@ -48,9 +48,10 @@ pub fn send_signal(pid: i32, signal: Signal) -> nix::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    // The current PID fits i32 on every supported platform; the `as i32` cast
-    // reads cleaner than `i32::try_from(...).unwrap()` in these assertions.
-    #![allow(clippy::cast_possible_wrap)]
+    #![expect(
+        clippy::cast_possible_wrap,
+        reason = "the current PID fits i32 on every supported platform, and the cast reads cleaner than `i32::try_from(...).unwrap()` in these assertions"
+    )]
     use super::*;
 
     #[test]

@@ -676,7 +676,10 @@ pub async fn start(quiet: bool) -> Result<ExitCode, DaemonError> {
         .map_err(DaemonError::SpawnDaemonFailed)?;
 
     // Get PID as i32
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "a Linux PID is bounded by `pid_max` (at most 2^22), so it fits i32"
+    )]
     let pid = child.id() as i32;
 
     // Poll health

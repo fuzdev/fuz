@@ -67,11 +67,10 @@ const RC_BEGIN_MARKER: &str = "# >>> fuz initialize >>>";
 const RC_END_MARKER: &str = "# <<< fuz initialize <<<";
 
 /// Errors specific to the bootstrap command
-// Every variant ends in `Failed` by design — these are all "operation X
-// failed" cases, and the suffix reads naturally at the construction sites
-// (`map_err(BootstrapError::CurrentExeFailed)`). Dropping it would make
-// `BootstrapError::CurrentExe` less clear, not more.
-#[allow(clippy::enum_variant_names)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "every variant is an operation-failed case, and the suffix reads naturally at the construction sites"
+)]
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     /// Could not resolve the running executable's path

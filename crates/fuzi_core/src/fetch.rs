@@ -727,7 +727,7 @@ mod tests {
     struct FailingSource(fn(&str) -> FetchError);
 
     impl TarballSource for FailingSource {
-        #[allow(
+        #[expect(
             clippy::unused_async_trait_impl,
             reason = "trait conformance: an `async fn` body runs when awaited; the `impl Future` rewrite would run it at call time"
         )]

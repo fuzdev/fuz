@@ -29,7 +29,10 @@
 //! They intentionally stay narrow: `io::Result` only, no domain errors —
 //! callers translate to their own error types.
 
-#![allow(clippy::missing_errors_doc)] // io::Result is self-explanatory
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "`io::Result` is self-explanatory"
+)]
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -50,14 +53,20 @@ use std::time::{Duration, SystemTime};
 pub fn free_space_bytes(path: &Path) -> io::Result<u64> {
     let stat = nix::sys::statvfs::statvfs(path).map_err(io::Error::from)?;
     // `blocks_available` is "blocks free for unprivileged users"; `fragment_size`
-    // is the fundamental block size. Their nix return types are platform aliases
-    // (u64 on Linux glibc, u32 on macOS) — `try_into → u64` is a no-op on Linux
-    // (hence the clippy allow) but actually narrows on macOS. `unwrap_or(u64::MAX)`
-    // keeps us correct if nix ever widens to i64; saturating multiply guards
-    // exabyte-scale FSes.
-    #[allow(clippy::useless_conversion)] // try_into is not useless on macOS (u32 → u64)
+    // is the fundamental block size. `blocks_available` returns libc's
+    // `fsblkcnt_t`, a platform alias (u64 on Linux, u32 on macOS) — `try_into →
+    // u64` is a no-op on Linux (hence the clippy allow) but widens on macOS.
+    // `unwrap_or(u64::MAX)` keeps us correct if nix ever widens to i64;
+    // saturating multiply guards exabyte-scale FSes.
+    #[allow(
+        clippy::useless_conversion,
+        reason = "fires only where `fsblkcnt_t` is u64 (Linux); on macOS it is u32 and the conversion widens"
+    )]
     let blocks: u64 = stat.blocks_available().try_into().unwrap_or(u64::MAX);
-    #[allow(clippy::useless_conversion)]
+    #[expect(
+        clippy::useless_conversion,
+        reason = "`c_ulong` is u64 on every supported target; the conversion widens only on a 32-bit one"
+    )]
     let bsize: u64 = stat.fragment_size().try_into().unwrap_or(u64::MAX);
     Ok(blocks.saturating_mul(bsize))
 }

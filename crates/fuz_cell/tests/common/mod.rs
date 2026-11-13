@@ -28,7 +28,6 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
 
 /// Reset the `public` schema, then run the auth + cell + cell-history
 /// chains. Returns a `Pool` ready for fixture seeding.
-#[allow(dead_code)]
 pub async fn fresh_db_pool() -> Pool {
     fresh_test_db_pool(DB).await
 }
@@ -39,7 +38,7 @@ pub async fn fresh_db_pool() -> Pool {
 /// Drops the account id from `fuz_testing::seed_account_actor`: no cell test
 /// needs account-grain identity, so the narrower return keeps the callsites to
 /// one binding.
-#[allow(dead_code)]
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub async fn seed_actor(pool: &Pool, username: &str) -> uuid::Uuid {
     seed_account_actor(pool, username).await.1
 }

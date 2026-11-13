@@ -162,10 +162,6 @@ pub fn check_transaction_isolation(value: &str) -> Result<(), StartupError> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use super::*;
 

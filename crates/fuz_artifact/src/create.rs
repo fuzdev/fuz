@@ -7,8 +7,10 @@
 //! re-check). The only real difference is *where the binaries come from*
 //! and *whether `inputs` is recorded* — both captured by [`BuildSource`].
 
-// Allow missing error docs since all errors are self-explanatory ArtifactError variants
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::ARTIFACT_DIR_MODE;
 use super::error::ArtifactError;

@@ -15,10 +15,10 @@
 //! `fuz_actions` and `fuz_realtime` suites that pin the connection-admission
 //! re-check.
 
-// A test harness: every failure here is a setup fault (no reachable Postgres,
-// an unknown table) whose only useful response is a loud panic naming the
-// step — the same call `crate::seed` makes.
-#![allow(clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::expect_used,
+    reason = "a test harness: a setup fault panics loudly naming the step, and the in-tests carve-out doesn't reach a library module"
+)]
 
 use std::time::Duration;
 

@@ -38,10 +38,10 @@
 //! compile-blocked by the workspace-wide `unsafe_code = "forbid"`. The real
 //! runtime guarantee is the deferred seccomp profile.
 
-// A guard test fails loud: a found violation, a mis-pointed scan root, or an
-// I/O error reading our own source all `panic!` — the panic message *is* the
-// operator-facing report.
-#![allow(clippy::panic)]
+#![expect(
+    clippy::panic,
+    reason = "a guard test fails loud: the panic message is the operator-facing report"
+)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

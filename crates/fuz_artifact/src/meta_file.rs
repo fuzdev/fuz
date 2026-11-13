@@ -7,7 +7,10 @@
 //! one) → atomic write with ENOSPC mapping. This module owns that mechanism;
 //! each record type supplies its content hash via [`MetaIntegrity`].
 
-#![allow(clippy::missing_errors_doc)] // all errors are self-explanatory ArtifactError variants
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use std::path::Path;
 

@@ -4,10 +4,10 @@
 //! to a registry call (`status` / `stop`) or the drain path; a wrong
 //! response-id wiring or a swapped outcome would otherwise slip through.
 
-// Panicking via expect on setup failure is the intended behavior; the clippy
-// `allow-expect-in-tests` config only reaches `#[test]` fns, not the shared
-// `assert_connection_closed` helper below.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::time::Duration;
 

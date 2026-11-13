@@ -3,10 +3,10 @@
 //! stream flows on one `request_id` when a file changes. Uses the real
 //! `notify` backend, so it asserts shape + that a write produces an event.
 
-// Test harness: panicking via expect on setup failure is the intended
-// behavior; the clippy `allow-expect-in-tests` config only reaches `#[test]`
-// fns, not the plain `subscribe_watch` helper below.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::time::Duration;
 

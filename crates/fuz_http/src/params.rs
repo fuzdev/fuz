@@ -544,7 +544,6 @@ impl<'de> serde::de::Visitor<'de> for NullishWireIntVisitor {
 struct WireIntVisitor;
 
 /// The bound every wire integer holds, `Number.MAX_SAFE_INTEGER`, unsigned.
-#[allow(clippy::cast_sign_loss)]
 const SAFE_INTEGER_MAX_U64: u64 = crate::SAFE_INTEGER_MAX as u64;
 
 impl serde::de::Visitor<'_> for WireIntVisitor {
@@ -567,8 +566,7 @@ impl serde::de::Visitor<'_> for WireIntVisitor {
 
     fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<i64, E> {
         if n <= SAFE_INTEGER_MAX_U64 {
-            // in range by the check above
-            #[allow(clippy::cast_possible_wrap)]
+            #[expect(clippy::cast_possible_wrap, reason = "in range by the check above")]
             Ok(n as i64)
         } else {
             Err(E::invalid_value(
@@ -579,12 +577,16 @@ impl serde::de::Visitor<'_> for WireIntVisitor {
     }
 
     fn visit_f64<E: serde::de::Error>(self, f: f64) -> Result<i64, E> {
-        // `SAFE_INTEGER_MAX` is exactly representable, so the bound is exact
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "`SAFE_INTEGER_MAX` is exactly representable, so the bound is exact"
+        )]
         let max = crate::SAFE_INTEGER_MAX as f64;
         if f.is_finite() && f.fract() == 0.0 && f.abs() <= max {
-            // integral and within the safe range, so the cast is exact
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "integral and within the safe range, so the cast is exact"
+            )]
             Ok(f as i64)
         } else {
             Err(E::invalid_value(
@@ -778,7 +780,10 @@ pub fn scan_json_value(value: &Value) -> JsonValueScan {
 pub fn as_integral_i64(value: &Value) -> Option<i64> {
     value.as_i64().or_else(|| {
         value.as_f64().and_then(|f| {
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the guard keeps `f` integral and inside i64's range, so the cast is exact"
+            )]
             if f.is_finite() && f.fract() == 0.0 && f.abs() < 9.2e18 {
                 Some(f as i64)
             } else {

@@ -4,14 +4,14 @@
 #
 # Restriction lints (`unwrap_used` / `expect_used` / `panic`) are warn-level
 # workspace-wide (see Cargo.toml `[workspace.lints.clippy]`) so production
-# panic points need an explicit justified `#[allow]`. Tests panic on assertion
-# failure by design, so allow the three there.
+# panic points need an explicit `#[expect(…, reason = "…")]`. Tests panic on
+# assertion failure by design, so allow the three there.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 # Every `$HOME` lookup goes through `fuz_sys::home_dir`, which refuses an empty
 # or relative home; std's own reads an empty `HOME` as unset and substitutes
-# the password database's home. `fuz_sys` itself carries the one `#[allow]`.
+# the password database's home. `fuz_sys` itself carries the one `#[expect]`.
 disallowed-methods = [
     { path = "std::env::home_dir", reason = "use fuz_sys::home_dir: it refuses an empty or relative HOME" },
 ]

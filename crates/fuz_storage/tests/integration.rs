@@ -5,8 +5,10 @@
 //!
 //! Run with: `cargo test -p fuz_storage --test integration -- --ignored`
 
-// Test payload sizes are known-bounded; u64→usize is safe here.
-#![allow(clippy::cast_possible_truncation)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "test payload sizes are known-bounded, so the u64 to usize casts can't truncate"
+)]
 
 use fuz_storage::Storage;
 use std::env;

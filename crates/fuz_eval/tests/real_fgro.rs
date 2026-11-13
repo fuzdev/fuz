@@ -7,7 +7,12 @@
 //! `FUZ_EVAL_TEST_FGRO=/abs/path/to/fgro cargo test -p fuz_eval --test real_fgro -- --ignored`.
 //! Run with `--ignored` and no variable, every case fails rather than passing
 //! untested.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

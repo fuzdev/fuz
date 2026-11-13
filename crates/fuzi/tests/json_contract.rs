@@ -7,9 +7,11 @@
 //! them reaches the network: each fails, or (`--dry-run`) succeeds, before the
 //! fetch phase.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 // `Project::run` spawns the built binary under a scoped `#[expect]` of the
 // exec-free disallow in this crate's `clippy.toml`: it guards fuzi's own
 // source, not the tests that drive it from outside — and scoped, so the rest

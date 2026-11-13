@@ -5,7 +5,10 @@
 //! tempdir: the parent test spawns this test binary again, running only
 //! [`bare_name_child`] there, so no test changes the test process's own
 //! working directory or writes beside the sources.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;

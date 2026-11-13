@@ -2,7 +2,12 @@
 //! against a redirected `~/.fuz`, seed artifacts/tools with public constructors,
 //! and parse `--json` output. Included via `mod common;` in each `tests/*.rs`;
 //! `dead_code` is allowed because no single suite uses every helper.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
+#![allow(dead_code, reason = "each test binary uses only part of this module")]
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::{PermissionsExt, symlink};

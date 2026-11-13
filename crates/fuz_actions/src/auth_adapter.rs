@@ -75,10 +75,6 @@ use fuz_db::ActionDb;
 /// Each entry's rate-limit class lands on [`ActionSpec::rate_limit`], which
 /// `perform_action` gates ahead of params validation.
 #[must_use]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures, clippy can't trace closure consumption"
-)]
 pub fn build_account_specs(
     audit: Arc<AuditEmitter>,
     connection_closer: Arc<dyn ConnectionCloser>,
@@ -99,9 +95,9 @@ pub fn build_account_specs(
 /// specs directly rather than routing through [`AuthActionFamily`] — the `Copy`
 /// enum can't carry the `Arc` — while reusing the same context bridge.
 #[must_use]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures"
+    reason = "takes its `Arc`s by value like its sibling builders; this one only clones them per spec"
 )]
 pub fn build_admin_specs(
     audit: Arc<AuditEmitter>,
@@ -167,9 +163,9 @@ pub fn build_admin_specs(
 /// churn), `role_grant_revoke` and `role_grant_assign` carry
 /// `rate_limit: Account`; the others carry none.
 #[must_use]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures"
+    reason = "takes its `Arc`s by value like its sibling builders; this one only clones them per spec"
 )]
 pub fn build_role_grant_offer_specs(
     audit: Arc<AuditEmitter>,
@@ -220,10 +216,6 @@ pub fn build_role_grant_offer_specs(
 /// `actor_lookup` carries `rate_limit: Account` (the batched
 /// username-enumeration surface).
 #[must_use]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures"
-)]
 pub fn build_actor_lookup_specs(
     audit: Arc<AuditEmitter>,
     connection_closer: Arc<dyn ConnectionCloser>,
@@ -244,10 +236,6 @@ pub fn build_actor_lookup_specs(
 /// out of `create_standard_rpc_actions`). `actor_search` carries
 /// `rate_limit: Account` (the prefix-enumeration surface).
 #[must_use]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures"
-)]
 pub fn build_actor_search_specs(
     audit: Arc<AuditEmitter>,
     connection_closer: Arc<dyn ConnectionCloser>,
@@ -285,11 +273,14 @@ pub fn build_actor_search_specs(
 /// ([`fuz_auth::validate_self_service_eligible_roles`]) — a boot-time
 /// misconfiguration, refused loudly like the TS twin's factory-time throw.
 #[must_use]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
-    reason = "Arc / Vec captured by the per-spec handler closure"
+    reason = "takes its `Arc`s by value like its sibling builders; this one only clones them per spec"
 )]
-#[allow(clippy::panic)] // boot-time config guard: a builtin self-service role is a misconfig, fail loud
+#[expect(
+    clippy::panic,
+    reason = "boot-time config guard: a builtin self-service role is a misconfig, fail loud"
+)]
 pub fn build_self_service_role_specs(
     audit: Arc<AuditEmitter>,
     connection_closer: Arc<dyn ConnectionCloser>,
@@ -357,10 +348,6 @@ pub fn build_self_service_role_specs(
 /// for the builtins-only registry (byte-identical to the prior `["admin"]`
 /// behaviour), or a consumer registry that declares app roles.
 #[must_use]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures"
-)]
 pub fn build_auth_spec_set(
     audit: Arc<AuditEmitter>,
     connection_closer: Arc<dyn ConnectionCloser>,
@@ -445,9 +432,9 @@ impl AuthActionFamily {
 /// [`AuthActionEntry`] rows, building per-entry handler closures that share the
 /// same account-grain bridge + dispatch shape. (The
 /// actor-bound surfaces — `admin`, `role_grant_offer` — build directly.)
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
-    reason = "Arc captured by per-spec handler closures"
+    reason = "takes its `Arc`s by value like the builders that call it; it only clones them per spec"
 )]
 fn build_family_specs(
     family: AuthActionFamily,

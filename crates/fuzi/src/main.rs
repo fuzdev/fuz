@@ -52,7 +52,10 @@ enum Command {
 /// `node_modules` (npm-ci semantics: refuses on package.json/lockfile drift).
 #[derive(FromArgs)]
 #[argh(subcommand, name = "install")]
-#[allow(clippy::struct_excessive_bools)] // CLI switches mirror the install modes
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "CLI switches mirror the install modes"
+)]
 struct InstallCmd {
     /// dependency class to omit (`dev`, `optional`, or `peer`); repeatable
     #[argh(option)]

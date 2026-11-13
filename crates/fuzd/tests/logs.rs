@@ -2,9 +2,10 @@
 //! follow that prints appended lines and dies by SIGTERM — at once, even while
 //! its stdout write is blocked.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;

@@ -11,7 +11,12 @@
 //! one-shot `workload observe`, `self status`, `self version`), because a
 //! regression to std's `home_dir` would read an empty `HOME` as
 //! unset and fall back to the password database's home.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 use common::{fresh_home, fresh_home_rc_safe};

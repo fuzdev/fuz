@@ -17,10 +17,10 @@
 //!   dispatch blocks, holding the server in its shutdown drain.
 //! - [`read_to_eof`] — read a connection out until it closes.
 
-// Test harness: panicking via expect on setup failure is the intended
-// behavior; the clippy `allow-expect-in-tests` config only reaches `#[test]`
-// fns, not these shared helpers.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::time::Duration;
 
@@ -38,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 
 /// Spawn an isolated server on a tempdir socket; returns the tempdir guard, the
 /// socket path, the shutdown token, and the server join handle.
-#[allow(dead_code)] // the socket-path suite names its own socket path
+#[allow(dead_code, reason = "the socket-path suite names its own socket path")]
 pub fn spawn_server() -> (
     tempfile::TempDir,
     std::path::PathBuf,
@@ -88,7 +88,10 @@ pub async fn connect(socket: &std::path::Path) -> UnixStream {
 }
 
 /// [`connect`] plus a completed Hello handshake.
-#[allow(dead_code)] // the malformed-input suite drives its own first frame
+#[allow(
+    dead_code,
+    reason = "the malformed-input suite drives its own first frame"
+)]
 pub async fn connect_hello(socket: &std::path::Path) -> UnixStream {
     let mut stream = connect(socket).await;
 
@@ -114,7 +117,7 @@ pub async fn connect_hello(socket: &std::path::Path) -> UnixStream {
 /// Pipeline status requests on `stream` without reading any response, until
 /// the connection's dispatch blocks on its full out channel. Returns the read
 /// half (kept, unread, so the connection stays open) and the flood task.
-#[allow(dead_code)] // only the shutdown-drain suites block a dispatch
+#[allow(dead_code, reason = "only the shutdown-drain suites block a dispatch")]
 pub async fn block_mid_dispatch(
     stream: UnixStream,
 ) -> (OwnedReadHalf, tokio::task::JoinHandle<()>) {
@@ -134,7 +137,10 @@ pub async fn block_mid_dispatch(
 }
 
 /// Read `reader` until it reaches EOF or fails, discarding what it reads.
-#[allow(dead_code)] // only the shutdown-drain suites read a connection out
+#[allow(
+    dead_code,
+    reason = "only the shutdown-drain suites read a connection out"
+)]
 pub async fn read_to_eof(reader: &mut (impl AsyncRead + Unpin)) {
     let mut buf = vec![0u8; 64 * 1024];
     while matches!(reader.read(&mut buf).await, Ok(n) if n > 0) {}

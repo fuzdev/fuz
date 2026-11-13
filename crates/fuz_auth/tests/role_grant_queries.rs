@@ -12,9 +12,10 @@
 //! `--test-threads=1` is required because every test drops + recreates
 //! the shared schema; parallel runs race on the `schema_version` table.
 
-// Integration-test helpers assert via `expect`/`unwrap`; `allow-*-in-tests`
-// doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::time::{Duration, SystemTime};
 

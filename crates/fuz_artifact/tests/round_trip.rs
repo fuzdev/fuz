@@ -7,7 +7,6 @@
 //! The `fuz_home/test_home_override` dev-dep feature supplies the in-process
 //! redirect (the same seam `fuz_sign`'s signed-trust test uses); resolver-2 keeps
 //! it out of every shipping binary.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
 

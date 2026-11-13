@@ -81,7 +81,10 @@ pub struct Install {
 /// Upgrade an installed first-party binary to the latest version.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "upgrade")]
-#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "CLI flags are naturally boolean"
+)]
 pub struct Upgrade {
     /// the binary name to upgrade
     #[argh(positional)]

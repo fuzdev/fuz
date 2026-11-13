@@ -8,7 +8,10 @@ use std::fmt::Write as _;
 /// # Panics
 ///
 /// Panics if the OS RNG fails (should never happen on a healthy system).
-#[allow(clippy::expect_used)] // getrandom only fails if OS RNG is broken
+#[expect(
+    clippy::expect_used,
+    reason = "getrandom only fails if the OS RNG is broken"
+)]
 #[must_use]
 pub fn random_hex(num_bytes: usize) -> String {
     let mut bytes = vec![0u8; num_bytes];

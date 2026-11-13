@@ -100,7 +100,7 @@ pub fn parse_proxy_entry(entry: &str) -> Result<ParsedProxy, ProxyParseError> {
                 return Err(ProxyParseError::PrefixV4OutOfRange(entry.to_owned()));
             }
             // Safe: prefix ∈ [1, 32] after the checks above.
-            #[allow(
+            #[expect(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
                 reason = "prefix bounded to 1..=32"
@@ -129,7 +129,7 @@ pub fn parse_proxy_entry(entry: &str) -> Result<ParsedProxy, ProxyParseError> {
                 return Err(ProxyParseError::PrefixV6OutOfRange(entry.to_owned()));
             }
             // Safe: prefix ∈ [1, 128] after the checks above.
-            #[allow(
+            #[expect(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
                 reason = "prefix bounded to 1..=128"

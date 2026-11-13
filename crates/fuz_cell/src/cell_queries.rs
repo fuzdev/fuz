@@ -180,7 +180,7 @@ fn decode_row(row: &tokio_postgres::Row) -> Result<CellRow, CellError> {
 ///
 /// [`CellError::Db`] on driver / constraint failure; [`CellError::Decode`]
 /// if the returned row is malformed.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "positional create params mirror the kind hoist + the directory-tree columns; a struct would add ceremony for two callsites"
 )]
@@ -340,10 +340,6 @@ pub async fn query_cell_view_load_many<C: GenericClient + ?Sized>(
 /// # Errors
 ///
 /// [`CellError`] on driver / constraint / decode failure.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "mirrors the TS partial-update patch shape; a struct would add ceremony for one callsite"
-)]
 pub async fn query_cell_update<C: GenericClient + ?Sized>(
     client: &C,
     id: Uuid,

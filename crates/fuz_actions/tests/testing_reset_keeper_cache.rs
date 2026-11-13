@@ -25,7 +25,12 @@
 //! cargo test -p fuz_actions --test testing_reset_keeper_cache -- --ignored --test-threads=1
 //! ```
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

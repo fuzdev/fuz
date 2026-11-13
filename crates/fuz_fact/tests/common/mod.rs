@@ -7,7 +7,10 @@
 //! `FUZ_FACT_TEST_URL`); single-threaded because the reset drops + recreates
 //! the `public` schema. The shared cycle lives in `fuz_testing::fresh_db`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_db::Pool;
@@ -31,14 +34,13 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
 /// Reset the `public` schema, run the auth + fact chains, and create the
 /// `cell` stub.
 /// Returns a `Pool` ready for the store.
-#[allow(dead_code)]
 pub async fn fresh_db_pool() -> Pool {
     fresh_test_db_pool(DB).await
 }
 
 /// Insert a `cell` stub row referencing `hash` (active unless `deleted` is
 /// true), so the orphan predicate sees the fact as live.
-#[allow(dead_code)]
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub async fn insert_cell_ref(pool: &Pool, hash: &str, deleted: bool) {
     let client = pool.get().await.expect("pool.get");
     let deleted_at: Option<&str> = if deleted {
@@ -56,7 +58,7 @@ pub async fn insert_cell_ref(pool: &Pool, hash: &str, deleted: bool) {
 }
 
 /// A system put's options — no holder, no refs, no content type.
-#[allow(dead_code)]
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub const fn system_put() -> PutOptions {
     PutOptions {
         content_type: None,
@@ -66,7 +68,7 @@ pub const fn system_put() -> PutOptions {
 }
 
 /// A put on behalf of `actor` — no refs, no content type.
-#[allow(dead_code)]
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub const fn held_put(actor: Uuid) -> PutOptions {
     PutOptions {
         content_type: None,

@@ -190,7 +190,7 @@ pub async fn client_ip_middleware(
             // IP silently in that case (TS skips the misconfig warn
             // here too, emitting it only when the resolver actually
             // returned a value that turned out to be trusted itself).
-            #[allow(
+            #[expect(
                 clippy::option_if_let_else,
                 reason = "explicit None/Some arms read clearer than map_or_else"
             )]

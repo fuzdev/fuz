@@ -5,10 +5,15 @@ use std::process::Command;
 
 fn main() {
     // Re-run if git HEAD changes (workspace root, not crate dir)
-    // unwrap is safe: CARGO_MANIFEST_DIR always set by cargo, parent paths always exist
-    #[allow(clippy::unwrap_used)]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "cargo always sets `CARGO_MANIFEST_DIR` for a build script"
+    )]
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    #[allow(clippy::unwrap_used)]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "the crate sits two levels under the workspace root"
+    )]
     let workspace_root = Path::new(&manifest_dir).parent().unwrap().parent().unwrap();
     let git_dir = workspace_root.join(".git");
 

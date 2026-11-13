@@ -418,7 +418,7 @@ fn concurrent_subscribes_never_exceed_the_cap() {
     let registry = capped(MAX);
     let account = uuid::Uuid::new_v4();
     let barrier = Arc::new(Barrier::new(THREADS));
-    #[allow(
+    #[expect(
         clippy::needless_collect,
         reason = "every thread must spawn before any join, or the barrier never releases"
     )]
@@ -788,7 +788,7 @@ fn a_pending_stream_is_not_charged_for_the_fan_out() {
 
 /// The stream's next item, within two default intervals — so a stream that
 /// writes nothing fails the case rather than parking the paused clock.
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "a test helper: a missing item fails the test"
 )]

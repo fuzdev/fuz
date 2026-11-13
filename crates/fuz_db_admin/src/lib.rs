@@ -36,7 +36,7 @@
 //! Wire shapes + error codes mirror the TS spine schemas so the cross-backend
 //! suites see one contract on every backend. Mount under `/api/db`.
 
-#![allow(
+#![expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the crate-wide REST handler idiom"
 )]
@@ -465,12 +465,6 @@ fn parse_paging(offset_raw: Option<&str>, limit_raw: Option<&str>) -> Result<(i6
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod query_param_tests {
     use super::*;
 
@@ -1029,12 +1023,6 @@ async fn query_primary_key(
 /// The origin check comes first on every route — no database: the pool below
 /// never dials, and a refusal at the gate comes before any checkout.
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod origin_gate_tests {
     use super::*;
 
@@ -1186,12 +1174,6 @@ mod origin_gate_tests {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod row_delete_pg_tests {
     use super::*;
     use fuz_db::Pool;

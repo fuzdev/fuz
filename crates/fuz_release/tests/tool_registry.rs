@@ -4,7 +4,10 @@
 //! `get_tool_current_link`), so they need a redirectable home; this drives the
 //! `fuz_home/test_home_override` dev-dep seam (the same one `fuz_artifact`'s
 //! suites use). Tools are minted with `fuz_artifact::tools::install_local_tool`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Mutex, MutexGuard, PoisonError};

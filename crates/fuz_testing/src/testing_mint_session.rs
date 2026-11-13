@@ -73,7 +73,7 @@ fn parse_mint_session_params(params: &Value) -> Result<(uuid::Uuid, f64), Jsonrp
         .get("expires_in_seconds")
         .and_then(Value::as_f64)
         .ok_or_else(|| invalid_input_params("expires_in_seconds (number) is required", None))?;
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "`SAFE_INTEGER_MAX` is 2^53 - 1, exact as an `f64`"
     )]

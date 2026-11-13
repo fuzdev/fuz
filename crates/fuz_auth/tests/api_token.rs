@@ -14,8 +14,11 @@
 //! resolves and lists although `scope::text` prints it past the cap, and one
 //! byte past it is refused at mint and failed closed at read.
 
-// `allow-*-in-tests` doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

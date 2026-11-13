@@ -225,10 +225,6 @@ impl AppBackend {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use std::net::SocketAddr;
 

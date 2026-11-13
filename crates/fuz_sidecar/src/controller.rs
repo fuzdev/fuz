@@ -56,9 +56,7 @@ impl std::fmt::Debug for SpawnConfig {
 }
 
 /// Generic sidecar controller state
-///
-/// Debug is intentionally not derived because `Child` doesn't implement it.
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct SidecarController {
     child: Child,
     stdin: BufWriter<ChildStdin>,
@@ -236,7 +234,10 @@ impl SidecarController {
 impl Drop for SidecarController {
     fn drop(&mut self) {
         // Kill the child process
-        #[allow(clippy::let_underscore_must_use)]
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "`Drop` has no caller to report a failed kill to"
+        )]
         let _ = self.child.start_kill();
     }
 }
@@ -308,7 +309,7 @@ impl SidecarControllerFactory {
 }
 
 impl SidecarFactory for SidecarControllerFactory {
-    #[allow(
+    #[expect(
         clippy::unused_async_trait_impl,
         reason = "trait conformance: the `impl Future` rewrite would spawn the controller process and channel at call time, before the future is awaited"
     )]

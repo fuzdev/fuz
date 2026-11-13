@@ -181,8 +181,7 @@ pub(crate) const fn below_minimum_recovery(tool: bool) -> &'static str {
 
 impl ManifestError {
     /// Returns user-facing hint for how to fix this error
-    #[allow(clippy::missing_const_for_fn)] // calls non-const hint() methods
-    pub fn hint(&self) -> Option<&'static str> {
+    pub const fn hint(&self) -> Option<&'static str> {
         match self {
             Self::UnsupportedFormat(_) => {
                 Some("Upgrade fuz to read this manifest: https://github.com/fuzdev/fuz#usage")
@@ -575,7 +574,6 @@ pub enum LogWriteError {
 
 impl LogWriteError {
     /// Returns user-facing hint for how to fix this error
-    #[allow(clippy::missing_const_for_fn)] // calls non-const hint() methods
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::InvalidEntry { .. } => Some(
@@ -855,8 +853,7 @@ impl ReleaseError {
     /// The enum-level counterpart to [`TarballError::is_security_violation`],
     /// classified with the same fail-closed discipline: every arm is decided
     /// explicitly, and wrapped errors delegate to their own classifiers.
-    #[allow(clippy::missing_const_for_fn)] // Calls non-const methods
-    pub fn is_security_violation(&self) -> bool {
+    pub const fn is_security_violation(&self) -> bool {
         match self {
             Self::Tarball(e) => e.is_security_violation(),
             Self::ReleaseLog(e) => e.is_security_violation(),

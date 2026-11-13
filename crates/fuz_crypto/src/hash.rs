@@ -406,7 +406,10 @@ impl Hasher {
     ///
     /// Propagates the first read error.
     pub fn update_reader<R: Read>(&mut self, mut reader: R) -> io::Result<u64> {
-        #[allow(clippy::large_stack_arrays)] // 64 KiB read buffer, intentional
+        #[expect(
+            clippy::large_stack_arrays,
+            reason = "an intentional 64 KiB read buffer"
+        )]
         let mut buf = [0u8; HASH_BUFFER_SIZE];
         let mut total: u64 = 0;
         loop {
@@ -608,7 +611,10 @@ pub mod fact_hash {
 }
 
 #[cfg(test)]
-#[allow(clippy::items_after_statements)]
+#[expect(
+    clippy::items_after_statements,
+    reason = "test fns declare their fixture types and imports beside the statements that use them"
+)]
 mod tests {
     use super::*;
 
@@ -878,7 +884,10 @@ mod tests {
         #[derive(Deserialize, Debug)]
         struct Wrap {
             #[serde(with = "super::blake3_hex")]
-            #[allow(dead_code)]
+            #[expect(
+                dead_code,
+                reason = "deserialize-only: the parse result is the assertion"
+            )]
             h: ContentHash,
         }
         // 66 hex chars — rejected at parse, not at a later equality check.
@@ -895,13 +904,19 @@ mod tests {
         #[derive(Deserialize, Debug)]
         struct Wrap {
             #[serde(with = "super::blake3_hex")]
-            #[allow(dead_code)]
+            #[expect(
+                dead_code,
+                reason = "deserialize-only: the parse result is the assertion"
+            )]
             h: ContentHash,
         }
         #[derive(Deserialize, Debug)]
         struct WrapMap {
             #[serde(with = "super::blake3_hex_map")]
-            #[allow(dead_code)]
+            #[expect(
+                dead_code,
+                reason = "deserialize-only: the parse result is the assertion"
+            )]
             m: BTreeMap<String, ContentHash>,
         }
         let lower = ContentHash::blake3(b"abc").to_hex();
@@ -999,13 +1014,19 @@ mod tests {
         #[derive(Deserialize, Debug)]
         struct WrapB {
             #[serde(with = "super::blake3_hex_map")]
-            #[allow(dead_code)]
+            #[expect(
+                dead_code,
+                reason = "deserialize-only: the parse result is the assertion"
+            )]
             m: BTreeMap<String, ContentHash>,
         }
         #[derive(Deserialize, Debug)]
         struct WrapH {
             #[serde(with = "super::blake3_hex_map")]
-            #[allow(dead_code)]
+            #[expect(
+                dead_code,
+                reason = "deserialize-only: the parse result is the assertion"
+            )]
             m: HashMap<String, ContentHash>,
         }
         let (first, last) = (

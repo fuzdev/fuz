@@ -23,7 +23,10 @@ use super::startup_error::StartupError;
 
 /// The run options every spine server shares — embed it in the consumer's
 /// `RunAppOptions` beside the consumer's own swap points.
-#[allow(missing_debug_implementations)] // carries `SpineBackendOptions`
+#[expect(
+    missing_debug_implementations,
+    reason = "carries `SpineBackendOptions`, which has no `Debug`"
+)]
 pub struct SpineRunOptions {
     /// The backend's swap points, handed to
     /// [`super::backend::create_app_backend`].
@@ -150,7 +153,10 @@ pub fn boot_only(
 pub type UpkeepTask = Box<dyn FnOnce(CancellationToken) -> JoinHandle<()> + Send>;
 
 /// What [`spawn_upkeep`] schedules.
-#[allow(missing_debug_implementations)] // boxed-closure field
+#[expect(
+    missing_debug_implementations,
+    reason = "a boxed-closure field has no `Debug`"
+)]
 pub struct UpkeepOptions {
     /// The spine's auth cleanup ([`fuz_auth::spawn_auth_cleanup`]), every
     /// [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`]: expired sessions deleted
@@ -188,7 +194,10 @@ pub fn spawn_upkeep(options: UpkeepOptions, shutdown: &CancellationToken) -> Vec
 }
 
 /// What [`serve_until_shutdown`] serves with.
-#[allow(missing_debug_implementations)] // Arc-of-dyn + boxed-closure fields
+#[expect(
+    missing_debug_implementations,
+    reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
+)]
 pub struct ServeOptions {
     /// Names the startup and shutdown sentinels (`<name> listening on …`).
     pub server_name: &'static str,
@@ -255,11 +264,6 @@ pub async fn serve_until_shutdown(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use std::net::SocketAddr;
 

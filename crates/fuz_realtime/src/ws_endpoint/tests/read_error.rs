@@ -9,12 +9,6 @@
 //! this crate downcasts — a drift between the two tungstenite versions
 //! fails here instead of silently regressing to an abnormal drop.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

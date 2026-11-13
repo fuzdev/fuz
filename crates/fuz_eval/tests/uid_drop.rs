@@ -25,7 +25,12 @@
 //! refuses to run when a `package.json` is already there. A run killed before
 //! its cleanup leaves both: delete `~/package.json` and
 //! `~/.fuz_eval_uid_drop_*.ts`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

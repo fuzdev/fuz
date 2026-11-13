@@ -424,10 +424,6 @@ fn render_services_event(out: &mut String, event: &ServiceEvent) {
 }
 
 /// Human-readable bytes-per-second.
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "display only; f32 throughput is already approximate"
-)]
 fn format_bps(bps: f32) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     if bps < 1024.0 {
@@ -475,7 +471,7 @@ fn cell(text: &str, width: usize) -> String {
 }
 
 /// Human-readable byte size (binary units).
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     reason = "display only; f64 mantissa covers realistic memory sizes"
 )]

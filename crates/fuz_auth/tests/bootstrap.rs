@@ -32,10 +32,11 @@
 //!
 //! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
-// Integration-test helpers assert via `expect`/`unwrap` (panic-on-failure is
-// the test mechanism); `allow-*-in-tests` only covers `#[test]` fns, not the
-// shared helper fns these files call.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::io;
 use std::sync::Arc;

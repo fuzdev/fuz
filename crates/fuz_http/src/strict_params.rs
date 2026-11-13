@@ -121,11 +121,6 @@ fn reject_null_fields(params: &Value, nullable: &[&str]) -> Result<(), JsonrpcEr
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use super::*;
     use crate::JsonrpcErrorCode;

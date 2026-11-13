@@ -98,7 +98,10 @@ impl OfferCreateAuthorize for AdmitAll {
 
 /// A consumer registry with one admin-grantable app role, the shape a
 /// classroom- or space-scoped consumer declares.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 fn app_registry() -> RoleRegistry {
     RoleRegistry::new(vec![RoleSpec::new("teacher", vec![GrantPath::Admin])])
         .expect("valid registry")
@@ -115,7 +118,10 @@ fn reason(err: &JsonrpcError) -> &str {
 
 /// The `metadata.reason` of the failed `role_grant_offer_accept` audit row for
 /// `offer_id`, if one was written.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn accept_failure_reason(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     offer_id: uuid::Uuid,
@@ -133,7 +139,10 @@ async fn accept_failure_reason(
 }
 
 /// Whether the offer is still pending (not accepted).
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn is_pending(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     offer_id: uuid::Uuid,
@@ -151,7 +160,10 @@ async fn is_pending(
 /// Stand up a pending offer of `role` from `grantor_actor` to `to_account` by
 /// direct query — the query layer has no builtin guard on create (the verb
 /// does), so this is how the accept-side refusals get their rows.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn offer_directly(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     grantor_actor: uuid::Uuid,
@@ -177,7 +189,10 @@ async fn offer_directly(
 }
 
 /// Count `role_grant` rows for `actor_id` with `role`, split by scope.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn count_grants(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     actor_id: uuid::Uuid,
@@ -1160,7 +1175,10 @@ async fn decline_and_retract_mask_foreign_unknown_and_terminal_offers() {
 
 /// The `metadata` of the one `event_type` audit row whose `metadata.<key>`
 /// is `id`.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn audit_row_metadata(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     event_type: &str,
@@ -1344,7 +1362,10 @@ async fn role_grant_assign_refuses_a_scoped_builtin_role() {
 struct ClassroomScopedOnly(std::sync::Mutex<Vec<OfferCreateAuthorizeInput>>);
 
 impl OfferCreateAuthorize for ClassroomScopedOnly {
-    #[allow(clippy::expect_used)] // test predicate outside a `#[test]` fn
+    #[expect(
+        clippy::expect_used,
+        reason = "a test predicate outside a `#[test]` fn panics on a failed check"
+    )]
     fn authorize<'a>(
         &'a self,
         _auth: &'a RequestActorContext,
@@ -2027,7 +2048,10 @@ async fn accept_of_an_app_role_offer_needs_no_grantor_admin() {
 }
 
 /// How many `audit_log` rows there are, of any event.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn count_audit_rows(client: &(impl deadpool_postgres::GenericClient + ?Sized)) -> i64 {
     client
         .query_one("SELECT count(*) FROM audit_log", &[])
@@ -2140,7 +2164,10 @@ impl fuz_auth::AuditPostCommit for CountingPostCommit {
 }
 
 /// An admin offer from `grantor` to `recipient`, accepted once through the verb.
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn offer_accepted_once(
     client: &deadpool_postgres::Client,
     grantor: &RequestActorContext,
@@ -2268,7 +2295,10 @@ async fn accept_replay_after_the_grant_is_revoked_is_terminal() {
 // --- role_grant_revoke: the revokee's outgoing offers, the admin guards ----
 
 /// Whether the offer is still pending (no terminal column set).
-#[allow(clippy::expect_used)] // test helper outside a `#[test]` fn
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
 async fn offer_is_open(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     offer_id: uuid::Uuid,
@@ -2292,7 +2322,6 @@ async fn offer_is_open(
 /// offers are untouched.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-#[allow(clippy::expect_used)]
 async fn role_grant_revoke_supersedes_the_revokees_outgoing_offers() {
     let pool = fresh_db_pool().await;
     let client = pool.get().await.expect("pool.get");
@@ -2369,7 +2398,6 @@ async fn role_grant_revoke_supersedes_the_revokees_outgoing_offers() {
 /// the grant active.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-#[allow(clippy::expect_used)]
 async fn role_grant_revoke_guards_the_keeper_and_the_last_admin() {
     use fuz_auth::role::ROLE_KEEPER;
     use fuz_auth::role_grant_offer_action_specs::{
@@ -2469,7 +2497,6 @@ async fn role_grant_revoke_guards_the_keeper_and_the_last_admin() {
 /// one is refused.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-#[allow(clippy::expect_used)]
 async fn role_grant_revoke_last_admin_counts_without_the_revoked_grant() {
     use fuz_auth::role_grant_offer_action_specs::ERROR_CANNOT_REVOKE_LAST_ADMIN;
     let pool = fresh_db_pool().await;
@@ -2548,7 +2575,6 @@ async fn role_grant_revoke_last_admin_counts_without_the_revoked_grant() {
 /// `role_grant_offer_actions.revoke_race.db.test.ts`.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-#[allow(clippy::expect_used)]
 async fn cross_revokes_of_the_last_two_admins_serialize() {
     use fuz_auth::role_grant_offer_action_specs::ERROR_CANNOT_REVOKE_LAST_ADMIN;
     let pool = fresh_db_pool().await;

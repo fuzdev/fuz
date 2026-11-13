@@ -2,9 +2,10 @@
 //!
 //! Tests security-critical behavior with crafted malicious inputs.
 
-// Tests import codec deps (tar/flate2) locally next to their use; the
-// scope-hygiene lint adds no value in these test bodies.
-#![allow(clippy::items_after_statements)]
+#![expect(
+    clippy::items_after_statements,
+    reason = "tests import codec deps (tar/flate2) locally next to their use"
+)]
 
 use std::collections::HashMap;
 use std::io::Write;

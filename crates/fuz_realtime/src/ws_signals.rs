@@ -221,12 +221,6 @@ mod tests {
     //! consumer layer; the cancellation *logic* lives here so it is unit-
     //! testable in isolation).
 
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "tests panic on assertion failure by design"
-    )]
-
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
 

@@ -2,8 +2,10 @@
 //!
 //! Tracks artifact switches for `fuz artifact use -` and `fuz artifact log`.
 
-// Allow missing error docs since all errors are self-explanatory ArtifactError variants
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::error::ArtifactError;
 use super::meta_file::write_atomic_meta;

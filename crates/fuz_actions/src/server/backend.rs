@@ -147,7 +147,10 @@ impl Default for AuditSseSpec {
 /// The swap points [`create_app_backend`] takes: the `testing_*` seams the
 /// production binary and its test sibling differ on, and the per-IP login
 /// bound.
-#[allow(missing_debug_implementations)] // Arc-of-dyn + boxed-closure fields
+#[expect(
+    missing_debug_implementations,
+    reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
+)]
 pub struct SpineBackendOptions {
     /// Production wires [`fuz_auth::Argon2idHasher`]; a test binary
     /// `fuz_testing::TestingArgon2idHasher`.
@@ -389,10 +392,6 @@ fn check_migration_chain(namespaces: &[MigrationNamespace]) -> Result<(), Startu
 /// [`StartupError::Database`] for the pool, a boot query, or a migration;
 /// [`StartupError::TransactionIsolation`]; whatever the hook returns; and
 /// [`StartupError::ExpectedSchema`] for a malformed fixture.
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "an `async fn` body runs when awaited; the `impl Future` rewrite would build the pool and keyring at call time"
-)]
 pub async fn create_app_backend(
     env: &BaseServerEnv,
     spec: &AppBackendSpec,
@@ -599,11 +598,6 @@ pub async fn ensure_read_committed(pool: &Pool) -> Result<(), StartupError> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use super::*;
 

@@ -772,7 +772,6 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "tests assert by panic")]
 mod tests {
     use std::collections::HashMap;
 

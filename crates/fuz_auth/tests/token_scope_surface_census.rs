@@ -48,11 +48,10 @@
 //! escalation**, the same way `CredentialType`'s struct-of-bools is the named
 //! escalation behind `CredentialGate::Any`.
 
-#![allow(
-    clippy::unwrap_used,
+#![expect(
     clippy::expect_used,
     clippy::panic,
-    reason = "tests panic on assertion failure by design"
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
 use std::collections::BTreeSet;

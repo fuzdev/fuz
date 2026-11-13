@@ -22,7 +22,10 @@
 //! (`fuz_crypto/test_trust_anchor` + `fuz_home/test_home_override`), both
 //! compiled out of every shipping binary (resolver-2 + `cargo tree -e features`).
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use fuz_artifact::platform::test_stubs;
 use std::os::unix::fs::PermissionsExt;

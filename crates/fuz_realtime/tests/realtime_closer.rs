@@ -19,7 +19,10 @@
 //! INSERT made to fail) is the `#[ignore]` Postgres suite in
 //! `tests/audit_stream.rs`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::pin::Pin;
 use std::sync::Arc;

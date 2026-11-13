@@ -103,7 +103,7 @@ impl CliError {
     /// change `HOME`, `FUZ_HOME`, or the home's mode) on every path that
     /// carries the home layer's error: directly, through the artifact store,
     /// the daemon client, or the release chain.
-    pub fn exit_code(&self) -> u8 {
+    pub const fn exit_code(&self) -> u8 {
         match self {
             // Release command errors have their own exit codes
             Self::ReleaseCommand(e) => e.exit_code(),

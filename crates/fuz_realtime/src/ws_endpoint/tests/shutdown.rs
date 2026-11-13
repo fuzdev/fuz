@@ -7,12 +7,6 @@
 //! Drives
 //! [`run_ws_loop`] over in-memory channels standing in for the socket.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::sync::Arc;
 use std::time::Duration;
 

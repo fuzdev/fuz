@@ -133,7 +133,6 @@ pub struct PutStreamOutcome {
 ///
 /// **Object-safe** — consumed as `Arc<dyn FactStore>`. Async via `BoxFuture`
 /// (the dyn-trait carve-out; RPITIT doesn't support `dyn`).
-#[allow(missing_debug_implementations)] // trait object
 pub trait FactStore: Send + Sync {
     /// Idempotent put of an in-memory body. Routes embedded vs disk by size.
     fn put<'a>(

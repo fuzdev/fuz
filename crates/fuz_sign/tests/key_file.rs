@@ -5,7 +5,10 @@
 //! (edition 2024 forbids `set_var`), so every test holds [`SERIAL`] while its
 //! home is the active one, and none reads the developer's `~/.fuz`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

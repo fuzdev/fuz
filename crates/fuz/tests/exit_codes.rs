@@ -5,7 +5,10 @@
 //! distinction (caller-must-fix vs everything-else) is the contract here; the
 //! local integrity `65` is pinned by `artifact_cli.rs`'s tamper test, and a
 //! fetch-path security violation's `65` here.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 use common::{fresh_home, run, run_with_env};

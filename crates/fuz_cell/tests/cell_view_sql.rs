@@ -17,10 +17,6 @@
 //! cargo test -p fuz_cell --test cell_view_sql -- --ignored --test-threads=1
 //! ```
 
-// Integration-test helpers assert via `expect`/`unwrap`; `allow-*-in-tests`
-// doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use std::collections::{BTreeSet, HashMap};

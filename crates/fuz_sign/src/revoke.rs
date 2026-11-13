@@ -153,7 +153,6 @@ pub enum RevokeError {
 
 impl RevokeError {
     /// Returns user-facing hint for how to fix this error
-    #[allow(clippy::missing_const_for_fn)] // calls non-const hint() methods
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::NoHead => Some(

@@ -22,9 +22,11 @@
 //! cargo test -p fuz_cell -- --ignored --test-threads=1
 //! ```
 
-// Integration-test helpers assert via `expect`/`unwrap`; `allow-*-in-tests`
-// doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

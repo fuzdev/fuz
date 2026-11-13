@@ -55,7 +55,10 @@ pub fn hash_binary(path: &Path) -> Result<ContentHash, ArtifactError> {
 /// ([`hash_binary`], `read_checked`). `artifact_dir` itself is taken as given —
 /// a caller that has not already established it is a real directory classifies
 /// it first (`inspect_store_entry` / `reclaim_store_entry`).
-#[allow(clippy::missing_errors_doc)]
+#[expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 pub fn verify_artifact(artifact_dir: &Path) -> Result<(), ArtifactError> {
     let meta = ArtifactMeta::read(artifact_dir)?;
 
@@ -132,7 +135,10 @@ pub fn hash_source_binary(path: &Path, name: &str) -> Result<ContentHash, Artifa
 ///   static build of the target's architecture passes on either libc
 ///
 /// Returns blake3 hash on success.
-#[allow(clippy::large_stack_arrays)] // Intentional: 64KB buffer for efficient file reading
+#[expect(
+    clippy::large_stack_arrays,
+    reason = "an intentional 64 KiB buffer for efficient file reads"
+)]
 pub fn validate_and_hash_binary(
     path: &Path,
     name: &str,

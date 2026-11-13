@@ -2,8 +2,10 @@
 //!
 //! Functions for managing the `current` symlink and bin/ symlinks.
 
-// Allow missing error docs since all errors are self-explanatory ArtifactError variants
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::error::ArtifactError;
 use super::store::{StoreSlot, inspect_store_entry, require_current_replaceable};

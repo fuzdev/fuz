@@ -4,9 +4,10 @@
 //! exits 0. Every invocation runs against a throwaway `FUZ_HOME` with no daemon,
 //! and none of them starts one.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

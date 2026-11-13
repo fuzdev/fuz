@@ -8,7 +8,11 @@
 //! keys admitted through `fuz_crypto`'s dev-dependency-only `test_trust_anchor`
 //! seam. The tests skip when `git` is absent.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

@@ -8,7 +8,11 @@
 //! dev-dep feature, which resolver-2 keeps out of every shipping binary. The
 //! shared harness (`fresh_home`, `fake_fuz`, the serial guard) lives in
 //! `tests/common/mod.rs`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

@@ -18,11 +18,9 @@
 //! and the same order driven over the wire by `fuz_app`'s cross-backend suite
 //! against `testing_spine_stub`.
 
-#![allow(
+#![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
 use std::sync::Arc;

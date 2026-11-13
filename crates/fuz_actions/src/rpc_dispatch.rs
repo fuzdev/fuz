@@ -380,7 +380,7 @@ fn side_effects_require_post(method: &str) -> JsonrpcError {
 /// 10^19, stays a string here but is numeric on TS — unreachable for the
 /// monotonic small-int ids every shipped client generates.)
 fn parse_get_id(id_raw: &str) -> Value {
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         reason = "the lossy f64 round-trip is the point — it mirrors the TS Number() check"
@@ -395,12 +395,6 @@ fn parse_get_id(id_raw: &str) -> Value {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod get_transport_tests {
     use serde_json::json;
 

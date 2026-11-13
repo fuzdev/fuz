@@ -1108,9 +1108,6 @@ async fn receive_silence_expired(silence: &mut Option<ReceiveSilence>) {
 /// - **The receive timeout** ([`WsLoopOptions::receive_timeout`]) — a client
 ///   silent that long is closed with [`WS_CLOSE_SERVER_HEARTBEAT_TIMEOUT`]
 ///   (4003); every text or binary frame read resets it.
-// the loop's parts, each owned by a different layer: the socket, the
-// registry and its entry, the dispatch, and the per-connection ends
-#[allow(clippy::too_many_arguments)]
 pub async fn run_ws_connection(
     socket: WebSocket,
     registry: Arc<ConnectionRegistry>,
@@ -1200,7 +1197,10 @@ where
 ///
 /// Generic over the sink/stream so the unit tests can drive it with
 /// in-memory channels instead of a live upgraded `WebSocket`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the split socket halves plus the connection's parts, each owned by a different layer: the registry and its entry, the notification receiver and pending peer requests, the dispatch, and the loop options"
+)]
 async fn run_ws_loop<S, R>(
     mut tx: S,
     mut rx: R,

@@ -10,7 +10,10 @@
 //! seeded directly with public `fuz_artifact` constructors rather than the heavy
 //! `fuz artifact build` (which compiles from source); the one real build runs
 //! cargo on a dependency-free one-file binary.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::collections::HashSet;
 use std::path::Path;

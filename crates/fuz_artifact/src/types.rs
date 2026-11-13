@@ -2,8 +2,10 @@
 //!
 //! Core types for artifact metadata: inputs, outputs, and combined metadata.
 
-// Allow missing error docs since all errors are self-explanatory ArtifactError variants
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::error::ArtifactError;
 use super::meta_file::{self, MetaIntegrity};

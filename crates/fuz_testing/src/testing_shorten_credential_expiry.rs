@@ -66,8 +66,7 @@ fn parse_shorten_params(params: &Value) -> Result<(uuid::Uuid, i32), JsonrpcErro
                 None,
             )
         })?;
-    // in range, so exact
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation, reason = "in range, so exact")]
     Ok((account_id, seconds as i32))
 }
 

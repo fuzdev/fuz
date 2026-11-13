@@ -884,8 +884,10 @@ mod binary_hashes {
 mod present_sha512 {
     use super::{ContentHash, Deserialize, Deserializer, HashAlgo, Serializer, parse_lower_hex};
 
-    // `&Option<T>` is the signature serde's `with` calls.
-    #[allow(clippy::ref_option)]
+    #[expect(
+        clippy::ref_option,
+        reason = "`&Option<T>` is the signature serde's `with` calls"
+    )]
     pub(super) fn serialize<S: Serializer>(
         hash: &Option<ContentHash>,
         serializer: S,
@@ -1303,7 +1305,6 @@ pub(crate) fn parse_message(e: &serde_json::Error) -> String {
 
 impl ReleaseLogError {
     /// Returns user-facing hint for how to fix this error
-    #[allow(clippy::missing_const_for_fn)] // calls non-const hint() methods
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Self::TooLarge(_) => Some("Release log head exceeds size limit - possible attack"),

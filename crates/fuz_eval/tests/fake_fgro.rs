@@ -7,7 +7,12 @@
 //! The refusals that come before any spawn — the trust root, the pin, a
 //! non-UTF-8 config path — run here too, against a binary that is never
 //! reached.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

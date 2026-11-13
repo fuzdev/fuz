@@ -6,12 +6,6 @@
 //! that holds a request until its token is cancelled or the test releases
 //! it — so "in flight" is a state the test controls, not a race.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -3,7 +3,6 @@
 //! re-exports. Every branch here is pure: no network, no `~/.fuz`, no
 //! credentials (each backend authenticates ambiently, so there is no
 //! credentials argument to thread).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use fuz_release::{StorageBackend, StorageError, parse_existing_storage};
 

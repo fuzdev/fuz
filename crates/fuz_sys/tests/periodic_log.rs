@@ -6,7 +6,10 @@
 //! cache the log callsite's interest before the subscriber exists.
 
 #![cfg(feature = "periodic")]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::error::Error;
 use std::sync::{Arc, Mutex};

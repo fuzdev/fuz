@@ -30,8 +30,6 @@
 //! [`require_current_replaceable`] (a `current` that is not a symlink is
 //! refused, never removed).
 
-#![allow(clippy::missing_errors_doc)] // all errors are self-explanatory ArtifactError variants
-
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 

@@ -131,7 +131,10 @@ impl Keyring {
     /// an invariant the type system already enforces.
     #[must_use]
     pub fn sign(&self, value: &str) -> String {
-        #[allow(clippy::expect_used)] // invariant enforced by Hmac<Sha256>
+        #[expect(
+            clippy::expect_used,
+            reason = "invariant enforced by `Hmac<Sha256>`: it accepts any key length"
+        )]
         let mut mac =
             HmacSha256::new_from_slice(&self.keys[0]).expect("HMAC-SHA256 accepts any key length");
         mac.update(value.as_bytes());
@@ -155,7 +158,10 @@ impl Keyring {
         let signature = BASE64.decode(sig_b64).ok()?;
 
         for (i, key) in self.keys.iter().enumerate() {
-            #[allow(clippy::expect_used)] // invariant enforced by Hmac<Sha256>
+            #[expect(
+                clippy::expect_used,
+                reason = "invariant enforced by `Hmac<Sha256>`: it accepts any key length"
+            )]
             let mut mac =
                 HmacSha256::new_from_slice(key).expect("HMAC-SHA256 accepts any key length");
             mac.update(value.as_bytes());

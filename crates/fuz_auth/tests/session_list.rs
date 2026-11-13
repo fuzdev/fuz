@@ -2,8 +2,10 @@
 //! row whose id is the request's session hash — and none for a credential no
 //! session authenticated (bearer, daemon token).
 
-// `allow-*-in-tests` doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

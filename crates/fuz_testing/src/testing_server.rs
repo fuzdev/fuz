@@ -165,7 +165,7 @@ pub fn truncate_reset_state(tables: &[&str]) -> ResetStateFn {
 /// # Panics
 ///
 /// When `allowed_origins` doesn't parse.
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "a malformed test allowlist is a test bug"
 )]
@@ -196,10 +196,6 @@ pub fn inert_app_backend(spec: &AppBackendSpec, allowed_origins: &str) -> AppBac
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use super::*;
 

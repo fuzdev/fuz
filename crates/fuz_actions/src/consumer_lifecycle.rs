@@ -29,7 +29,10 @@ use crate::server::StartupError;
 /// A consumer builds these refs during its normal assembly and threads them
 /// in so `fuz_testing` doesn't have to re-derive the production shapes.
 /// Production passes no factory and never constructs this struct.
-#[allow(missing_debug_implementations)] // Arc-of-dyn fields don't auto-derive Debug
+#[expect(
+    missing_debug_implementations,
+    reason = "Arc-of-dyn fields don't auto-derive `Debug`"
+)]
 pub struct ExtraActionSpecsRuntime {
     /// Argon2 hasher — the same instance the live server signs + verifies
     /// with. A test binary swaps in `fuz_testing::TestingArgon2idHasher` for

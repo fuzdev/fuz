@@ -12,10 +12,10 @@
 //! connection open — so its assertion is the inverse: a well-formed response
 //! and a still-usable socket.
 
-// Test harness: panicking via expect on setup failure is the intended
-// behavior; the clippy `allow-expect-in-tests` config only reaches `#[test]`
-// fns, not the plain `assert_*` helpers below.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::time::Duration;
 

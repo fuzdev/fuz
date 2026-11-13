@@ -13,11 +13,10 @@
 //! Rust twin of the assertion inside `fuz_app`'s
 //! `src/test/db/column_projections.db.test.ts`.
 
-// A drift-guard harness: an unreachable pool or a failed introspection query is
-// a setup fault whose only useful response is a loud panic naming the step.
-// `clippy.toml`'s `allow-expect-in-tests` carve-out covers `#[test]` bodies, not
-// a library module, so the allow is explicit.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "a test harness: a setup fault panics loudly naming the step, and the in-tests carve-out doesn't reach a library module"
+)]
 
 use fuz_db::{ColumnProjections, Pool, column_projection_mismatches_merged, query_ready_columns};
 

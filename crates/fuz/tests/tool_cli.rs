@@ -13,7 +13,6 @@
 //! forge, so their end-to-end coverage lives at the library level in
 //! `fuz_sign/tests/signed_trust.rs`. Here we cover only the home-seam negatives
 //! those verbs decide before touching storage.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
 use common::{fresh_home, run as fuz, seed_tool};

@@ -139,7 +139,7 @@ impl AuthGate {
     ///
     /// Returns the canonical `403 forbidden_origin` response
     /// ([`fuz_http::forbidden_origin_response`]) to answer with.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
     )]
@@ -193,7 +193,7 @@ impl AuthGate {
     /// Returns the `403 forbidden_origin` response when the origin check
     /// refuses, and the credential walk is not run; or the
     /// [`CredentialReadFault`] response when the walk's read fails.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
     )]

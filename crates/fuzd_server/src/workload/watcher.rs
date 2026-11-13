@@ -469,11 +469,6 @@ fn fanout_coverage(subs: &mut Vec<Subscriber>, coverage: WatchCoverage, workload
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "tests panic on setup/assertion failure by design"
-)]
 mod tests {
     use super::*;
     use crate::out::OutFrame;

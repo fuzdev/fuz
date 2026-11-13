@@ -12,7 +12,11 @@
 //! that ignores the developer's global and system configuration. Identity and
 //! branch name are set per repository. The tests skip when `git` is absent.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 
@@ -2148,7 +2152,7 @@ impl Storage for Vanishing {
     async fn upload_file(&self, path: &str, src: &Path) -> Result<(), StorageError> {
         self.0.upload_file(path, src).await
     }
-    #[allow(
+    #[expect(
         clippy::unused_async_trait_impl,
         reason = "trait conformance: an `async fn` body runs when awaited; the `impl Future` rewrite would run it at call time"
     )]
@@ -2407,7 +2411,7 @@ impl Storage for Unlistable {
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
         self.0.exists(path).await
     }
-    #[allow(
+    #[expect(
         clippy::unused_async_trait_impl,
         reason = "trait conformance: an `async fn` body runs when awaited; the `impl Future` rewrite would run it at call time"
     )]

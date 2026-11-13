@@ -21,12 +21,14 @@
 //! `fuz_db_test` it creates and drops its own scratch database beside it — the
 //! test role needs `CREATEDB`.
 
-#![allow(
+#![expect(
     clippy::unwrap_used,
-    clippy::panic,
     clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
+#![expect(
     clippy::items_after_statements,
-    clippy::doc_markdown
+    reason = "tests declare their fixture items beside the statements that use them"
 )]
 
 use std::collections::BTreeMap;
@@ -49,7 +51,7 @@ fn build_pool() -> Pool {
     create_pool(&test_database_url(), &fuz_db::PoolOptions::default()).expect("test pool build")
 }
 
-/// Reset the tables / schema_version rows a test will touch.
+/// Reset the tables / `schema_version` rows a test will touch.
 async fn clean(pool: &Pool, table_names: &[&str], namespaces: &[&str]) {
     let client = pool.get().await.expect("clean: pool get");
     for table in table_names {

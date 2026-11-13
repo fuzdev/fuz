@@ -32,8 +32,11 @@
 //! cargo test -p fuz_auth --test revalidate_auth -- --ignored --test-threads=1
 //! ```
 
-// `allow-*-in-tests` doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

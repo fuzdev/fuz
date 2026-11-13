@@ -21,10 +21,11 @@
 //! deadline — a daemon these tests leak would otherwise outlive the deleted
 //! tempdir, holding its lock and serving nothing anyone can reach.
 
-// Test harness: panicking via expect on setup failure is the intended
-// behavior; the clippy `allow-expect-in-tests` config only reaches `#[test]`
-// fns, not the shared helpers below.
-#![allow(clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;

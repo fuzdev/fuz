@@ -6,8 +6,11 @@
 //! separate files and included as separate items: a witness key verifies a
 //! co-signature and is never a release key.
 
-// Build scripts are expected to panic on invalid input - these are compile-time checks
-#![allow(clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "build scripts panic on invalid input: these are compile-time checks"
+)]
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
@@ -17,7 +20,10 @@ use std::fmt::Write;
 // The witness-key rules, shared with the crate itself so that what the build
 // enforces is what the crate's tests cover. The build uses the validation
 // entry point only.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the build script uses only the validation entry point"
+)]
 #[path = "src/witness.rs"]
 mod witness;
 

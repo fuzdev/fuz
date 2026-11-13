@@ -9,7 +9,10 @@
 //! validation, which need no signature, are covered beside the types in
 //! `fuz_release::release_log`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Once;

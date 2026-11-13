@@ -14,8 +14,10 @@
 //! clock would otherwise read one every interval, and these cases watch for
 //! the stream to end.
 
-// `allow-*-in-tests` doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::time::Duration;
 

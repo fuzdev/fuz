@@ -159,8 +159,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // `root` is moved into the `json!` macro expansion, so it is consumed.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "callers pass a fresh `json!` temporary; taking `&Value` would only add `&` at every call site"
+    )]
     fn lock_with_root(root: Value) -> RawLockfile {
         serde_json::from_value(json!({
             "lockfileVersion": 3,

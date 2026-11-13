@@ -103,7 +103,7 @@ pub async fn password_handler(
     }
 }
 
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]
@@ -363,7 +363,7 @@ enum PasswordChange {
 /// or the commit. The transaction is rolled back, so the hash, the sessions,
 /// and the tokens are all as they were — unless the commit's answer was lost
 /// in transit, when the change may have landed.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]

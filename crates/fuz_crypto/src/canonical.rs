@@ -34,10 +34,10 @@ pub fn canonical_json<T: Serialize>(value: &T) -> Result<String, CanonicalError>
 /// Write canonical JSON directly to string, guaranteeing key ordering.
 ///
 /// Avoids round-tripping through `serde_json::Map` which has unclear ordering guarantees.
-// These operations are infallible:
-// - write! to String has no I/O, cannot fail
-// - serde_json::to_string on valid &str cannot fail
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "infallible: `write!` to a `String` has no I/O, and serializing a valid `&str` cannot fail"
+)]
 fn write_canonical(value: &Value, out: &mut String) -> Result<(), CanonicalError> {
     match value {
         Value::Null => out.push_str("null"),

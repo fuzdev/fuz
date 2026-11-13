@@ -288,7 +288,11 @@ fn parse_loadavg(content: &str) -> Option<(f32, f32, f32)> {
 }
 
 /// Parse system uptime (seconds, truncated) from `/proc/uptime`.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "uptime is non-negative, and truncating to whole seconds is the intent"
+)]
 fn parse_uptime(content: &str) -> Option<u64> {
     let secs: f64 = content.split_whitespace().next()?.parse().ok()?;
     Some(secs as u64)

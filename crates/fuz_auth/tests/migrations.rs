@@ -9,10 +9,6 @@
 //!
 //! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
-// Integration-test helpers assert via `expect`/`unwrap`; `allow-*-in-tests`
-// doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_db::{MigrationNamespace, run_migrations};
 use fuz_testing::{TestingDbOptions, fresh_test_db_pool};

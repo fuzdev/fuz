@@ -1635,7 +1635,7 @@ pub(crate) use dispatch_db;
 /// `Default` is the open cell layer: the builtin roles only, no validator, no
 /// authorizers (open create and open grant).
 #[derive(Default)]
-#[allow(
+#[expect(
     missing_debug_implementations,
     reason = "Arc-of-dyn and closure fields carry no Debug"
 )]

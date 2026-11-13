@@ -39,12 +39,10 @@
 //! that module's "Why this is separate" section for the third variant
 //! ([`crate::testing_reset`], the per-test row wipe over the wire).
 
-// This module is a test harness: every failure here is a setup fault (no
-// reachable Postgres, a broken migration, bad scratch DDL) whose only useful
-// response is a loud panic naming the step. `clippy.toml`'s
-// `allow-expect-in-tests` carve-out covers `#[test]` bodies, not a library
-// module, so the allow is explicit.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "a test harness: a setup fault panics loudly naming the step, and the in-tests carve-out doesn't reach a library module"
+)]
 
 use fuz_db::{MigrationNamespace, Pool, create_pool, run_migrations};
 

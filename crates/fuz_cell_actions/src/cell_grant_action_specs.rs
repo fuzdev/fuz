@@ -445,10 +445,6 @@ async fn handle_grant_list<C: GenericClient + ?Sized>(
 /// `revoke_authorizer` the optional [`CellGrantRevokeAuthorize`] on
 /// `cell_grant_revoke`.
 #[must_use]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "the authorizer Options are cloned into the handler closures"
-)]
 pub fn build_cell_grant_spec_set(
     roles: Arc<RoleRegistry>,
     authorizer: Option<Arc<dyn CellGrantCreateAuthorize>>,

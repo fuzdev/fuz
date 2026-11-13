@@ -2,9 +2,10 @@
 //! commands it prints are run through `sh` exactly as a user would paste them,
 //! and running every one restores one tree without nesting another inside it.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 // The process spawns below (the built `fuzi` binary, and `sh`) each carry a
 // scoped `#[expect]` of the exec-free disallow in this crate's `clippy.toml`:
 // it guards fuzi's own source, not the tests that drive it from outside — and

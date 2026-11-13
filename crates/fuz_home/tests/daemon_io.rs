@@ -6,7 +6,10 @@
 //! `FUZ_HOME` redirect, since edition 2024 + `unsafe_code = forbid` rule out
 //! `std::env::set_var`). The override is a process global, so a serial guard
 //! keeps these tests from racing each other.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

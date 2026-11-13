@@ -38,8 +38,8 @@ disallowed-methods = [
 # From the workspace clippy.toml: restriction lints (`unwrap_used` /
 # `expect_used` / `panic`) are warn-level workspace-wide (see Cargo.toml
 # `[workspace.lints.clippy]`) so production panic points need an explicit
-# justified `#[allow]`. Tests panic on assertion failure by design, so allow
-# the three there.
+# `#[expect(…, reason = "…")]`. Tests panic on assertion failure by design, so
+# allow the three there.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true

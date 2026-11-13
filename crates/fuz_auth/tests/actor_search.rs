@@ -15,8 +15,10 @@
 //! swap the query back to the tombstone-blind sibling and the tombstoned case
 //! answers a result set where it expects `-32602`.
 
-// `allow-*-in-tests` doesn't cover the non-`#[test]` helper fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

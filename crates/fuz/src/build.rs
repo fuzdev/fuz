@@ -28,7 +28,10 @@ pub const REPO_ENV_VAR: &str = "FUZ_DEV_REPO";
 /// Build from source, create artifact, switch to it.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "build")]
-#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "CLI flags are naturally boolean"
+)]
 pub struct Build {
     /// build but don't switch to the artifact
     #[argh(switch)]

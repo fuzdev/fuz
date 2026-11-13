@@ -171,7 +171,7 @@
 //! admission, and with no re-hash on this path to catch it. Either failure is
 //! logged and answered as the masked `404`.
 
-#![allow(
+#![expect(
     clippy::result_large_err,
     reason = "the REST helpers return Result<_, Response>; the Err *is* the ready-to-return axum response — the spine's handler idiom"
 )]

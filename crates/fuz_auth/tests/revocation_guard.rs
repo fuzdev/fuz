@@ -20,7 +20,10 @@
 //! and a scoped one closes nothing. The one listener reaches the role-gated
 //! audit streams the same way, through the closer it is handed.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::sync::Arc;
 

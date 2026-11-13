@@ -208,7 +208,7 @@ impl HttpsStorage {
     }
 }
 
-#[allow(
+#[expect(
     clippy::unused_async_trait_impl,
     reason = "trait conformance: the read-only backend's refusals stay `async fn` like every `Storage` impl; the `impl Future` rewrite would run them at call time"
 )]

@@ -116,7 +116,7 @@ pub async fn login_handler(
     }
 }
 
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]

@@ -33,9 +33,10 @@
 //!
 //! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
-// Integration-test helpers assert via `expect`/`unwrap` (panic-on-failure is
-// the test mechanism); `allow-*-in-tests` only covers `#[test]` fns.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use axum::http::{HeaderMap, header::AUTHORIZATION, header::COOKIE};
 use fuz_auth::daemon_token::DAEMON_TOKEN_HEADER;

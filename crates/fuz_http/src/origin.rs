@@ -752,12 +752,6 @@ fn is_canonical_ipv4_or_name(host: &str) -> bool {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use super::*;
     use axum::http::HeaderValue;

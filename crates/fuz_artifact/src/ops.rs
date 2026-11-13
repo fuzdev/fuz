@@ -2,8 +2,10 @@
 //!
 //! Functions for listing, finding, and managing artifacts.
 
-// Allow missing error docs since all errors are self-explanatory ArtifactError variants
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::error::ArtifactError;
 use super::store::{StoreSlot, current_link_target, inspect_store_entry, store_entry_path};

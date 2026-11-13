@@ -5,8 +5,7 @@
 //! Heads are signed and verified for real, with the signing keys admitted
 //! through `fuz_crypto`'s dev-dependency-only `test_trust_anchor` seam.
 
-// Each suite uses its own part of the fixture.
-#![allow(dead_code)]
+#![allow(dead_code, reason = "each test binary uses only part of this module")]
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;

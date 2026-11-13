@@ -352,7 +352,7 @@ impl GatedRouter {
 ///
 /// A fallback nested under a path prefix (`Router::nest`) is part of its
 /// group and passes that group's gates; only a top-level one is refused.
-#[allow(
+#[expect(
     clippy::panic,
     reason = "a carved-out fallback is a boot-time misconfiguration, refused before anything is served"
 )]
@@ -470,12 +470,6 @@ fn gate_group(group: RouteGroup, options: &StackOptions) -> Router {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use std::net::SocketAddr;
 

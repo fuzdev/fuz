@@ -11,9 +11,11 @@
 //! Every run gets its own `FUZ_HOME` and `HOME` and works under one scratch
 //! directory; `HOME` is always set, so no run reads the caller's home.
 
-// Test harness: the clippy `allow-*-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;

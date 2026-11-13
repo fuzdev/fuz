@@ -27,7 +27,10 @@
 //! which has a published signed release to install, and `fuz_artifact`'s
 //! `install_local_tool_refuses_world_writable_home`, whose local install needs
 //! no storage at all and would otherwise have fully succeeded.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

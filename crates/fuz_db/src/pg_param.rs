@@ -59,7 +59,6 @@ impl ToSql for UntypedTextParam<'_> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

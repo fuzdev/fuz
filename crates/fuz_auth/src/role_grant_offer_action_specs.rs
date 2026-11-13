@@ -1305,7 +1305,10 @@ async fn handle_role_grant_revoke(
     Ok(serde_json::json!({ "ok": true, "revoked": true }))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the audit rows need both sides' account and actor ids, the revoke result, and the reason"
+)]
 async fn emit_revoke_audits(
     ctx: &AuthenticatedActionContext<'_>,
     db: &(impl deadpool_postgres::GenericClient + ?Sized),

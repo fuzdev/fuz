@@ -10,7 +10,10 @@
 //!
 //! Override the connection URL with `FUZ_DB_TEST_URL`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::collections::BTreeMap;
 use std::env;

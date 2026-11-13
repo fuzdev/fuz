@@ -608,7 +608,7 @@ async fn dispatch_pooled<'a>(
 }
 
 /// Shared body: build the [`ActionContext`], call the handler closure.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "borrow-only context assembly — each is a distinct capability the ActionContext carries, not a bundle to group"
 )]

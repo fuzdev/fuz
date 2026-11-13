@@ -20,7 +20,11 @@
 //! cargo test -p fuz_auth --test credential_deadline -- --ignored --test-threads=1
 //! ```
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

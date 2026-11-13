@@ -11,7 +11,7 @@ use fuz_realtime::{SseRegistry, SseSubscription};
 
 /// Register a stream and admit it at once — the two phases a route runs once
 /// its gates and its re-read pass, with nothing in between.
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "a test helper: a refused admission fails the test"
 )]

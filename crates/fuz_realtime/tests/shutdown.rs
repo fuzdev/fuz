@@ -16,11 +16,11 @@
 //! flight when the token fires — registered pending, or not yet registered —
 //! is refused with 1001.
 
-#![allow(
+#![expect(
     clippy::expect_used,
     clippy::panic,
     clippy::unwrap_used,
-    reason = "tests panic on assertion failure by design"
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
 use std::io::{Read, Write};

@@ -188,7 +188,10 @@ fn cmd_key_export(args: &KeyExport) -> Result<(), KeyCommandError> {
     Ok(())
 }
 
-#[allow(clippy::unnecessary_wraps)] // consistent with the other cmd_key_* signatures
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "consistent with the other `cmd_key_*` signatures"
+)]
 fn cmd_key_list_trusted() -> Result<(), KeyCommandError> {
     println!("Trusted public keys ({} embedded):", PUBLIC_KEYS.len());
     for key_bytes in PUBLIC_KEYS {

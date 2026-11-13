@@ -37,7 +37,10 @@
 //! truncate the body on release but leave the dirent in place; the next
 //! acquirer reuses the same inode and the kernel arbitrates honestly.
 
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `FileLockError` variant"
+)]
 
 use crate::time::rfc3339_now;
 use crate::{SECURE_DIR_MODE, SECURE_FILE_MODE};

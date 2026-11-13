@@ -82,10 +82,10 @@ pub const KNOWN_INERT_ENTRY_FIELDS: &[&str] = &[
 /// distance between this and the `inBundle` bug.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-// The boolean flags mirror npm's lockfile schema 1:1 (`dev`, `optional`,
-// `peer`, `devOptional`, `hasInstallScript`, `extraneous`); folding them into
-// an enum would lose the direct serde mapping.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the flags mirror npm's lockfile schema 1:1; an enum would lose the direct serde mapping"
+)]
 pub struct RawPackageEntry {
     // --- layout-relevant ---
     /// The locked package `version` (carried only for `fuzi verify`'s structural
@@ -177,10 +177,10 @@ pub struct RawPackageEntry {
     /// derive: eliminating it means hand-writing a visitor over all 19 fields —
     /// a second model of this struct to keep in sync by hand, which is the trade
     /// this crate declines everywhere else.
-    // clippy suggests a set for a zero-sized value type, and is right in general —
-    // but `serde(flatten)` deserializes from a map and has no set form, so the
-    // ZST value *is* how "keys only" is spelled here.
-    #[allow(clippy::zero_sized_map_values)]
+    #[expect(
+        clippy::zero_sized_map_values,
+        reason = "`serde(flatten)` deserializes from a map and has no set form, so the ZST value is how keys-only is spelled"
+    )]
     #[serde(flatten)]
     pub unknown: BTreeMap<String, serde::de::IgnoredAny>,
 }

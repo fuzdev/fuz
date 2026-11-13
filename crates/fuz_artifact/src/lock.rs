@@ -14,7 +14,10 @@
 //! [`FileLock`] guard through helpers that need to assert "you hold the
 //! lock" — see [`crate::switch_to_artifact`].
 
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every error is a self-explanatory `ArtifactError` variant"
+)]
 
 use super::ARTIFACT_LOCK_FILE;
 use super::error::ArtifactError;

@@ -10,13 +10,6 @@
 //! Holds each connection's receiver directly in place of a loop; the WS
 //! loop's close frames are pinned in `ws_endpoint`'s unit tests.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Barrier};
 
@@ -587,7 +580,7 @@ fn concurrent_adds_never_exceed_the_cap() {
     let registry = Arc::new(capped(MAX));
     let account = uuid::Uuid::new_v4();
     let barrier = Arc::new(Barrier::new(THREADS));
-    #[allow(
+    #[expect(
         clippy::needless_collect,
         reason = "every thread must spawn before any join, or the barrier never releases"
     )]

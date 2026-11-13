@@ -585,11 +585,6 @@ fn is_ignored_name(name: &OsStr) -> bool {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "tests panic on setup/assertion failure by design"
-)]
 mod tests {
     use super::*;
     use notify::event::{CreateKind, ModifyKind, RemoveKind};

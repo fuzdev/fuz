@@ -3,7 +3,11 @@
 //! `--ignored`-gated (needs Postgres). Run:
 //! `cargo test -p fuz_fact -- --ignored --test-threads=1`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

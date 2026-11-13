@@ -9,9 +9,10 @@
 //! regression to a lookup that takes an empty `HOME` as unset would fall back
 //! to the password database's home, the developer's own.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helper below, which panics on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::path::Path;
 use std::process::{Command, Output};

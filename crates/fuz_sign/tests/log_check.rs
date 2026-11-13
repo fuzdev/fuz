@@ -24,7 +24,11 @@
 //! from the cached head, and an upgrade whose latest release is the installed,
 //! revoked one.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

@@ -3,9 +3,10 @@
 //! task's failure gives — and a help request prints usage to stdout and exits
 //! 0. None of these lines reaches a task.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::process::{Command, Output};
 

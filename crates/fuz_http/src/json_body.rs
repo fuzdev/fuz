@@ -71,7 +71,7 @@ pub fn decode_json_text(body: &[u8]) -> Cow<'_, str> {
 /// the body doesn't parse as JSON (an empty body included) or isn't an
 /// object; `invalid_request_body` when the object holds U+0000 in a string or
 /// key ([`crate::scan_json_value`]) or doesn't deserialize to `T`.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
 )]

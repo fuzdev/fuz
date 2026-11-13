@@ -24,7 +24,10 @@
 //! guard, and the end-to-end bearer-stream-closes-on-revoke loop) are the
 //! `#[ignore]` Postgres suite in `tests/audit_stream.rs`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::sync::Arc;
 use std::time::Duration;

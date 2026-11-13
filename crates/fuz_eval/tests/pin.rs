@@ -6,7 +6,12 @@
 //! never lets it be cached; the cache's hit path runs against `/bin/true` itself,
 //! whose times settled long ago. (The crate's unit tests cover the cached path
 //! for a fresh file with the clock moved ahead.)
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

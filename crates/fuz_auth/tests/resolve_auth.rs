@@ -30,7 +30,11 @@
 //! `is_browser_context` itself — the heart of the bearer rejection — is
 //! unit-tested inline in `bearer_auth.rs`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

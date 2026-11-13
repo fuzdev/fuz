@@ -50,7 +50,10 @@ use fuz_http::JsonrpcError;
 /// - `client_ip` — caller IP if upstream resolved one; `None`
 ///   otherwise. Carried into audit rows; gating decisions that
 ///   require it must check for `None` explicitly.
-#[allow(missing_debug_implementations)] // borrowed refs + Arcs; no useful Debug shape
+#[expect(
+    missing_debug_implementations,
+    reason = "borrowed refs and Arcs; no useful `Debug` shape"
+)]
 pub struct AuthenticatedActionContext<'a> {
     pub auth: &'a RequestActorContext,
     pub credential_type: Option<CredentialType>,
@@ -100,7 +103,10 @@ impl AuthenticatedActionContext<'_> {
 /// of [`crate::ResolvedAuthContext`]. The handler bodies are identical to the
 /// actor-bound shape — they only read `auth.account` — so the two contexts
 /// stay structurally parallel.
-#[allow(missing_debug_implementations)] // borrowed refs + Arcs; no useful Debug shape
+#[expect(
+    missing_debug_implementations,
+    reason = "borrowed refs and Arcs; no useful `Debug` shape"
+)]
 pub struct AccountActionContext<'a> {
     pub auth: &'a RequestContext,
     pub credential_type: Option<CredentialType>,

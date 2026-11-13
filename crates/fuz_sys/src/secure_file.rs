@@ -381,9 +381,10 @@ pub fn write_secure_file(path: &Path, content: &[u8], mode: u32) -> Result<(), S
 
 #[cfg(test)]
 mod tests {
-    // Test sizes are known-bounded literals; u64→usize is safe here and the
-    // cast reads cleaner than `usize::try_from(...).unwrap()`.
-    #![allow(clippy::cast_possible_truncation)]
+    #![expect(
+        clippy::cast_possible_truncation,
+        reason = "test sizes are known-bounded literals, and the cast reads cleaner than `usize::try_from(...).unwrap()`"
+    )]
     use super::*;
     use std::os::unix::fs::symlink;
     use tempfile::TempDir;

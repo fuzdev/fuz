@@ -9,9 +9,8 @@
 //! test has to steer it. Test-only: the `testing_` prefix keeps it out of every
 //! release.
 
-#![allow(
+#![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::panic,
     reason = "a test fixture: a failure here is a failed test, reported by the suite"
 )]

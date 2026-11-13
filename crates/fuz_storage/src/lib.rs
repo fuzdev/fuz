@@ -50,8 +50,10 @@
 //! Keys therefore contain `/`, which is why every backend validates them
 //! traversal-safe rather than assuming a single flat segment.
 
-// Allow missing errors docs for obvious Result functions
-#![allow(clippy::missing_errors_doc)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "the `Result` fns' errors are self-explanatory"
+)]
 
 pub mod base_url;
 pub mod error;

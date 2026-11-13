@@ -177,7 +177,10 @@ struct PoolEntry {
 }
 
 /// Build status info from a pool entry
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a running sidecar's elapsed milliseconds stay far below `u64::MAX`"
+)]
 fn build_status_info(id: &str, entry: &PoolEntry) -> SidecarStatusInfo {
     let (last_active_ms, uptime_ms, restart_count, error_message) = match &entry.state {
         SidecarState::Running {
@@ -392,7 +395,7 @@ impl SidecarPool {
     }
 
     /// Ensure a sidecar is loaded, spawning if necessary
-    #[allow(clippy::option_if_let_else)] // More readable as if-let
+    #[expect(clippy::option_if_let_else, reason = "more readable as if-let")]
     async fn ensure_loaded(&self, sidecar_id: &str) -> Result<SidecarHandle, SidecarError> {
         loop {
             // Check current state (read lock, released before any await)
@@ -1097,7 +1100,7 @@ mod tests {
     }
 
     impl SidecarFactory for TestFactory {
-        #[allow(
+        #[expect(
             clippy::unused_async_trait_impl,
             reason = "trait conformance: an `async fn` body runs when awaited; the `impl Future` rewrite would run it at call time"
         )]

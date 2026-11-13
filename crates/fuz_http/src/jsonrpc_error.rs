@@ -1110,7 +1110,7 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct RequiredInput {
-        #[allow(dead_code, reason = "shape only — the parse result is the assertion")]
+        #[expect(dead_code, reason = "shape only — the parse result is the assertion")]
         id: String,
     }
 

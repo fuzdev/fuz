@@ -3,12 +3,6 @@
 //! the frame, and the linger that lets a client with an unread inbound
 //! tail read it.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::time::Duration;
 
 use axum::extract::ws::Message;

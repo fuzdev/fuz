@@ -162,11 +162,6 @@ impl PasswordProvided {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use super::{
         PASSWORD_LENGTH_MAX, PASSWORD_LENGTH_MIN, Password, PasswordProvided, password_length,

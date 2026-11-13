@@ -2,9 +2,10 @@
 //! a dependency-free `fuz` and `fuzd` built by a real (tiny) `cargo build
 //! --release`, never this repo's, and never the user's `~/.fuz` or daemon.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

@@ -1,10 +1,10 @@
 //! The drift guard over a server's committed `expected_schema.json` — the
 //! column map its `/ready` deploy gate embeds.
 
-// A test assertion helper, so a failure panics; `clippy.toml`'s
-// `allow-expect-in-tests` carve-out covers `#[test]` bodies, not a library
-// module, so the allow is explicit.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "a test assertion helper, so a failure panics, and the in-tests carve-out doesn't reach a library module"
+)]
 
 use std::collections::BTreeMap;
 use std::path::Path;

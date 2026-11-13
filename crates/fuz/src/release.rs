@@ -72,7 +72,7 @@ impl ReleaseCommandError {
     /// is `2`, checked first: a world-writable home is also classified a
     /// violation, but nothing untrusted was read, and the fix is the caller's
     /// `chmod`.
-    pub fn exit_code(&self) -> u8 {
+    pub const fn exit_code(&self) -> u8 {
         match self {
             Self::Release(ReleaseError::Artifact(
                 ArtifactError::IntegrityFailed { .. }
@@ -142,7 +142,10 @@ pub fn open_storage(location: &str) -> Result<StorageBackend, ReleaseCommandErro
 /// Fetch and install latest from storage.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "upgrade")]
-#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "CLI flags are naturally boolean"
+)]
 pub struct Upgrade {
     /// storage location (e.g. `/path`, `forge://host`, `ssh://user@host/path`, or `https://host/path`)
     #[argh(option)]

@@ -461,8 +461,11 @@ pub fn parse_token_lifetime_param(params: &Value) -> Result<Option<u32>, Jsonrpc
                     "lifetime.days must be between 1 and {TOKEN_TTL_DAYS_MAX}"
                 )));
             }
-            // Cast is safe: bounded by TOKEN_TTL_DAYS_MAX above.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "bounded to `1..=TOKEN_TTL_DAYS_MAX` above"
+            )]
             Ok(Some(days as u32))
         }
         other => Err(invalid(&format!("unknown lifetime.kind {other:?}"))),

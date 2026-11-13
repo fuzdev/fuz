@@ -192,7 +192,7 @@ const fn str_eq(a: &str, b: &str) -> bool {
 /// When `name` isn't in `columns`. Called through `col!` this happens at
 /// const-eval time — a compile error, never a runtime panic.
 #[must_use]
-#[allow(
+#[expect(
     clippy::panic,
     reason = "const-eval panic = compile error at the col! site; unreachable at runtime for a name the build accepted"
 )]

@@ -568,7 +568,6 @@ fn establish_cache_dir_as(dir: &Path, euid: u32) -> Result<File, EvalError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use std::time::Duration;
 

@@ -6,11 +6,9 @@
 //! is covered end-to-end. The unit tests in each module cover the
 //! pure-function surface; this file covers the wiring.
 
-#![allow(
-    clippy::unwrap_used,
+#![expect(
     clippy::expect_used,
-    clippy::panic,
-    reason = "integration tests panic on assertion failure by design"
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
 use std::net::SocketAddr;

@@ -3,12 +3,6 @@
 //! its credential is still good), the newer socket stays open, and a
 //! plain revocation still closes with 4001.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;

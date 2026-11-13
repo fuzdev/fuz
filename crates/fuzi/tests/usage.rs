@@ -4,9 +4,10 @@
 //! stdout and exits 0. Each run is in an empty scratch directory, and none of
 //! them installs anything.
 
-// Test harness: the clippy `allow-expect-in-tests` config reaches only `#[test]`
-// fns, not the shared helpers below, which panic on a setup failure by design.
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 // `run_fuzi` spawns the built binary under a scoped `#[expect]` of the
 // exec-free disallow in this crate's `clippy.toml`: it guards fuzi's own
 // source, not the tests that drive it from outside — and scoped, so the rest

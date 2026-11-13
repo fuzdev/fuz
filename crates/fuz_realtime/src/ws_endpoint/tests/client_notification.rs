@@ -14,12 +14,6 @@
 //! followed by no frame on either backend — is pinned by a consumer's
 //! cross-backend suite, not in this workspace.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests panic on assertion failure by design"
-)]
-
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 

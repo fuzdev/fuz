@@ -121,11 +121,6 @@ fn parse_ids(params: &Value) -> Result<Vec<uuid::Uuid>, JsonrpcError> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use fuz_http::JsonrpcErrorCode;
     use serde_json::json;

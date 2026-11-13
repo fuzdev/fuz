@@ -245,7 +245,6 @@ mod tests {
     #[tokio::test]
     async fn a_panicking_task_carries_its_payload() {
         static PERMITS: Semaphore = Semaphore::const_new(1);
-        #[allow(clippy::panic)] // the panic is the input under test
         let result = run_bounded(&PERMITS, || -> () { panic!("argon2 exploded") }).await;
         let error = result.expect_err("a panic is an error");
         assert!(matches!(error, PasswordHashError::Task(_)), "{error:?}");

@@ -6,7 +6,10 @@
 //! `test_home_override` dev-dep feature) never contends across files. Within a
 //! file, cargo runs `#[test]`s on parallel threads, so `SERIAL` serializes the
 //! ones that share that single global.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -27,7 +30,7 @@ pub fn fake_fuz(seed: u8) -> Vec<u8> {
 }
 
 /// The host's target triple, the one a build's inputs name.
-#[allow(dead_code)] // not every consumer of `mod common` uses every helper
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub fn host_triple() -> String {
     fuz_artifact::platform::test_stubs::host_target()
         .triple()

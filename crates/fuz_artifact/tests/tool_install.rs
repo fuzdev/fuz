@@ -4,7 +4,10 @@
 //! `fuz_home::get_tool_dir`, so like the artifact-store ops it needs a
 //! redirectable home; drives the same `test_home_override` seam as
 //! `tests/local_store.rs`. See `tests/common/mod.rs` for the shared harness.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

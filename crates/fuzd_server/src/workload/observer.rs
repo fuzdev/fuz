@@ -695,7 +695,7 @@ impl ProcessState {
     /// Fold one raw sample into the state, returning the delta + events vs.
     /// what subscribers last saw. CPU rates are zero on the first sample (no
     /// prior counters to diff against).
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "tick counts are small; f32 is ample for a percentage"
     )]
@@ -835,7 +835,7 @@ impl NetworkState {
 
     /// Fold one raw sample into the state. Interface rates are zero on the
     /// first sample; connections diff by inode.
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "byte counts; f32 is ample for a throughput rate"
     )]

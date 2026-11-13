@@ -11,8 +11,10 @@
 /// # Panics
 ///
 /// Never panics - RFC 3339 formatting of `OffsetDateTime` is infallible.
-#[allow(clippy::expect_used)] // RFC3339 formatting of OffsetDateTime cannot fail
-#[allow(clippy::missing_panics_doc)] // documented above, panic cannot occur
+#[expect(
+    clippy::expect_used,
+    reason = "RFC 3339 formatting of `OffsetDateTime` cannot fail"
+)]
 pub fn rfc3339_now() -> String {
     let full = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)

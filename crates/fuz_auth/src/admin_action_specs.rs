@@ -390,7 +390,6 @@ mod keys {
 #[serde(default, deny_unknown_fields)]
 struct ActingOnlyInput {
     #[serde(deserialize_with = "fuz_http::deserialize_optional_wire_uuid")]
-    #[allow(dead_code, reason = "resolved by the dispatcher, not the handler")]
     acting: Option<uuid::Uuid>,
 }
 
@@ -1363,11 +1362,6 @@ async fn handle_app_settings_update(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use fuz_http::{JsonrpcErrorCode, parse_strict_params};
     use serde_json::{Value, json};

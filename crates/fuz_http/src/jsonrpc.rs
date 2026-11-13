@@ -372,7 +372,10 @@ fn extract_id(obj: &Map<String, Value>) -> Value {
 /// never panic the read loop — it just surfaces to the awaiting caller as
 /// `PeerError::ClientError`. Twin of `fuz_app`'s
 /// `parse_inbound_jsonrpc_error`, which reads the reply the same way.
-#[allow(clippy::cast_possible_truncation)] // saturating; `i32::try_from` bounds it
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the filter admits only integral floats, `as` saturates the rest, and `i32::try_from` rejects what doesn't fit"
+)]
 fn parse_inbound_error(error: Option<&Value>) -> JsonrpcError {
     let obj = error.and_then(Value::as_object);
     let code = obj

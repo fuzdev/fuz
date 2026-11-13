@@ -123,7 +123,10 @@ pub type ResetStateFn = Arc<dyn for<'a> Fn(ActionDb<'a>) -> BoxFutureResetResult
 /// Runtime state the reset action needs to seed credentials. Threaded
 /// from the test binary's server-assembly site (`testing_zzz_server`,
 /// etc.) so this crate never re-creates the production shapes.
-#[allow(missing_debug_implementations)] // Arc<dyn Trait> fields don't auto-derive Debug
+#[expect(
+    missing_debug_implementations,
+    reason = "Arc-of-dyn fields don't auto-derive `Debug`"
+)]
 pub struct TestingResetOptions {
     /// Password hasher — the same instance the live server signs+verifies
     /// with. Production swaps in `Argon2idHasher`; the test binary uses
@@ -536,7 +539,7 @@ where
 /// source body; Cargo monomorphizes per concrete type at the call sites,
 /// matching the inline-duplication shape this helper replaced without
 /// the two-arm source cost.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the seeding inputs plus the keeper-seeded hook; one private call site pair"
 )]

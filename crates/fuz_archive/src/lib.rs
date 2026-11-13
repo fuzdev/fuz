@@ -459,7 +459,10 @@ pub fn safe_extract<R: Read, P: Placement>(
         let mut file = std::fs::File::create(&dest)?;
         let mut file_size: u64 = 0;
 
-        #[allow(clippy::large_stack_arrays)] // 64 KiB stack buffer is fine here
+        #[expect(
+            clippy::large_stack_arrays,
+            reason = "a 64 KiB stack buffer is fine here"
+        )]
         let mut buf = [0u8; EXTRACT_BUFFER_SIZE];
         loop {
             let n = entry

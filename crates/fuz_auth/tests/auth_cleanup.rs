@@ -35,7 +35,11 @@
 //!
 //! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

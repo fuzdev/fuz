@@ -549,7 +549,7 @@ mod tests {
         async fn upload(&self, path: &str, data: &[u8]) -> Result<(), StorageError> {
             self.0.upload(path, data).await
         }
-        #[allow(
+        #[expect(
             clippy::unused_async_trait_impl,
             reason = "trait conformance: an `async fn` body runs when awaited; the `impl Future` rewrite would run it at call time"
         )]

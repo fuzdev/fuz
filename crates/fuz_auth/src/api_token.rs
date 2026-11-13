@@ -90,7 +90,10 @@ impl std::fmt::Debug for GeneratedApiToken {
 #[must_use]
 pub fn generate_api_token() -> GeneratedApiToken {
     let mut bytes = [0u8; TOKEN_ENTROPY_BYTES];
-    #[allow(clippy::expect_used)] // OS RNG availability is a platform invariant
+    #[expect(
+        clippy::expect_used,
+        reason = "OS RNG availability is a platform invariant"
+    )]
     getrandom::fill(&mut bytes).expect("getrandom should always succeed on supported platforms");
     let raw = URL_SAFE_NO_PAD.encode(bytes);
     let token = format!("{API_TOKEN_PREFIX}{raw}");

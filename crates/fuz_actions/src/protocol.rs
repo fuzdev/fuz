@@ -36,7 +36,10 @@ use crate::peer_ping::peer_ping_action_spec;
 /// `cancel` is not here: it is a notification the WS read loop owns, never
 /// a dispatched method (see [`fuz_realtime::CANCEL_METHOD`]).
 #[must_use]
-#[allow(non_snake_case)]
+#[expect(
+    non_snake_case,
+    reason = "named like the constant spec set it stands for; its specs own `Arc`'d handler closures, so it can't be a `const`"
+)]
 pub fn PROTOCOL_ACTION_SPECS() -> Vec<ActionSpec> {
     vec![heartbeat_action_spec(), peer_ping_action_spec()]
 }

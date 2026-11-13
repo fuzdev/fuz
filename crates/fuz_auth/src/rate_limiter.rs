@@ -501,7 +501,10 @@ impl RateLimiter {
     /// Panics if `options.max_keys` is `Some(0)` — a zero cap holds nothing,
     /// so it's a misconfiguration; pass `None` for unbounded.
     #[must_use]
-    #[allow(clippy::panic)] // boot-time config guard: a zero cap is a misconfig, fail loud
+    #[expect(
+        clippy::panic,
+        reason = "boot-time config guard: a zero cap is a misconfig, fail loud"
+    )]
     pub fn new(options: RateLimiterOptions) -> Self {
         // `None` is unbounded; `Some(n > 0)` caps at `n`. `Some(0)` is a
         // misconfigured cap that holds nothing — refuse it loudly (the TS twin

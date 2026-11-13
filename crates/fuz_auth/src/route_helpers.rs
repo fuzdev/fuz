@@ -70,7 +70,7 @@ pub fn session_cookie_header(keyring: &Keyring, token: &str, cookie_name: &str) 
 ///
 /// Returns the ready-to-return denial `Response` (`Err`) when the selector
 /// fails to resolve or the query fails.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]

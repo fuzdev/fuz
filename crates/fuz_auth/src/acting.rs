@@ -87,7 +87,7 @@ pub fn parse_acting_selector(raw: Option<&str>) -> Result<Option<Uuid>, ActingSe
 ///
 /// Returns the ready-to-return 400 denial `Response` (`Err`) when `raw` is
 /// present but is not a bare uuid.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]
