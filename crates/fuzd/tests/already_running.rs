@@ -12,7 +12,9 @@
 //! version-skew guard — makes `fuzd start` refuse without spawning, as do a
 //! world-writable home and a symlink or non-regular file at the daemon log
 //! path. A link planted at `daemon.json`'s temp path fails the start without
-//! being written through.
+//! being written through. A recorded daemon whose home is renamed to a path
+//! too long for its socket is left alone by every command through that path,
+//! and stopped through a short symlink to it.
 //!
 //! Every test runs its home under a [`Home`] guard, which kills any fuzd still
 //! running on it when the test ends, and every `fuzd` invocation under a
@@ -395,6 +397,93 @@ fn fuzd_start_restart_stop_cycles_a_recorded_daemon() {
     assert_eq!(out.status.code(), Some(1), "no daemon answers after stop");
 }
 
+/// Kills `pid` on drop if it is still a fuzd — the guard for a daemon whose
+/// home was renamed away from the path a [`Home`] guard watches, so the test
+/// leaves none running on any path out of it.
+struct KillOnDrop(i32);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let comm = std::fs::read_to_string(format!("/proc/{}/comm", self.0)).unwrap_or_default();
+        if comm.trim() == "fuzd" {
+            let _ = send_signal(self.0, Signal::SIGKILL);
+        }
+    }
+}
+
+/// A recorded daemon whose home is renamed to a path too long for its socket
+/// is out of reach through that path: `status`, `stop`, `stop --force`, and
+/// `restart` refuse the home with exit 2, signal nothing, and leave
+/// `daemon.json` as it was, with a hint naming the pid it records. Reached
+/// through a short symlink to the same home, `stop` stops it.
+#[test]
+fn a_recorded_daemon_in_a_home_renamed_too_long_is_left_alone() {
+    let parent = Home::new();
+    let short = parent.path().join("a");
+    std::fs::create_dir(&short).expect("mkdir");
+    set_mode(&short, 0o700);
+    let out = run_fuzd(&short, &["start"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "start: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pid = recorded_pid(&short).expect("start recorded its daemon");
+    let _guard = KillOnDrop(pid);
+
+    let long = parent.path().join("l".repeat(120));
+    std::fs::rename(&short, &long).expect("rename the home");
+    let record = long.join("run").join("daemon.json");
+    let recorded = std::fs::read(&record).expect("read daemon.json");
+
+    for args in [
+        &["status"][..],
+        &["stop"],
+        &["stop", "--force"],
+        &["restart"],
+    ] {
+        let out = run_fuzd(&long, args);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let context = format!("`fuzd {args:?}`\nstdout: {stdout}\nstderr: {stderr}");
+        assert_eq!(out.status.code(), Some(2), "{context}");
+        assert!(stdout.is_empty(), "{context}");
+        assert!(stderr.contains("107-byte limit"), "{context}");
+        assert!(
+            stderr.contains(&format!("pid {pid}, as recorded")),
+            "{context}"
+        );
+        assert!(!stderr.contains("not running"), "{context}");
+        assert!(is_pid_alive(pid), "{context}: the daemon was stopped");
+        assert_eq!(
+            std::fs::read(&record).expect("daemon.json is still there"),
+            recorded,
+            "{context}: daemon.json changed"
+        );
+    }
+
+    let link = parent.path().join("s");
+    std::os::unix::fs::symlink(&long, &link).expect("symlink the home");
+    let out = run_fuzd(&link, &["stop"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stop through the symlink\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("stopped"), "{stdout}");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while is_pid_alive(pid) {
+        assert!(
+            Instant::now() < deadline,
+            "pid {pid} still running after stop"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// A start whose daemon comes up but cannot be recorded — here because a
 /// directory sits where the `daemon.json` write stages its temp file —
 /// reports the failure (exit 1) and kills the daemon, rather than leaving it
@@ -474,8 +563,9 @@ fn fuzd_start_refuses_a_planted_daemon_json_temp_link() {
     );
 }
 
-/// A world-writable home is refused before anything is created under it: no
-/// daemon is spawned (nothing takes the socket lock) and no log is opened.
+/// A world-writable home is refused before anything is created under it, with
+/// exit 2 (the caller's `chmod` to fix): no daemon is spawned (nothing takes
+/// the socket lock) and no log is opened.
 #[test]
 fn fuzd_start_refuses_a_world_writable_home_before_spawning() {
     let home = Home::new();
@@ -483,7 +573,7 @@ fn fuzd_start_refuses_a_world_writable_home_before_spawning() {
 
     let out = run_fuzd(home.path(), &["start"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
     assert!(stderr.contains("world-writable"), "stderr: {stderr}");
     assert!(
         read_lock_holder(&lock_path(home.path())).is_none(),

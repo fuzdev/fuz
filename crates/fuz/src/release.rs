@@ -21,7 +21,6 @@ use fuz_artifact::{
     ArtifactError, ArtifactMeta, CurrentLinkProblem, SwitchOptions, acquire_artifact_lock,
     get_current_artifact, switch_to_artifact,
 };
-use fuz_home::FuzHomeError;
 use fuz_release::{
     CurrentVersion, FetchOptions, LatestCheck, ReleaseError, ReleaseLogError, StorageBackend,
     StorageError, UpdateCheck, UpdateStatus, check_latest_self, compute_update_check, fetch_latest,
@@ -68,9 +67,11 @@ impl ReleaseCommandError {
     /// signature, a substituted manifest, hostile or mismatched download bytes,
     /// a release the log revokes, omits, or contradicts) is `65` with the local
     /// integrity failures: one "do not trust these bytes, do not retry" class,
-    /// as in `fuzi`, never the `1` a retryable storage failure shares. A
-    /// world-writable fuz home is classified a violation but is a permissions
-    /// refusal the user fixes with `chmod`, so it stays `1`.
+    /// as in `fuzi`, never the `1` a retryable storage failure shares. A fuz
+    /// home that cannot be used as configured ([`ReleaseError::is_unusable_home`])
+    /// is `2`, checked first: a world-writable home is also classified a
+    /// violation, but nothing untrusted was read, and the fix is the caller's
+    /// `chmod`.
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Release(ReleaseError::Artifact(
@@ -91,7 +92,9 @@ impl ReleaseCommandError {
             // A release log configuration the check cannot run under: the
             // caller must change it before re-running.
             Self::Release(ReleaseError::ReleaseLog(ReleaseLogError::Config(_))) => EXIT_USAGE,
-            Self::Release(ReleaseError::FuzHome(FuzHomeError::InsecureHome { .. })) => 1,
+            // A fuz home that cannot be used as configured, the same `2` as on
+            // every other path to it.
+            Self::Release(e) if e.is_unusable_home() => EXIT_USAGE,
             Self::Release(e) if e.is_security_violation() => 65, // EX_DATAERR
             // A store that is not there is the storage class, like a release
             // that is not in one.

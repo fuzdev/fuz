@@ -78,7 +78,10 @@ stopping one has let go of the path.
 ## Behavior Matrix
 
 Lifecycle commands exit `0` when the desired state is reached, `1` when not,
-and `2` when the invocation is wrong (fix it, don't retry as-is); `logs` exits
+and `2` when the invocation or the fuz home is wrong — an unparseable command
+line, an unusable `HOME` with `FUZ_HOME` unset, a relative `FUZ_HOME`, a
+`FUZ_HOME` too long for the socket under it, a world-writable home where
+`start` writes under it (fix it, don't retry as-is); `logs` exits
 `0` when its output is complete, `1` when there is no log or it is refused,
 unreadable, or unwritable, and dies by the signal when a SIGINT or SIGTERM ends
 a follow (`130` / `143`); bare `fuzd` exits 75 when another fuzd holds the lock.
@@ -97,7 +100,9 @@ the socket lock's body. With no pid in the body the suffix is omitted, and bare
 | spawned child exits 75 and the holder doesn't answer (another protocol version, still starting or stopping, or slow) | "another fuzd is already running on <socket>"; hint: `fuzd stop` can't reach it, `kill <pid>` | 1 |
 | unresponsive | "fuzd (pid M) holds <socket> but does not answer this fuzd's health check"; hint `fuzd restart --force`; keeps `daemon.json` | 1 |
 | not ready within `HEALTH_POLL_TIMEOUT_SECS` | the child is killed and reaped (a late binder would be an orphan recorded nowhere) | 1 |
-| daemon up but `daemon.json` can't be written (e.g. a world-writable `FUZ_HOME`) | the child is killed and reaped | 1 |
+| a fuz home that can't be used as configured (an unusable `HOME` with `FUZ_HOME` unset, a relative `FUZ_HOME`, a `FUZ_HOME` too long for the socket, a world-writable home) | the home's error and hint; spawns nothing, creates nothing | 2 |
+| the spawned child exits 2 (it refused its configuration) | "daemon exited with code 2"; hint `fuzd logs` | 2 |
+| daemon up but `daemon.json` can't be written (e.g. a symlink at its temp path) | the child is killed and reaped | 1 |
 | stale `daemon.json` (neither answers nor holds the lock) | warn, clean, start | 0 |
 | `daemon.json` in a schema this fuzd can't read, naming a live fuzd (version skew) | error naming the schema version and pid; hint `kill <pid>`; keeps `daemon.json`. No `--force` path: another version's wire protocol isn't this fuzd's to speak | 1 |
 | leftover socket file | the new daemon takes the lock, then unlinks and binds fresh (a live daemon's socket is never reached — it holds the lock) | 0 |
@@ -112,6 +117,7 @@ the socket lock's body. With no pid in the body the suffix is omitted, and bare
 | answered, then didn't shut down in time | error, hint `fuzd stop --force` | 1 |
 | `--force` (unresponsive or timed out) | SIGTERM, then SIGKILL if still there (no RPC); waits for the lock release, "stopped" | 0 |
 | `--force`, lock still held `FORCE_KILL_TIMEOUT_SECS` after SIGKILL (e.g. blocked in the kernel) | error naming the pid; `daemon.json` left for the next command | 1 |
+| `FUZ_HOME` too long for the socket (e.g. the home renamed under a running daemon), `--force` or not | the home's error and hint, naming the pid `daemon.json` records if any; signals nothing, leaves `daemon.json` as it is | 2 |
 
 **restart** is stop then start, with start's output. Stop waits for the old
 daemon to release the socket lock, not just close its listener, so the new one
@@ -140,6 +146,20 @@ isn't refused.
   <socket> (pid M)"; nothing unlinked or bound (exit 75).
 - A command line that doesn't parse: argh's message on stderr (exit 2);
   `--help` / `help` prints usage on stdout (exit 0).
+- A fuz home that can't be used as configured — an unusable `HOME` with
+  `FUZ_HOME` unset, a relative `FUZ_HOME`, or a `FUZ_HOME` too long for the
+  socket under it: the home's error and hint, nothing created (exit 2), from
+  bare `fuzd` and every lifecycle command. A world-writable home is refused
+  (exit 2) where `start` (and so `restart`) writes under it; the others leave
+  it to that check.
+- A `FUZ_HOME` too long for the socket under it — most often a home renamed
+  while its daemon runs: `start`, `status`, `stop` (with or without
+  `--force`), and `restart` exit 2 before reading anything else, and change
+  nothing — no signal, no `daemon.json` cleanup, no "not running". When
+  `daemon.json` records a pid, the hint names it as recorded (unverified: a
+  daemon may still be running for this home) and says to reach the home
+  through a shorter path, such as a symlink, to stop it. `logs` needs no
+  socket, so it still reads the home's log.
 - A daemon crash leaves a stale `daemon.json` the next command cleans. A
   manually deleted `daemon.json` orphans the daemon: `fuzd start` reports it
   running, `fuzd stop` can't reach it, and `~/.fuz/run/socket.lock` names its
@@ -170,7 +190,9 @@ once. `fuz workload observe <domain>` prints one snapshot, or streams with
 ## Status for scripts
 
 There is no HTTP endpoint. `fuzd status` is the scripting surface (exit 0 = the
-recorded daemon answers, 1 = stopped or not answering). `--json` prints one
+recorded daemon answers, 1 = stopped or not answering, 2 = a fuz home that
+can't be used as configured — an error on stderr and nothing on stdout, under
+`--json` too, so a broken home never reads as "stopped"). `--json` prints one
 shape where `running` is the only key always present; the rest appear only on
 the outcome that can speak to them, omitted rather than `null`:
 
@@ -191,8 +213,9 @@ takes an exclusive `flock` on `<socket>.lock` (`~/.fuz/run/socket.lock` in
 production), opened `0600`, and writes its pid into the body. Only then does it
 unlink a leftover socket and bind. If another daemon holds the lock, it unlinks
 and binds nothing, prints `error: another fuzd is already running on <socket>
-(pid M)`, and exits 75 (`EX_TEMPFAIL`, fuz's code for a held lock); every other
-startup failure exits 1. `fuzd start` reads 75 off its child and reports the
+(pid M)`, and exits 75 (`EX_TEMPFAIL`, fuz's code for a held lock); a fuz home
+that can't be used as configured exits 2; every other startup failure exits
+1. `fuzd start` reads 75 off its child and reports the
 holder rather than an unexplained crash.
 
 The CLI reads the body without locking — a probe `flock` could refuse a daemon

@@ -112,8 +112,13 @@ leg.
 
 - `FUZ_HOME` (default `~/.fuz`) — empty reads as unset; a relative one is
   refused. fuzd's socket (`$FUZ_HOME/run/socket`) must fit a Unix socket address
-  (107 bytes on Linux), so a longer `FUZ_HOME` makes `fuzd` refuse to start with
-  a hint (under `fuzd start`, in the daemon log).
+  (107 bytes on Linux), so a longer `FUZ_HOME` is refused with a hint by
+  everything that looks for the socket — bare `fuzd`, its lifecycle commands,
+  `fuz workload observe` — before any connect or spawn (exit 2); `fuz self
+  status` warns and reports fuzd as unknown. Nothing is signalled or cleaned
+  up there: a daemon running for a home renamed past the limit is stopped
+  through a shorter path to the same home, such as a symlink
+  (./daemon_lifecycle.md § Behavior Matrix).
 - `HOME` — where the default lives, read through `fuz_sys::home_dir` like every
   `$HOME` path fuz uses (the forge token, the rc file, the default source repo,
   `~` in a storage path or local log origin). It must be non-empty and absolute,
@@ -122,7 +127,14 @@ leg.
   falls back to the password database. `scripts/install.sh` also refuses an
   unset one.
 
-An unresolvable home is an error (exit 1) with a hint naming the variable,
+An unresolvable home is an error (exit 2: the caller's environment to fix)
+with a hint naming the variable, from `fuz`, `fuzd`, and `cargo xtask` alike,
 except on `fuz self version` / `status`, which are diagnostics: they warn, exit
 0, and report what lives under the home as unknown (`fuzd: unknown`; `"fuzd":
-null` under `--json`).
+null` under `--json`). A world-writable `~/.fuz` is refused the same way (exit
+2) only where something would be written under it — `fuz self bootstrap` /
+`upgrade`, `fuz tool install` / `upgrade`, `fuzd start`, `cargo xtask
+install` — and read-only commands (`fuz tool list`,
+`fuz artifact list`, the `--check` flows) accept it. A `HOME` reached for
+something other than the fuz home (the forge token, `~` in a storage path, the
+default source repo) fails with that command's own error and code.

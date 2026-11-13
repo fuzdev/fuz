@@ -104,6 +104,19 @@ fn daemon_file_path() -> Result<PathBuf, FuzHomeError> {
     Ok(get_run_dir()?.join(DAEMON_FILE))
 }
 
+/// The pid `daemon.json` records, for display only: `None` when the home does
+/// not resolve or the file is missing, unreadable, or has no integer `pid`.
+///
+/// Unlike [`read_daemon_info_typed`], this changes nothing — a corrupt or
+/// stale file is left where it is — and verifies nothing: the pid may be gone
+/// or reused, so a caller names it as recorded and never acts on it.
+#[must_use]
+pub fn recorded_daemon_pid() -> Option<i32> {
+    let content = fs::read_to_string(daemon_file_path().ok()?).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    i32::try_from(value.get("pid")?.as_i64()?).ok()
+}
+
 /// What a daemon.json's contents mean — the pure parse + current / unrecognized
 /// / corrupt discrimination core of [`read_daemon_info_typed`], factored out so
 /// the branch logic is unit-testable with an injected live-fuzd predicate. The

@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use tokio::time::timeout;
 
+use fuz_home::SOCKET_PATH_MAX;
 use fuz_sidecar::SidecarPool;
-use fuzd_server::{RequestLogger, SOCKET_PATH_MAX, ServerConfig, ServerError, run};
+use fuzd_server::{RequestLogger, ServerConfig, ServerError, run};
 use tokio_util::sync::CancellationToken;
 
 mod common;

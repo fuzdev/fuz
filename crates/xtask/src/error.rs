@@ -1,6 +1,7 @@
 //! Xtask error types
 
 use fuz_artifact::ArtifactError;
+use fuz_sys::cli::EXIT_USAGE;
 use std::borrow::Cow;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -47,6 +48,37 @@ pub enum XtaskError {
 }
 
 impl XtaskError {
+    /// Exit code for this error (for `ExitCode::from`), in the default
+    /// dialect: `2` for a fuz home that cannot be used as configured (the
+    /// caller must change `HOME`, `FUZ_HOME`, or the home's mode before running
+    /// again), on every path that carries the home layer's error; `1` for
+    /// every other failure.
+    pub const fn exit_code(&self) -> u8 {
+        if self.is_unusable_home() {
+            EXIT_USAGE
+        } else {
+            1
+        }
+    }
+
+    /// Returns true if the fuz home cannot be used as configured, forwarded
+    /// from whichever layer hit it: the home layer itself, the artifact store,
+    /// a key command, or a publish.
+    ///
+    /// Exhaustive, so a new variant is classified where it is added.
+    const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::FuzHome(e) => e.is_unusable_home(),
+            Self::Artifact(e) => e.is_unusable_home(),
+            Self::Key(e) => e.is_unusable_home(),
+            Self::Publish(e) => e.is_unusable_home(),
+            Self::CreateDir(_)
+            | Self::NotWorkspaceRoot
+            | Self::CargoBuild(_)
+            | Self::RemoveDir { .. } => false,
+        }
+    }
+
     /// User-facing hint for how to fix the error, where the failing operation
     /// has one to give. Delegates to the home layer's own hints, the artifact
     /// store's, the release build's, the signing key loader's, the release chain's, the backfill's,
@@ -159,6 +191,51 @@ mod tests {
             fuz_sign::KeyFileError::ConfigDir(relative()),
         ));
         assert_eq!(error.hint().as_deref(), expected);
+    }
+
+    /// A fuz home that cannot be used as configured exits 2 on every path to
+    /// it; a home-layer failure while using a usable home, a key file that
+    /// cannot be read, and a failure of xtask's own exit 1.
+    #[test]
+    fn an_unusable_home_exits_2_on_every_path() {
+        use crate::key::KeyCommandError;
+        use crate::publish::PublishError;
+        use fuz_home::FuzHomeError;
+        let homes: [fn() -> FuzHomeError; 2] = [
+            || FuzHomeError::RelativeFuzHome {
+                path: PathBuf::from("relhome"),
+            },
+            || FuzHomeError::InsecureHome {
+                path: PathBuf::from("/x/.fuz"),
+                mode: 0o777,
+            },
+        ];
+        for home in homes {
+            for error in [
+                XtaskError::FuzHome(home()),
+                XtaskError::Artifact(ArtifactError::FuzHome(home())),
+                XtaskError::Key(KeyCommandError::Key(fuz_sign::KeyFileError::ConfigDir(
+                    home(),
+                ))),
+                XtaskError::Publish(PublishError::Key(fuz_sign::KeyFileError::ConfigDir(home()))),
+                XtaskError::Publish(PublishError::Release(ReleaseError::FuzHome(home()))),
+                XtaskError::Publish(PublishError::Release(ReleaseError::Artifact(
+                    ArtifactError::FuzHome(home()),
+                ))),
+            ] {
+                assert_eq!(error.exit_code(), EXIT_USAGE, "{error:?}");
+            }
+        }
+        for error in [
+            XtaskError::FuzHome(FuzHomeError::DaemonInfoInvalidPid(0)),
+            XtaskError::Key(KeyCommandError::Key(fuz_sign::KeyFileError::Read {
+                path: PathBuf::from("/k"),
+                source: fuz_sys::secure_file::SecureFileError::NotFound(PathBuf::from("/k")),
+            })),
+            XtaskError::NotWorkspaceRoot,
+        ] {
+            assert_eq!(error.exit_code(), 1, "{error:?}");
+        }
     }
 
     /// `cargo xtask install` works on the artifact store: its errors keep the

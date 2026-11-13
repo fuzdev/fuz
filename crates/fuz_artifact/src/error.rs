@@ -285,6 +285,47 @@ impl From<FileLockError> for ArtifactError {
 }
 
 impl ArtifactError {
+    /// Returns true if the fuz home cannot be used as configured — the home
+    /// layer's [`FuzHomeError::is_unusable_home`], forwarded. No artifact
+    /// failure of its own is one.
+    ///
+    /// Exhaustive, so a new variant is classified where it is added.
+    #[must_use]
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::FuzHome(e) => e.is_unusable_home(),
+            Self::Vcs(_)
+            | Self::RustcFailed
+            | Self::InProgress { .. }
+            | Self::LockFailed(_)
+            | Self::NotFound(_)
+            | Self::AmbiguousPrefix { .. }
+            | Self::PrefixTooShort { .. }
+            | Self::IntegrityFailed { .. }
+            | Self::BinaryIntegrityFailed { .. }
+            | Self::StoreEntryNotDir { .. }
+            | Self::CurrentNotStoreLink { .. }
+            | Self::InvalidStoreName { .. }
+            | Self::NotRegularFile(_)
+            | Self::MetadataReadFailed(..)
+            | Self::MetadataParseFailed(..)
+            | Self::MetadataWriteFailed(_)
+            | Self::MetadataTooLarge { .. }
+            | Self::SymlinkFailed(_)
+            | Self::MissingBinary { .. }
+            | Self::InvalidBinary { .. }
+            | Self::ReservedBinaryName { .. }
+            | Self::InvalidBinaryName { .. }
+            | Self::BinaryPlatform { .. }
+            | Self::BinaryUnreadable { .. }
+            | Self::UnsupportedTarget(_)
+            | Self::CopyFailed { .. }
+            | Self::RenameFailed { .. }
+            | Self::InsufficientSpace { .. }
+            | Self::Io(_) => false,
+        }
+    }
+
     /// User-facing hint for how to resolve this error.
     ///
     /// Advice only — the print site (`fuz`'s `main`) owns the `hint:` label.

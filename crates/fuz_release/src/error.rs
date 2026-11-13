@@ -911,6 +911,7 @@ impl ReleaseError {
                 | fuz_home::FuzHomeError::SerializeFailed(_)
                 | fuz_home::FuzHomeError::DaemonInfoVersionMismatch { .. }
                 | fuz_home::FuzHomeError::DaemonInfoInvalidPid(_)
+                | fuz_home::FuzHomeError::SocketPathTooLong { .. }
                 | fuz_home::FuzHomeError::InvalidToolName { .. } => false,
             },
             // A tool binary named for a self binary, or with a name that is not
@@ -956,6 +957,31 @@ impl ReleaseError {
             | Self::Artifact(_)
             | Self::Storage(_)
             | Self::FuzHome(_)
+            | Self::ToolManifestMismatch { .. }
+            | Self::ToolNotInstalled(_)
+            | Self::CurrentUnreadable { .. }
+            | Self::NoReleaseForTarget { .. }
+            | Self::MislabelledBinary { .. } => false,
+        }
+    }
+
+    /// Returns true if the fuz home cannot be used as configured — the caller
+    /// must change its environment before running again (see
+    /// [`fuz_home::FuzHomeError::is_unusable_home`]).
+    ///
+    /// Exhaustive, and the home and artifact arms forward: this level decides
+    /// nothing itself. A world-writable home is also a security violation
+    /// ([`Self::is_security_violation`]); a binary keying its exit code to
+    /// what the caller does next checks this classifier first.
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::FuzHome(e) => e.is_unusable_home(),
+            Self::Artifact(e) => e.is_unusable_home(),
+            Self::Manifest(_)
+            | Self::Tarball(_)
+            | Self::ReleaseLog(_)
+            | Self::LogWrite(_)
+            | Self::Storage(_)
             | Self::ToolManifestMismatch { .. }
             | Self::ToolNotInstalled(_)
             | Self::CurrentUnreadable { .. }

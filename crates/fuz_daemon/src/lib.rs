@@ -24,11 +24,13 @@ pub use log_tail::logs;
 use fuz_client::{DaemonStatusResponse, SidecarStatus, SidecarStatusInfo};
 use fuz_home::{
     CLI_SHUTDOWN_BUFFER_SECS, DaemonInfo, FORCE_KILL_POLL_INTERVAL_MS, FORCE_KILL_TIMEOUT_SECS,
-    HEALTH_POLL_INTERVAL_MS, HEALTH_POLL_TIMEOUT_SECS, MAX_LOG_ROTATIONS, MaybeDaemonInfo,
-    SHUTDOWN_TIMEOUT_SECS, current_daemon_info, ensure_fuz_home, get_daemon_log_path,
-    get_socket_path, read_daemon_info, read_daemon_info_typed, remove_daemon_file, rotate_logs,
-    socket_lock_path, verify_pid_is_fuzd, write_daemon_info,
+    FuzHomeError, HEALTH_POLL_INTERVAL_MS, HEALTH_POLL_TIMEOUT_SECS, MAX_LOG_ROTATIONS,
+    MaybeDaemonInfo, SHUTDOWN_TIMEOUT_SECS, current_daemon_info, ensure_fuz_home,
+    get_daemon_log_path, get_socket_path, read_daemon_info, read_daemon_info_typed,
+    recorded_daemon_pid, remove_daemon_file, rotate_logs, socket_lock_path, verify_pid_is_fuzd,
+    write_daemon_info,
 };
+use fuz_sys::cli::EXIT_USAGE;
 use fuz_sys::file_lock::read_lock_holder;
 use fuz_sys::secure_file::{SecureFileError, open_truncate_nofollow_regular};
 use fuz_sys::{SECURE_FILE_MODE, Signal, is_pid_alive, send_signal};
@@ -193,6 +195,10 @@ enum NotReady {
         holder: Option<u32>,
         answering: bool,
     },
+    /// The child exited [`EXIT_USAGE`]: it refused what it was given to run
+    /// with (the fuz home as configured), and re-running unchanged fails the
+    /// same way.
+    Refused,
     /// The child was still not ready at the deadline, and was killed and
     /// reaped.
     TimedOut,
@@ -265,6 +271,9 @@ where
                     holder: read_lock_holder(lock_path),
                     answering: health().await,
                 });
+            }
+            if status.code() == Some(i32::from(EXIT_USAGE)) {
+                return Err(NotReady::Refused);
             }
             return Err(NotReady::Failed(format!(
                 "daemon exited with code {}",
@@ -508,6 +517,26 @@ async fn force_kill(pid: i32, quiet: bool) -> Result<(), DaemonError> {
     Ok(())
 }
 
+/// The daemon socket's path, or the home's refusal of it — with the pid
+/// `daemon.json` records, when there is one, so a refusal of a home whose
+/// socket path is too long can say a daemon may still be running there.
+///
+/// The pid is read for display only: nothing is verified, signalled, or
+/// cleaned up.
+fn socket_path_or_refusal() -> Result<PathBuf, DaemonError> {
+    match get_socket_path() {
+        Ok(path) => Ok(path),
+        Err(refusal @ FuzHomeError::SocketPathTooLong { .. }) => Err(match recorded_daemon_pid() {
+            Some(recorded_pid) => DaemonError::SocketUnreachable {
+                refusal,
+                recorded_pid,
+            },
+            None => DaemonError::FuzHome(refusal),
+        }),
+        Err(e) => Err(e.into()),
+    }
+}
+
 //
 // Lifecycle operations
 //
@@ -535,12 +564,17 @@ fn unrecognized_daemon_refusal(pid: i32, version: u32) -> [String; 2] {
 /// ready but cannot be recorded in `daemon.json`, is killed before the error
 /// is reported, so a failed start leaves no daemon behind. A
 /// [`DaemonState::Unresponsive`] daemon is refused (exit 1) without spawning:
-/// it still owns the socket path, and a child would only lose it.
+/// it still owns the socket path, and a child would only lose it. A child that
+/// exits [`EXIT_USAGE`] refused its configuration, and `start` exits with that
+/// code too.
 ///
 /// # Errors
 /// Returns a [`DaemonError`] if the fuzd binary can't be located or spawned,
 /// or if the log/run directories can't be prepared.
 pub async fn start(quiet: bool) -> Result<ExitCode, DaemonError> {
+    // A home no daemon could listen under is refused before anything is read
+    // or spawned.
+    socket_path_or_refusal()?;
     // The version-skew guard: refuse to spawn next to a live fuzd whose
     // daemon.json this fuzd can't read — almost always one started by another
     // fuz version. Its record (socket path, wire protocol) is not ours to
@@ -724,6 +758,17 @@ pub async fn start(quiet: bool) -> Result<ExitCode, DaemonError> {
             }
             Ok(ExitCode::FAILURE)
         }
+        // The child refused its configuration. The lifecycle command exits with
+        // the child's code, so a caller sees the same `2` bare `fuzd` gives.
+        Err(NotReady::Refused) => {
+            if !quiet {
+                eprintln!(
+                    "error: daemon exited with code {EXIT_USAGE}: it refused its configuration"
+                );
+                eprintln!("hint: the daemon log names what to change: `fuzd logs`");
+            }
+            Ok(ExitCode::from(EXIT_USAGE))
+        }
         // The child is gone: it exited, or its status could not be read.
         Err(NotReady::Failed(e)) => {
             if !quiet {
@@ -739,11 +784,16 @@ pub async fn start(quiet: bool) -> Result<ExitCode, DaemonError> {
 ///
 /// A [`DaemonState::Unresponsive`] daemon cannot be asked to shut down: without
 /// `force` that is a refusal (exit 1) whose hint names `fuzd stop --force`, and
-/// with it the daemon is force-killed at once.
+/// with it the daemon is force-killed at once. A home whose socket path is too
+/// long is refused (exit 2) with nothing read, signalled, or cleaned.
 ///
 /// # Errors
-/// Returns a [`DaemonError`] if cleaning up `daemon.json` fails.
+/// Returns a [`DaemonError`] if the home is refused or cleaning up
+/// `daemon.json` fails.
 pub async fn stop(quiet: bool, force: bool) -> Result<ExitCode, DaemonError> {
+    // A home no daemon could listen under is refused before anything is read
+    // or cleaned.
+    socket_path_or_refusal()?;
     let outcome = match get_daemon_state().await? {
         DaemonState::Stopped => {
             if !quiet {
@@ -807,6 +857,9 @@ pub async fn stop(quiet: bool, force: bool) -> Result<ExitCode, DaemonError> {
 /// # Errors
 /// Returns a [`DaemonError`] if stopping or starting the daemon fails.
 pub async fn restart(quiet: bool, force: bool) -> Result<ExitCode, DaemonError> {
+    // A home no daemon could listen under is refused before anything is read,
+    // stopped, or cleaned.
+    socket_path_or_refusal()?;
     match get_daemon_state().await? {
         DaemonState::Running(info) => {
             // Restart announces no kill of its own, so it passes no notice. An
@@ -994,12 +1047,16 @@ const fn format_status(status: &SidecarStatus) -> &'static str {
 /// Returns [`ExitCode::SUCCESS`] when the recorded daemon answers,
 /// [`ExitCode::FAILURE`] otherwise — stopped, or recorded but not answering
 /// ([`DaemonState::Unresponsive`]). The exit code is the scriptable contract
-/// (`-q` suppresses output and yields the code only).
+/// (`-q` suppresses output and yields the code only). A fuz home that cannot
+/// be used as configured is an error, not "stopped": its caller exits `2`
+/// ([`DaemonError::exit_code`]).
 ///
 /// # Errors
 /// Returns a [`DaemonError`] if daemon state can't be read or JSON output
 /// can't be serialized.
 pub async fn status(json: bool, quiet: bool, verbose: bool) -> Result<ExitCode, DaemonError> {
+    // A home no daemon could listen under is an error, never "stopped".
+    socket_path_or_refusal()?;
     let info = match get_daemon_state().await? {
         DaemonState::Running(info) => info,
         DaemonState::Unresponsive(info) => {
@@ -1284,6 +1341,18 @@ mod tests {
                 answering: false,
             })
         );
+    }
+
+    /// A child that exits with the usage code refused its configuration, which
+    /// `start` passes through rather than flattening to a failure.
+    #[tokio::test]
+    async fn poll_reports_a_usage_exit_as_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("socket.lock");
+        let mut child = spawn_sh("exit 2");
+        let result =
+            poll_health_until_ready(&mut child, &lock, POLL_TIMEOUT, || async { false }).await;
+        assert_eq!(result, Err(NotReady::Refused));
     }
 
     /// Any other exit is a plain failure, whatever the socket answers.

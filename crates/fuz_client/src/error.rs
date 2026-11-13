@@ -84,6 +84,26 @@ pub enum ClientError {
 }
 
 impl ClientError {
+    /// Returns true if the fuz home cannot be used as configured — the home
+    /// layer's [`fuz_home::FuzHomeError::is_unusable_home`], forwarded. No
+    /// failure to reach or speak to the daemon is one.
+    ///
+    /// Exhaustive, so a new variant is classified where it is added.
+    #[must_use]
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::FuzHome(e) => e.is_unusable_home(),
+            Self::DaemonNotRunning { .. }
+            | Self::Connect { .. }
+            | Self::Wire(_)
+            | Self::UnexpectedAction { .. }
+            | Self::StreamEndedBeforeSnapshot
+            | Self::MalformedSnapshot { .. }
+            | Self::WatchRefused { .. }
+            | Self::ProtocolMismatch { .. } => false,
+        }
+    }
+
     /// Returns a hint for how to resolve this error, if there is one.
     ///
     /// An unresolvable home carries the home layer's own hint.
@@ -141,7 +161,16 @@ mod tests {
         assert!(hint.contains("FUZ_HOME"), "{hint}");
         assert_eq!(error.hint(), Some(hint));
 
+        assert!(error.is_unusable_home());
+
         let hintless = ClientError::from(FuzHomeError::DaemonInfoInvalidPid(0));
         assert_eq!(hintless.hint(), None);
+        assert!(!hintless.is_unusable_home());
+        assert!(
+            !ClientError::DaemonNotRunning {
+                path: "/x".to_string()
+            }
+            .is_unusable_home()
+        );
     }
 }

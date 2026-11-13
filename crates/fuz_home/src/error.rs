@@ -83,6 +83,19 @@ pub enum FuzHomeError {
     )]
     InsecureHome { path: PathBuf, mode: u32 },
 
+    /// The daemon socket under the fuz home (`$FUZ_HOME/run/socket`) is longer
+    /// than a Unix socket address holds, so no daemon can listen there: the
+    /// home is refused as configured.
+    #[error(
+        "socket path {} is {len} bytes, over the {max}-byte limit of a Unix socket address",
+        path.display()
+    )]
+    SocketPathTooLong {
+        path: PathBuf,
+        len: usize,
+        max: usize,
+    },
+
     /// A tool name that is not a single plain path component — empty, `.`,
     /// `..`, or containing `/` — so a path built from it would leave
     /// `~/.fuz/tools/`.
@@ -91,12 +104,46 @@ pub enum FuzHomeError {
 }
 
 impl FuzHomeError {
+    /// Returns true if the fuz home cannot be used as configured: the caller
+    /// must change its environment before running again, and a re-run
+    /// unchanged fails the same way.
+    ///
+    /// These are a home that cannot be determined (an unset, empty, or
+    /// relative `HOME` with `FUZ_HOME` unset, or a relative `FUZ_HOME`) and one
+    /// refused as it stands (a world-writable `~/.fuz`, fixed with `chmod`, or
+    /// one too long for the daemon socket under it).
+    /// A binary in the default exit-code dialect exits `2` for them. The I/O
+    /// failures, a `daemon.json` this binary cannot use, and a malformed tool
+    /// name are not: none is the caller's environment to fix.
+    ///
+    /// Exhaustive, so a new variant is classified where it is added. Every
+    /// wrapper of this error forwards it.
+    #[must_use]
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::HomeDir(_)
+            | Self::RelativeFuzHome { .. }
+            | Self::InsecureHome { .. }
+            | Self::SocketPathTooLong { .. } => true,
+            Self::CreateDirFailed { .. }
+            | Self::ReadFailed { .. }
+            | Self::WriteFailed { .. }
+            | Self::DeleteFailed { .. }
+            | Self::RenameFailed { .. }
+            | Self::SerializeFailed(_)
+            | Self::DaemonInfoVersionMismatch { .. }
+            | Self::DaemonInfoInvalidPid(_)
+            | Self::InvalidToolName { .. } => false,
+        }
+    }
+
     /// User-facing hint for how to fix this error, for the binaries that
     /// render one after the `error:` line.
     ///
-    /// Only the home-resolution errors and a malformed tool name carry one:
-    /// what to set is the same advice whichever command hit them. [`FuzHomeError::InsecureHome`]'s
-    /// remedy is already in its message.
+    /// Only the home-resolution errors, an overlong socket path, and a
+    /// malformed tool name carry one: what to set is the same advice whichever
+    /// command hit them. [`FuzHomeError::InsecureHome`]'s remedy is already in
+    /// its message.
     #[must_use]
     pub const fn hint(&self) -> Option<&'static str> {
         match self {
@@ -115,9 +162,74 @@ impl FuzHomeError {
             | Self::DaemonInfoVersionMismatch { .. }
             | Self::DaemonInfoInvalidPid(_)
             | Self::InsecureHome { .. } => None,
+            Self::SocketPathTooLong { .. } => Some(
+                "the socket lives at `$FUZ_HOME/run/socket` — point FUZ_HOME at a shorter path",
+            ),
             Self::InvalidToolName { .. } => {
                 Some("a tool name is a plain name such as `fuzd`, with no `/` or `..`")
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A home that cannot be determined or is refused as it stands is the
+    /// caller's environment to fix; a failure while using a usable one is not.
+    #[test]
+    fn is_unusable_home_separates_the_environment_from_the_run() {
+        let io = || std::io::Error::other("x");
+        let unusable = [
+            FuzHomeError::HomeDir(fuz_sys::HomeDirError::NotFound),
+            FuzHomeError::HomeDir(fuz_sys::HomeDirError::Empty),
+            FuzHomeError::HomeDir(fuz_sys::HomeDirError::Relative { path: "h".into() }),
+            FuzHomeError::RelativeFuzHome { path: "rel".into() },
+            FuzHomeError::InsecureHome {
+                path: "/x/.fuz".into(),
+                mode: 0o777,
+            },
+            FuzHomeError::SocketPathTooLong {
+                path: "/x/run/socket".into(),
+                len: 108,
+                max: 107,
+            },
+        ];
+        for error in unusable {
+            assert!(error.is_unusable_home(), "{error}");
+        }
+        let usable = [
+            FuzHomeError::CreateDirFailed {
+                path: "/x".into(),
+                source: io(),
+            },
+            FuzHomeError::ReadFailed {
+                path: "/x".into(),
+                source: io(),
+            },
+            FuzHomeError::WriteFailed {
+                path: "/x".into(),
+                source: io(),
+            },
+            FuzHomeError::DeleteFailed {
+                path: "/x".into(),
+                source: io(),
+            },
+            FuzHomeError::RenameFailed {
+                from: "/x".into(),
+                to: "/y".into(),
+                source: io(),
+            },
+            FuzHomeError::DaemonInfoVersionMismatch {
+                expected: 2,
+                got: 1,
+            },
+            FuzHomeError::DaemonInfoInvalidPid(0),
+            FuzHomeError::InvalidToolName { name: "..".into() },
+        ];
+        for error in usable {
+            assert!(!error.is_unusable_home(), "{error}");
         }
     }
 }

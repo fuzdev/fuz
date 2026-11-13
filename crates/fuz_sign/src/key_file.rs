@@ -65,6 +65,18 @@ pub enum KeyFileError {
 }
 
 impl KeyFileError {
+    /// Returns true if the fuz home, which holds the default key, cannot be
+    /// used as configured — the home layer's
+    /// [`FuzHomeError::is_unusable_home`], forwarded. A key file that cannot
+    /// be read or parsed is not.
+    #[must_use]
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::ConfigDir(e) => e.is_unusable_home(),
+            Self::Read { .. } | Self::Parse(_) => false,
+        }
+    }
+
     /// User-facing hint for how to fix the error, where there is one.
     pub const fn hint(&self) -> Option<&'static str> {
         match self {

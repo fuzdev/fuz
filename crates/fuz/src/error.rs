@@ -98,10 +98,18 @@ impl CliError {
     /// sysexits codes a script/agent can branch on (matching `fuzi`'s taxonomy)
     /// rather than collapsing to a bare `1`: a held lock is transient (retry), a
     /// disk-full is "can't create", and an integrity mismatch is bad data.
+    ///
+    /// A fuz home that cannot be used as configured is `2` (the caller must
+    /// change `HOME`, `FUZ_HOME`, or the home's mode) on every path that
+    /// carries the home layer's error: directly, through the artifact store,
+    /// the daemon client, or the release chain.
     pub fn exit_code(&self) -> u8 {
         match self {
             // Release command errors have their own exit codes
             Self::ReleaseCommand(e) => e.exit_code(),
+            Self::FuzHome(e) if e.is_unusable_home() => EXIT_USAGE,
+            Self::Artifact(e) if e.is_unusable_home() => EXIT_USAGE,
+            Self::Client(e) if e.is_unusable_home() => EXIT_USAGE,
             // Lock held by another fuz op — retrying later may succeed.
             Self::Artifact(ArtifactError::InProgress { .. }) => 75, // EX_TEMPFAIL
             // Out of disk space while creating the artifact.
@@ -402,7 +410,8 @@ mod tests {
     /// A fetch-path security violation shares `EX_DATAERR` with the local
     /// integrity failures — one "do not trust these bytes" class — never the
     /// `1` a retryable storage failure has. The world-writable home the
-    /// classifier also counts is a permissions fix, so it stays `1`.
+    /// classifier also counts read no untrusted bytes and is the caller's
+    /// `chmod` to fix, so it is `2`.
     #[test]
     fn exit_code_gives_a_security_violation_the_bad_data_code() {
         use fuz_crypto::{ContentHash, VerifyError};
@@ -467,7 +476,7 @@ mod tests {
             mode: 0o777,
         });
         assert!(insecure.is_security_violation());
-        assert_eq!(code(insecure), 1);
+        assert_eq!(code(insecure), 2);
         assert_eq!(
             code(
                 ManifestError::Downgrade {
@@ -478,6 +487,62 @@ mod tests {
             ),
             1
         );
+    }
+
+    /// A fuz home that cannot be used as configured exits `2` however it is
+    /// reached — directly, through the artifact store, the daemon client, or
+    /// the release chain (bare or through the store) — and a home-layer
+    /// failure while using a usable home exits `1` on each of those paths.
+    #[test]
+    fn exit_code_gives_an_unusable_home_the_usage_code_on_every_path() {
+        use fuz_release::ReleaseError;
+
+        let paths = |home: fn() -> FuzHomeError| -> [CliError; 5] {
+            [
+                CliError::FuzHome(home()),
+                CliError::Artifact(ArtifactError::FuzHome(home())),
+                CliError::Client(fuz_client::ClientError::FuzHome(home())),
+                CliError::ReleaseCommand(ReleaseCommandError::Release(ReleaseError::FuzHome(
+                    home(),
+                ))),
+                CliError::ReleaseCommand(ReleaseCommandError::Release(ReleaseError::Artifact(
+                    ArtifactError::FuzHome(home()),
+                ))),
+            ]
+        };
+        let unusable: [fn() -> FuzHomeError; 5] = [
+            || FuzHomeError::HomeDir(fuz_sys::HomeDirError::NotFound),
+            || FuzHomeError::HomeDir(fuz_sys::HomeDirError::Empty),
+            || {
+                FuzHomeError::HomeDir(fuz_sys::HomeDirError::Relative {
+                    path: PathBuf::from("h"),
+                })
+            },
+            || FuzHomeError::RelativeFuzHome {
+                path: PathBuf::from("rel"),
+            },
+            || FuzHomeError::InsecureHome {
+                path: PathBuf::from("/x/.fuz"),
+                mode: 0o777,
+            },
+        ];
+        for home in unusable {
+            for error in paths(home) {
+                assert_eq!(error.exit_code(), EXIT_USAGE, "{error:?}");
+            }
+        }
+        let usable: [fn() -> FuzHomeError; 2] = [
+            || FuzHomeError::CreateDirFailed {
+                path: PathBuf::from("/x/.fuz/bin"),
+                source: std::io::Error::other("x"),
+            },
+            || FuzHomeError::DaemonInfoInvalidPid(0),
+        ];
+        for home in usable {
+            for error in paths(home) {
+                assert_eq!(error.exit_code(), 1, "{error:?}");
+            }
+        }
     }
 
     #[test]

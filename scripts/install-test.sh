@@ -307,7 +307,7 @@ run_case backslash_tmpdir ok 0 "verified — running bootstrap" marker
 # `ok` and is this case's alone, so WANT_NO_REQUEST pins the refusal's timing.
 CASE_HOME="h"
 WANT_NO_REQUEST=1
-run_case relhome relhome 1 "HOME is not an absolute path" nomarker
+run_case relhome relhome 2 "HOME is not an absolute path" nomarker
 
 # A musl host (Alpine): fuz has no musl build, so install.sh refuses before it
 # requests anything. A fake `ldd` that answers `--version` the way musl's does

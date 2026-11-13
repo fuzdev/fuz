@@ -22,7 +22,7 @@ pub use workload::source::{ObserverError, ObserverSource, UserScopedSource};
 pub use workload::watch_source::{NotifyWatchSource, WatchError, WatchSession, WatchSource};
 pub use workload::{RegistryConfig, WorkloadRegistry};
 
-use fuz_home::{SHUTDOWN_TIMEOUT_SECS, socket_lock_path};
+use fuz_home::{SHUTDOWN_TIMEOUT_SECS, SOCKET_PATH_MAX, socket_lock_path};
 use fuz_sidecar::Sidecar;
 use fuz_sys::file_lock::{FileLock, FileLockError, LockInfo};
 use std::os::unix::fs::PermissionsExt;
@@ -44,10 +44,6 @@ pub struct ServerConfig {
     /// `DaemonStatusResponse`.
     pub version: String,
 }
-
-/// The longest socket path `bind` accepts, in bytes: Linux's `sun_path`
-/// holds 108, one of them the NUL terminator.
-pub const SOCKET_PATH_MAX: usize = 107;
 
 /// Connection drain timeout (matches `SHUTDOWN_TIMEOUT_SECS`).
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(SHUTDOWN_TIMEOUT_SECS);

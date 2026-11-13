@@ -166,8 +166,22 @@ fn cmd_status(opts: &Status) -> Result<(), CliError> {
     // fuzd is a separately-installed tool — probe it passively (a bare UDS
     // connect, no frame) rather than linking the daemon-client. pid is read from daemon.json (best-effort)
     // only when fuzd reports itself running. `None` is a daemon whose state is
-    // unknown: there is no home to look for it under.
-    let daemon = home_resolves.then(fuzd::state).and_then(Result::ok);
+    // unknown: there is no home to look for it under, or the home resolves but
+    // no daemon could listen under it (a socket path too long), which warns
+    // like an unresolvable home.
+    let daemon = if home_resolves {
+        match fuzd::state() {
+            Ok(state) => Some(state),
+            Err(error) => {
+                for line in home_warning_lines(&error) {
+                    eprintln!("{line}");
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
     let pid = if daemon == Some(fuzd::FuzdState::Running) {
         read_daemon_info().ok().flatten().map(|info| info.pid)
     } else {

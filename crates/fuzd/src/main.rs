@@ -27,8 +27,11 @@
 //! another fuzd already owns the socket path, so nothing was started; `1` for
 //! every other failure. Lifecycle subcommands carry their own codes. Across
 //! every form, a command line that does not parse exits `2` with the message
-//! on stderr (never `1`, which `fuzd status` gives "not running"), and
-//! `--help` prints usage to stdout and exits `0`.
+//! on stderr (never `1`, which `fuzd status` gives "not running"), as does a
+//! fuz home that cannot be used as configured (an unusable `HOME` with
+//! `FUZ_HOME` unset, a relative `FUZ_HOME`, a `FUZ_HOME` too long for the
+//! socket under it, and — where `start` writes under it — a world-writable
+//! home); `--help` prints usage to stdout and exits `0`.
 //!
 //! # Exit timing
 //!

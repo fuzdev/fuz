@@ -1114,6 +1114,34 @@ fn a_bundle_directory_with_a_body_is_refused() {
     );
 }
 
+/// An unusable home classifies the same whether it reaches the release chain
+/// directly or through the artifact store; a home-layer failure while using a
+/// usable home, and a release failure of its own, do not.
+#[test]
+fn release_error_unusable_home_forwards_through_both_wrappers() {
+    let unusable = || fuz_home::FuzHomeError::RelativeFuzHome {
+        path: PathBuf::from("relhome"),
+    };
+    assert!(ReleaseError::FuzHome(unusable()).is_unusable_home());
+    assert!(
+        ReleaseError::Artifact(fuz_artifact::ArtifactError::FuzHome(unusable())).is_unusable_home()
+    );
+    let insecure = ReleaseError::FuzHome(fuz_home::FuzHomeError::InsecureHome {
+        path: PathBuf::from("/tmp/fuz"),
+        mode: 0o777,
+    });
+    assert!(insecure.is_unusable_home());
+
+    assert!(
+        !ReleaseError::FuzHome(fuz_home::FuzHomeError::DaemonInfoInvalidPid(-1)).is_unusable_home()
+    );
+    assert!(
+        !ReleaseError::Artifact(fuz_artifact::ArtifactError::InProgress { pid: None })
+            .is_unusable_home()
+    );
+    assert!(!ReleaseError::ToolNotInstalled("zap".to_string()).is_unusable_home());
+}
+
 /// The enum-level classifier honors its wrapped errors' own classifications:
 /// a world-writable `~/.fuz` is a refusal *on security grounds*, so it must
 /// not read as a benign home-layer I/O failure.

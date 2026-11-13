@@ -1,6 +1,6 @@
 //! The real `fuzd` binary's lifecycle subcommands on a home the home layer
 //! refuses — a relative `FUZ_HOME`, or an unusable `HOME` with `FUZ_HOME`
-//! unset: they exit 1 with the error and the home layer's hint, the lines bare
+//! unset: they exit 2 with the error and the home layer's hint, the lines bare
 //! `fuzd` prints for the same home, and create nothing.
 //!
 //! Each case runs with the cwd at a tempdir, where a relative home would
@@ -32,12 +32,12 @@ fn run_in(cwd: &Path, home: &str, fuz_home: Option<&str>, args: &[&str]) -> Outp
     cmd.output().expect("spawn fuzd")
 }
 
-/// Assert the refusal: exit 1, nothing on stdout, and stderr exactly the
+/// Assert the refusal: exit 2, nothing on stdout, and stderr exactly the
 /// error line followed by the hint line.
 #[track_caller]
 fn assert_refused(out: &Output, error: &str, hint: &str, what: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{what}: {stderr}");
+    assert_eq!(out.status.code(), Some(2), "{what}: {stderr}");
     assert_eq!(stderr, format!("error: {error}\nhint: {hint}\n"), "{what}");
     assert!(out.stdout.is_empty(), "{what}: nothing on stdout");
 }

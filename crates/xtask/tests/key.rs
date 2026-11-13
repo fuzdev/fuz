@@ -91,11 +91,18 @@ fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Assert a run that failed with exactly `expected` on stderr and nothing on
-/// stdout.
+/// Assert a run that failed (exit 1) with exactly `expected` on stderr and
+/// nothing on stdout.
 #[track_caller]
 fn assert_failed_with(out: &Output, expected: &str, context: &str) {
-    assert_eq!(out.status.code(), Some(1), "{context}: {}", stderr(out));
+    assert_exited_with(out, 1, expected, context);
+}
+
+/// Assert a run that exited `code` with exactly `expected` on stderr and
+/// nothing on stdout.
+#[track_caller]
+fn assert_exited_with(out: &Output, code: i32, expected: &str, context: &str) {
+    assert_eq!(out.status.code(), Some(code), "{context}: {}", stderr(out));
     assert_eq!(stderr(out), expected, "{context}");
     assert!(out.stdout.is_empty(), "{context}: {}", stdout(out));
 }
@@ -274,9 +281,10 @@ fn a_bare_output_name_writes_the_key_in_the_working_directory() {
 }
 
 /// A relative `FUZ_HOME` has no default key location: the error keeps the home
-/// layer's cause and prints its hint, from each command that loads the key
-/// and from `key generate`, and nothing is created under the working
-/// directory. A key named by `--key-file` loads without the home.
+/// layer's cause and prints its hint, and exits 2 (the caller's environment to
+/// fix), from each command that loads the key and from `key generate`, and
+/// nothing is created under the working directory. A key named by
+/// `--key-file` loads without the home.
 #[test]
 fn a_relative_fuz_home_is_refused_with_the_home_hint_unless_a_key_file_is_named() {
     let scratch = Scratch::new();
@@ -284,7 +292,7 @@ fn a_relative_fuz_home_is_refused_with_the_home_hint_unless_a_key_file_is_named(
     commands.push(vec!["key", "generate"]);
     for command in commands {
         let out = scratch.xtask_with_home("relhome", &command);
-        assert_failed_with(&out, RELATIVE_HOME_ERROR, &format!("{command:?}"));
+        assert_exited_with(&out, 2, RELATIVE_HOME_ERROR, &format!("{command:?}"));
     }
     assert_eq!(scratch.entries(), ["home"]);
 

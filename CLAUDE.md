@@ -213,7 +213,7 @@ fuz workload observe process|network|services [--follow]
 
 # fuzd — daemon lifecycle (bare `fuzd` runs in the foreground)
 fuzd start [--quiet] | stop [--force] [--quiet] | restart [--force] [--quiet]
-fuzd status [--json | --quiet | -v]   # exit 0 = answers, 1 = stopped or not answering
+fuzd status [--json | --quiet | -v]   # exit 0 = answers, 1 = stopped or not answering, 2 = bad fuz home
 fuzd logs [--no-follow] [-n N]
 
 # fuzi — lockfile-driven npm installer (flags are per-verb: fuzi <verb> --help)
@@ -241,9 +241,12 @@ directory.
 **Exit codes** (`fuz`; the classification: ./docs/release_format.md § Version
 Safety):
 
-- `0` ok · `1` failure, an unusable `HOME` / `FUZ_HOME` included
-- `2` usage: an unparseable command line, a bad flag combination, or an
-  unusable release log configuration
+- `0` ok · `1` failure
+- `2` the caller must change something local: an unparseable command line, a
+  bad flag combination, an unusable release log configuration, or a fuz home
+  that can't be used as configured (an unusable `HOME` with `FUZ_HOME` unset, a
+  relative `FUZ_HOME`, a world-writable `~/.fuz` where a command writes under
+  it, a `FUZ_HOME` too long for fuzd's socket where a command looks for it)
 - `10` `--check` found an update (or not installed / unreadable)
 - `65` bytes not to trust — a bad signature, a download hash mismatch, a
   verified tarball that won't parse, a release the log refuses, a tampered
@@ -251,9 +254,11 @@ Safety):
 - `73` no disk space · `75` artifact lock held, or the release log check
   couldn't confirm
 
-`fuzd` exits `75` when another fuzd holds the socket
-(./docs/daemon_lifecycle.md). `fuzi` uses the sysexits classes and
-`128 + signum` on signals (./docs/fuzi.md § Exit codes).
+A `~` or `HOME` problem reached through `--storage`, the forge token's home, or
+`fuz artifact build`'s default repo keeps that command's own code.
+`fuzd` exits `75` when another fuzd holds the socket, and `2` for the same
+unusable home (./docs/daemon_lifecycle.md). `fuzi` uses the sysexits classes
+and `128 + signum` on signals (./docs/fuzi.md § Exit codes).
 
 ## Crates
 
@@ -467,8 +472,9 @@ Typed `thiserror` errors throughout; binaries render them with hints and exit
 codes (hand-written `Display` only in `fuz_pty`, `fuz_crypto::witness`, and
 `fuz_testing`'s `DbResetError`). Untrusted text is escaped in the `Display` of
 the type that holds it; `fuz`, `fuzd`, `fuzf`, `xtask`, and the spine servers print the
-whole source chain; `is_security_violation` / `is_unconfirmed` stay complete at
-every wrapper level. The rules: ./docs/crates.md § Error rendering.
+whole source chain; `is_security_violation` / `is_unconfirmed` /
+`is_unusable_home` stay complete at every wrapper level. The rules:
+./docs/crates.md § Error rendering.
 
 ## Platform support
 

@@ -378,4 +378,6 @@ trips an extraction guard, a release the log revokes, omits, or contradicts) or
 a local store that fails integrity; `1` for version-safety
 refusals, storage failures, and the rest; `73` no space; `75` lock held, or log
 unconfirmed; `2` for what the caller must change (an unparseable command line,
-a bad flag combination, an unusable release log configuration).
+a bad flag combination, an unusable release log configuration, a fuz home that
+can't be used as configured — `ReleaseError::is_unusable_home`, checked before
+the security classification, since a world-writable home is both).

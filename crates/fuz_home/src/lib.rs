@@ -25,15 +25,15 @@ mod pid;
 // symlink-walking callers in `fuz_artifact` / `fuz_release` do need them.
 pub use daemon::{
     DaemonInfo, MaybeDaemonInfo, current_daemon_info, read_daemon_info, read_daemon_info_typed,
-    remove_daemon_file, write_daemon_info,
+    recorded_daemon_pid, remove_daemon_file, write_daemon_info,
 };
 pub use error::FuzHomeError;
 pub use logs::{get_daemon_log_path, rotate_logs};
 pub use paths::{
-    CURRENT_LINK, TOOLS_DIR, check_fuz_home_not_world_writable, ensure_fuz_home, get_artifacts_dir,
-    get_bin_dir, get_config_dir, get_current_link, get_fuz_home, get_npm_cache_dir, get_run_dir,
-    get_socket_path, get_state_dir, get_tool_current_link, get_tool_dir, get_tools_dir,
-    socket_lock_path,
+    CURRENT_LINK, SOCKET_PATH_MAX, TOOLS_DIR, check_fuz_home_not_world_writable, ensure_fuz_home,
+    get_artifacts_dir, get_bin_dir, get_config_dir, get_current_link, get_fuz_home,
+    get_npm_cache_dir, get_run_dir, get_socket_path, get_state_dir, get_tool_current_link,
+    get_tool_dir, get_tools_dir, socket_lock_path,
 };
 pub use pid::verify_pid_is_fuzd;
 

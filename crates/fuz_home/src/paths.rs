@@ -233,12 +233,36 @@ pub fn get_run_dir() -> Result<PathBuf, FuzHomeError> {
     Ok(get_fuz_home()?.join(RUN_DIR))
 }
 
+/// The longest socket path `bind` accepts, in bytes: Linux's `sun_path`
+/// holds 108, one of them the NUL terminator.
+pub const SOCKET_PATH_MAX: usize = 107;
+
 /// Get daemon socket path (`~/.fuz/run/socket`).
 ///
+/// A path longer than [`SOCKET_PATH_MAX`] is refused here rather than handed
+/// to a `bind` or `connect` that would fail on it: the daemon could never
+/// listen there, so a client would read the home as "no daemon running".
+///
 /// # Errors
-/// Returns an error if the fuz home cannot be resolved (see [`get_fuz_home`]).
+/// Returns an error if the fuz home cannot be resolved (see [`get_fuz_home`]),
+/// or [`FuzHomeError::SocketPathTooLong`] if the socket path under it exceeds
+/// [`SOCKET_PATH_MAX`].
 pub fn get_socket_path() -> Result<PathBuf, FuzHomeError> {
-    Ok(get_run_dir()?.join(SOCKET_FILE))
+    socket_path_within_limit(get_run_dir()?.join(SOCKET_FILE))
+}
+
+/// `path` if it fits a Unix socket address, else
+/// [`FuzHomeError::SocketPathTooLong`].
+fn socket_path_within_limit(path: PathBuf) -> Result<PathBuf, FuzHomeError> {
+    let len = path.as_os_str().len();
+    if len > SOCKET_PATH_MAX {
+        return Err(FuzHomeError::SocketPathTooLong {
+            path,
+            len,
+            max: SOCKET_PATH_MAX,
+        });
+    }
+    Ok(path)
 }
 
 /// The lock file beside a daemon socket (`<socket_path>.lock`) — the one

@@ -2,7 +2,9 @@
 
 use fuz_daemon::DaemonError;
 use fuz_home::FuzHomeError;
+use fuz_sys::cli::EXIT_USAGE;
 use fuzd_server::ServerError;
+use std::borrow::Cow;
 use thiserror::Error;
 
 /// Errors that can occur running `fuzd` (daemon startup or a lifecycle
@@ -32,10 +34,16 @@ impl StartupError {
     ///
     /// Another fuzd owning the socket path is
     /// [`fuz_daemon::EXIT_ALREADY_RUNNING`], the one code `fuzd start` reads
-    /// off the child it spawned; every other startup failure is `1`.
+    /// off the child it spawned. A fuz home that cannot be used as configured
+    /// is `2` ([`EXIT_USAGE`]) whichever form hit it — bare `fuzd` directly, a
+    /// lifecycle subcommand through [`DaemonError`] — as is a socket path the
+    /// server finds too long to bind (the home layer refuses one under
+    /// `FUZ_HOME` first). Every other startup failure is `1`.
     pub const fn exit_code(&self) -> u8 {
         match self {
             Self::Server(ServerError::AlreadyRunning { .. }) => fuz_daemon::EXIT_ALREADY_RUNNING,
+            Self::Server(ServerError::SocketPathTooLong { .. }) => EXIT_USAGE,
+            Self::FuzHome(e) if e.is_unusable_home() => EXIT_USAGE,
             Self::FuzHome(_) | Self::Server(_) | Self::Runtime(_) => 1,
             Self::Daemon(e) => e.exit_code(),
         }
@@ -46,11 +54,12 @@ impl StartupError {
     /// The home layer's error carries its hint whichever form hit it — bare
     /// `fuzd` directly, a lifecycle subcommand through [`DaemonError`]. A
     /// lifecycle failure of the daemon's own has none.
-    pub const fn hint(&self) -> Option<&'static str> {
+    pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
-            Self::Server(e) => e.hint(),
-            Self::FuzHome(e) | Self::Daemon(DaemonError::FuzHome(e)) => e.hint(),
-            Self::Daemon(_) | Self::Runtime(_) => None,
+            Self::Server(e) => e.hint().map(Cow::Borrowed),
+            Self::FuzHome(e) => e.hint().map(Cow::Borrowed),
+            Self::Daemon(e) => e.hint(),
+            Self::Runtime(_) => None,
         }
     }
 }
@@ -113,46 +122,101 @@ mod tests {
     }
 
     #[test]
-    fn an_overlong_socket_path_carries_the_server_hint_and_exits_1() {
+    fn an_overlong_socket_path_carries_the_server_hint_and_exits_2() {
         let too_long = StartupError::Server(ServerError::SocketPathTooLong {
             path: "/long/run/socket".into(),
             len: 108,
             max: 107,
         });
-        assert_eq!(too_long.exit_code(), 1);
+        assert_eq!(too_long.exit_code(), EXIT_USAGE);
         let hint = too_long.hint().expect("a hint");
         assert!(hint.contains("FUZ_HOME"), "{hint}");
         let other = StartupError::Server(ServerError::Uid(std::io::Error::other("x")));
         assert_eq!(other.hint(), None);
     }
 
-    /// An unusable home carries the home layer's hint and exits 1.
+    /// An unusable home carries the home layer's hint and exits 2; a
+    /// home-layer failure while using a usable home exits 1.
     #[test]
     fn an_unusable_home_carries_the_home_hint() {
         let unusable = StartupError::FuzHome(FuzHomeError::HomeDir(fuz_sys::HomeDirError::Empty));
-        assert_eq!(unusable.exit_code(), 1);
+        assert_eq!(unusable.exit_code(), EXIT_USAGE);
         let hint = unusable.hint().expect("a hint");
         assert!(hint.contains("HOME"), "{hint}");
+        for refused in [
+            FuzHomeError::RelativeFuzHome { path: "rel".into() },
+            FuzHomeError::InsecureHome {
+                path: "/x/.fuz".into(),
+                mode: 0o777,
+            },
+            FuzHomeError::SocketPathTooLong {
+                path: "/x/run/socket".into(),
+                len: 108,
+                max: 107,
+            },
+        ] {
+            let refused = StartupError::FuzHome(refused);
+            assert_eq!(refused.exit_code(), EXIT_USAGE, "{refused}");
+        }
+        let write = StartupError::FuzHome(FuzHomeError::WriteFailed {
+            path: "/x/.fuz/run/daemon.json.tmp".into(),
+            source: std::io::Error::other("x"),
+        });
+        assert_eq!(write.exit_code(), 1);
     }
 
     /// A lifecycle subcommand that hit the home layer's error carries the hint
-    /// bare `fuzd` gives for the same error, and exits 1; a lifecycle failure
-    /// of the daemon's own carries none.
+    /// bare `fuzd` gives for the same error, and exits 2 as bare `fuzd` does;
+    /// a lifecycle failure of the daemon's own carries none.
     #[test]
     fn a_lifecycle_home_failure_carries_the_home_hint() {
         for home_error in [
             FuzHomeError::HomeDir(fuz_sys::HomeDirError::Empty),
             FuzHomeError::RelativeFuzHome { path: "rel".into() },
+            FuzHomeError::SocketPathTooLong {
+                path: "/x/run/socket".into(),
+                len: 108,
+                max: 107,
+            },
         ] {
             let hint = home_error.hint().expect("the home error has a hint");
             let lifecycle = StartupError::Daemon(DaemonError::FuzHome(home_error));
-            assert_eq!(lifecycle.hint(), Some(hint), "{lifecycle}");
-            assert_eq!(lifecycle.exit_code(), 1);
+            assert_eq!(lifecycle.hint().as_deref(), Some(hint), "{lifecycle}");
+            assert_eq!(lifecycle.exit_code(), EXIT_USAGE, "{lifecycle}");
         }
+        // A world-writable home's remedy is in its message, so it adds no
+        // hint, and exits 2 through the lifecycle wrapper too.
+        let insecure = StartupError::Daemon(DaemonError::FuzHome(FuzHomeError::InsecureHome {
+            path: "/x/.fuz".into(),
+            mode: 0o777,
+        }));
+        assert_eq!(insecure.hint(), None);
+        assert_eq!(insecure.exit_code(), EXIT_USAGE);
         let hintless =
             StartupError::Daemon(DaemonError::FuzHome(FuzHomeError::DaemonInfoInvalidPid(0)));
         assert_eq!(hintless.hint(), None, "a home error with no hint adds none");
         let own = StartupError::Daemon(DaemonError::SpawnDaemonFailed(std::io::Error::other("x")));
         assert_eq!(own.hint(), None);
+    }
+
+    /// A too-long socket path with a recorded daemon reads as the home's
+    /// refusal, exits 2, and its hint names the recorded pid as recorded.
+    #[test]
+    fn an_unreachable_recorded_daemon_is_named_in_the_hint() {
+        let refusal = || FuzHomeError::SocketPathTooLong {
+            path: "/x/run/socket".into(),
+            len: 108,
+            max: 107,
+        };
+        let error = StartupError::Daemon(DaemonError::SocketUnreachable {
+            refusal: refusal(),
+            recorded_pid: 4242,
+        });
+        assert_eq!(error.to_string(), refusal().to_string());
+        assert_eq!(error.exit_code(), EXIT_USAGE);
+        let hint = error.hint().expect("a hint");
+        assert!(hint.contains("FUZ_HOME"), "{hint}");
+        assert!(hint.contains("pid 4242, as recorded"), "{hint}");
+        assert!(hint.contains("symlink"), "{hint}");
     }
 }

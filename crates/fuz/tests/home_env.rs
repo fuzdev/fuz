@@ -41,8 +41,9 @@ fn run_in(cwd: &Path, home: &str, fuz_home: Option<&Path>, args: &[&str]) -> Out
 }
 
 /// With `FUZ_HOME` unset, an empty or relative `HOME` is an error naming the
-/// reason, with the hint — not a `.fuz` resolved under the cwd, and (for the
-/// empty one) not the password database's home either.
+/// reason, with the hint, and exits 2 (the caller's environment to fix) — not
+/// a `.fuz` resolved under the cwd, and (for the empty one) not the password
+/// database's home either.
 #[test]
 fn unusable_home_without_fuz_home_is_refused() {
     for (home, reason) in [
@@ -52,7 +53,7 @@ fn unusable_home_without_fuz_home_is_refused() {
         let cwd = fresh_home();
         let out = run_in(cwd.path(), home, None, &["artifact", "list", "--json"]);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "HOME={home:?}: {stderr}");
+        assert_eq!(out.status.code(), Some(2), "HOME={home:?}: {stderr}");
         assert!(
             stderr.contains(&format!("error: cannot resolve ~/.fuz: {reason}")),
             "HOME={home:?}: {stderr}"
@@ -66,9 +67,9 @@ fn unusable_home_without_fuz_home_is_refused() {
 }
 
 /// `fuz workload observe` finds the daemon's socket under the fuz home, so a
-/// home the home layer refuses is that layer's error and its hint — the two
-/// lines `fuzd` prints for it — rather than a report that the daemon is not
-/// running, and nothing is read or created under the cwd.
+/// home the home layer refuses is that layer's error, its hint, and its exit
+/// code `2` — what `fuzd` prints and exits for it — rather than a report that
+/// the daemon is not running, and nothing is read or created under the cwd.
 ///
 /// The cwd is seeded with the run directory a relative home would name, so a
 /// path resolved under it would be answered with "daemon not running" there.
@@ -113,12 +114,37 @@ fn workload_observe_refuses_a_home_it_cannot_resolve_with_the_hint() {
             let out = run_in(cwd.path(), home, fuz_home, args);
             let stderr = String::from_utf8_lossy(&out.stderr);
             let context = format!("HOME={home:?} FUZ_HOME={fuz_home:?} `fuz {args:?}`");
-            assert_eq!(out.status.code(), Some(1), "{context}: {stderr}");
+            assert_eq!(out.status.code(), Some(2), "{context}: {stderr}");
             assert_eq!(stderr, expected, "{context}");
             assert!(out.stdout.is_empty(), "{context}: nothing on stdout");
         }
         assert_eq!(tree(cwd.path()), before, "the cwd changed");
     }
+}
+
+/// A `FUZ_HOME` too long for the daemon socket under it is refused before any
+/// connect, exit 2 with the hint to shorten it — not reported as a daemon that
+/// is not running, whose hint would send the caller to `fuzd start`.
+#[test]
+fn workload_observe_refuses_a_fuz_home_too_long_for_the_socket() {
+    let dir = fresh_home();
+    let home = fresh_home();
+    let fuz_home = dir.path().join("h".repeat(120));
+    let out = run_in(
+        dir.path(),
+        home.path().to_str().unwrap(),
+        Some(&fuz_home),
+        &["workload", "observe", "process"],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("107-byte limit"), "{stderr}");
+    assert!(
+        stderr.contains("hint: the socket lives at `$FUZ_HOME/run/socket`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("fuzd start"), "{stderr}");
+    assert!(!fuz_home.exists(), "the home was created");
 }
 
 /// The three homes the home layer refuses, each with the warning `fuz self
@@ -311,6 +337,33 @@ fn empty_fuz_home_falls_back_to_home() {
         std::fs::read_dir(cwd.path()).unwrap().count(),
         0,
         "nothing written under the cwd"
+    );
+}
+
+/// A world-writable `FUZ_HOME` is refused as it stands: bootstrap exits 2
+/// (the caller's `chmod` to fix) with the error naming the mode, and installs
+/// nothing under it.
+#[test]
+fn a_world_writable_fuz_home_is_refused_with_exit_2() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let cwd = fresh_home();
+    let home = fresh_home();
+    let fuz_home = fresh_home();
+    std::fs::set_permissions(fuz_home.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let out = run_in(
+        cwd.path(),
+        home.path().to_str().unwrap(),
+        Some(fuz_home.path()),
+        &["self", "bootstrap", "--no-modify-path", "--quiet"],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("is world-writable (mode 0777)"), "{stderr}");
+    assert_eq!(
+        tree(fuz_home.path()),
+        Vec::<String>::new(),
+        "nothing installed"
     );
 }
 

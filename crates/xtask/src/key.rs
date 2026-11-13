@@ -37,6 +37,22 @@ pub enum KeyCommandError {
     Json(#[from] serde_json::Error),
 }
 
+impl KeyCommandError {
+    /// Returns true if the fuz home, which holds the default key, cannot be
+    /// used as configured — the key loader's
+    /// [`KeyFileError::is_unusable_home`], forwarded.
+    ///
+    /// Exhaustive, so a new variant is classified where it is added.
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::Key(e) => e.is_unusable_home(),
+            Self::KeyFileExists(_) | Self::SecureFile(_) | Self::CreateDir(..) | Self::Json(_) => {
+                false
+            }
+        }
+    }
+}
+
 /// Manage signing keys (publisher-only).
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "key")]

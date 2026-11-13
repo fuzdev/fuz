@@ -828,3 +828,8 @@ through `report_failure`, a server with `StartupError`'s hint and exit code): ea
   future caller never inherits an incomplete fail-closed classification.
   `is_unconfirmed` (`ReleaseLogError` → `ReleaseError`) forwards the release log
   check's soft failure the same way; `fuz` maps it to exit 75.
+  `is_unusable_home` (`FuzHomeError` → `ArtifactError`, `ClientError`,
+  `DaemonError`, `KeyFileError`, `ReleaseError`) marks a fuz home that cannot
+  be used as configured; `fuz`, `fuzd`, and `xtask` map it to exit 2 on every
+  path, checked before `is_security_violation` (a world-writable home is
+  both).

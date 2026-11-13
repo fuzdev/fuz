@@ -20,6 +20,13 @@
 //! cargo xtask prune --storage <uri> [--tool <name>] [--keep N]  # Review: old releases to delete
 //! cargo xtask prune --storage <uri> [--tool <name>] [--keep N] --wetrun  # ... delete them
 //! ```
+//!
+//! # Exit codes
+//!
+//! `0` ok; `2` a command line that does not parse, or a fuz home that cannot
+//! be used as configured (an unusable `HOME` with `FUZ_HOME` unset, a relative
+//! `FUZ_HOME`, a world-writable home); `1` every other failure.
+//! `check-release` reports its own.
 
 mod check_release;
 mod error;
@@ -98,7 +105,7 @@ struct Clean {}
 struct CheckRelease {}
 
 fn main() -> ExitCode {
-    // A command line argh can't parse exits 2, not argh's 1 (every task's
+    // A command line argh can't parse exits 2, not argh's 1 (a task's
     // failure); `--help` prints to stdout and exits 0.
     let cmd = match parse_env_args::<TopLevel>(EXIT_USAGE) {
         Ok(cmd) => cmd,
@@ -124,7 +131,7 @@ fn main() -> ExitCode {
 fn result_to_exit(result: Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => report_failure(&e, e.hint().as_deref(), 1),
+        Err(e) => report_failure(&e, e.hint().as_deref(), e.exit_code()),
     }
 }
 

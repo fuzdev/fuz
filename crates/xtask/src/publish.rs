@@ -96,6 +96,27 @@ pub enum PublishError {
     Runtime(#[source] std::io::Error),
 }
 
+impl PublishError {
+    /// Returns true if the fuz home cannot be used as configured, forwarded
+    /// from the release chain ([`ReleaseError::is_unusable_home`]) or the
+    /// signing key loader ([`KeyFileError::is_unusable_home`]).
+    ///
+    /// Exhaustive, so a new variant is classified where it is added.
+    pub const fn is_unusable_home(&self) -> bool {
+        match self {
+            Self::Release(e) => e.is_unusable_home(),
+            Self::Key(e) => e.is_unusable_home(),
+            Self::Backfill(_)
+            | Self::Revoke(_)
+            | Self::Storage(_)
+            | Self::StorageMissing { .. }
+            | Self::ToolNotFirstParty { .. }
+            | Self::StorageNotDir { .. }
+            | Self::Runtime(_) => false,
+        }
+    }
+}
+
 /// Sign + publish bootstrap artifacts to storage (publisher-only).
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "publish")]

@@ -40,13 +40,13 @@
 #   FUZ_RELEASE_LOG       `off` skips the release log read (with a warning);
 #                         any other value is an error
 #
-# Exit codes: 0 installed; 1 failed; 2 unusable FUZ_RELEASE_LOG_URL /
-# FUZ_RELEASE_LOG, or an argument `fuz self bootstrap` does not accept; 65
-# refused on integrity grounds (a checksum mismatch, the release log
-# contradicting the download or recording no release) — fuz's code for bytes
-# not to trust; 75 no release log origin could be reached (not a refusal —
-# retry); 130 / 143 interrupted. Past the download, `fuz self bootstrap`'s
-# own exit code passes through.
+# Exit codes: 0 installed; 1 failed; 2 an unset, empty, or relative HOME, an
+# unusable FUZ_RELEASE_LOG_URL / FUZ_RELEASE_LOG, or an argument `fuz self
+# bootstrap` does not accept; 65 refused on integrity grounds (a checksum
+# mismatch, the release log contradicting the download or recording no
+# release) — fuz's code for bytes not to trust; 75 no release log origin
+# could be reached (not a refusal — retry); 130 / 143 interrupted. Past the
+# download, `fuz self bootstrap`'s own exit code passes through.
 
 set -eu
 
@@ -497,11 +497,11 @@ main() {
 		/*) ;;
 		'')
 			err "\$HOME is not set; fuz needs it to install into ~/.fuz/"
-			exit 1
+			exit 2
 			;;
 		*)
 			err "\$HOME is not an absolute path; fuz needs one to install into ~/.fuz/"
-			exit 1
+			exit 2
 			;;
 	esac
 

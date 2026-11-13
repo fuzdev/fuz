@@ -797,8 +797,8 @@ fn self_bootstrap_relative_home_writes_no_rc() {
 
 /// A relative `FUZ_HOME` is refused before anything is written: resolved
 /// against the cwd it would install a home that every other directory's
-/// commands miss. The error names the variable and the hint says to make it
-/// absolute.
+/// commands miss. It exits 2, the error names the variable, and the hint says
+/// to make it absolute.
 #[test]
 fn self_bootstrap_relative_fuz_home_is_refused() {
     let cwd = fresh_home();
@@ -813,7 +813,7 @@ fn self_bootstrap_relative_fuz_home_is_refused() {
         .output()
         .expect("spawn fuz");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "bootstrap must fail: {stderr}");
+    assert_eq!(out.status.code(), Some(2), "bootstrap must fail: {stderr}");
     assert!(
         stderr.contains("error: FUZ_HOME must be an absolute path, got relhome"),
         "names the relative FUZ_HOME: {stderr}"
