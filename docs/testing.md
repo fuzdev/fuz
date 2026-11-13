@@ -74,9 +74,16 @@ cargo test -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact
 
 **A crate that gains an `#[ignore]` Postgres suite** joins both the recipe
 above and the `db-tests` job in `check.yml` — env var, database, and `-p`
-entry in each. Nothing checks either list against the tree, and the `-p` entry
-is the silent one: a crate missing from it leaves the job green while its suite
-never runs. A missing database panics at the suite's first connect.
+entry in each. `xtask`'s `tests/db_suite_lists.rs`, in the `check` job's
+`cargo test --workspace`, holds both lists to the tree in both directions: a
+crate whose code names a `*_TEST_URL` literal must be in each `-p` list with
+its variable set and its database created, and nothing else may be listed;
+each `cargo test` takes only `--locked` and `-p` before `--` and exactly
+`--ignored --test-threads=1` after it, with no shell comment or operator, as
+its step's whole `run:`, and the job and its test step take no `if:`,
+`continue-on-error:`, or `shell:`. Its doc has
+the detection rule; a suite that shares another crate's database, as `fuz_http`'s does, is
+named in its `SHARED_DATABASES`.
 
 Each suite's purpose is in its file's `//!` doc. Schema handling:
 
