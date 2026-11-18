@@ -173,7 +173,7 @@
 //! [`EvalError::Protocol`] naming the [`ProtocolViolation`], with stderr:
 //!
 //! - stdout is exactly one JSON object on one line, then at most a newline;
-//! - `eval_protocol` is `2`, and a graph's `graph_version` is `1`;
+//! - `eval_protocol` is `2`, and a graph's `graph_version` is `2`;
 //! - every object is the shape this reader mirrors, with no unknown field;
 //! - the exit code agrees with `ok`: `0` with `ok: true`, `1` or `2` with
 //!   `ok: false`. Any other exit, or death by a signal, is a crash
@@ -222,7 +222,7 @@ mod run_as;
 mod trust_root;
 
 pub use envelope::{
-    DumpConsulted, DumpFormat, DumpImport, DumpLocal, DumpModule, DumpOrigin, DumpReach, DumpRole,
+    DumpConsulted, DumpField, DumpFormat, DumpImport, DumpLocal, DumpModule, DumpOrigin, DumpReach,
     EvalErrorKind, EvalFailure, GraphDump, ProtocolViolation,
 };
 pub use pin::{

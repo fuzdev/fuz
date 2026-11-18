@@ -104,7 +104,7 @@ fn main() -> ExitCode {
             emit(&envelope, 0)
         }
         "graph-version" => {
-            envelope["graph"]["graph_version"] = json!(2);
+            envelope["graph"]["graph_version"] = json!(3);
             emit(&envelope, 0)
         }
         "project" => {
@@ -174,11 +174,18 @@ fn main() -> ExitCode {
     }
 }
 
-/// An `ok` envelope for `config`, its graph's project `cwd`.
+/// An `ok` envelope for `config`, its graph's project `cwd`, which consulted
+/// the project's `package.json` for its keys, as fgro's walk for the project
+/// root does.
 fn envelope(config: &str, driver_blake3: Option<&str>, cwd: &str) -> Value {
-    let config_blake3 = std::fs::read(config)
-        .map(|bytes| blake3::hash(&bytes).to_hex().to_string())
-        .ok();
+    let blake3_of = |path: &str| {
+        std::fs::read(path)
+            .map(|bytes| blake3::hash(&bytes).to_hex().to_string())
+            .ok()
+    };
+    let config_blake3 = blake3_of(config);
+    let package_json = format!("{cwd}/package.json");
+    let package_json_blake3 = blake3_of(&package_json).unwrap_or_default();
     let name = Path::new(config)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -199,7 +206,7 @@ fn envelope(config: &str, driver_blake3: Option<&str>, cwd: &str) -> Value {
         "value": {"zeta": [1, {"b": true, "a": null}], "alpha": "x"},
         "access": {"dynamic": []},
         "graph": {
-            "graph_version": 1,
+            "graph_version": 2,
             "roots": [id],
             "modules": [{
                 "id": id,
@@ -208,9 +215,17 @@ fn envelope(config: &str, driver_blake3: Option<&str>, cwd: &str) -> Value {
                 "format": "typescript",
                 "imports": []
             }],
-            "consulted": [],
+            "consulted": [{
+                "id": "project:package.json",
+                "blake3": package_json_blake3,
+                "fields": ["keys"]
+            }],
             "absent": [],
-            "local": {"project": cwd, "box": [cwd], "paths": {id: config}}
+            "local": {
+                "project": cwd,
+                "box": [cwd],
+                "paths": {id: config, "project:package.json": package_json}
+            }
         }
     })
 }

@@ -1,5 +1,5 @@
 //! The reader of `fgro eval`'s stdout: typed mirrors of the envelope
-//! (`eval_protocol` 2) and its graph dump (`graph_version` 1), and the
+//! (`eval_protocol` 2) and its graph dump (`graph_version` 2), and the
 //! fail-closed checks that turn one envelope and its exit code into a value, an
 //! eval failure, or a [`ProtocolViolation`] (crate docs § The envelope).
 //!
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 const EVAL_PROTOCOL: u64 = 2;
 
 /// The graph dump version this reader knows.
-const GRAPH_VERSION: u64 = 1;
+const GRAPH_VERSION: u64 = 2;
 
 /// How many bytes of a value `fgro` wrote are quoted in a violation's message.
 const SHOWN_MAX: usize = 200;
@@ -91,7 +91,7 @@ impl std::fmt::Display for EvalErrorKind {
     }
 }
 
-/// The module graph an eval loaded (`graph_version` 1).
+/// The module graph an eval loaded (`graph_version` 2).
 ///
 /// Each module it resolved, each `package.json` a resolution read, each path a
 /// resolution went past finding nothing, and the absolute paths behind the ids.
@@ -101,13 +101,13 @@ impl std::fmt::Display for EvalErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphDump {
-    /// The dump's version, `1`.
+    /// The dump's version, `2`.
     pub graph_version: u32,
     /// The module the graph loads from: the entry alone.
     pub roots: Vec<String>,
     /// Each module the run resolved, by id.
     pub modules: Vec<DumpModule>,
-    /// Each `package.json` a resolution read, by id, then role.
+    /// Each `package.json` a resolution read, by id, once.
     pub consulted: Vec<DumpConsulted>,
     /// Each path a resolution went past finding nothing of the kind it looked
     /// for, by id.
@@ -249,22 +249,28 @@ pub struct DumpConsulted {
     pub id: String,
     /// The blake3 of the bytes of its one read in the run, in hex.
     pub blake3: String,
-    /// What it was read for.
-    pub role: DumpRole,
+    /// The fields the run's resolutions read of it, each once: what their
+    /// outcomes depended on beside the file being a valid `package.json`.
+    pub fields: Vec<DumpField>,
 }
 
-/// What a `package.json` was read for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+/// A field of a `package.json` a resolution read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DumpRole {
-    /// A package's, for its `"exports"`.
+pub enum DumpField {
+    /// `"exports"`: a package's, or a self-reference's from the nearest above
+    /// an importer.
     Exports,
-    /// The nearest above a module, for its `"type"`, or above an importer, for
-    /// a self-reference.
-    PackageScope,
-    /// One on the walk up for the project root.
-    SearchBound,
-    /// The package's an entry inside `node_modules` is in.
+    /// `"imports"`: the nearest above an importer, for a `#` specifier.
+    Imports,
+    /// Its keys: whether it holds more than `"type"` and `"sideEffects"`, read
+    /// on the walk up for the project root, which a type marker doesn't end.
+    Keys,
+    /// `"name"`: a self-reference's.
+    Name,
+    /// `"type"`: the nearest above a `.js` module.
+    Type,
+    /// `"version"`: a package's, its origin's.
     Version,
 }
 
@@ -303,7 +309,7 @@ pub enum ProtocolViolation {
         /// The version found.
         found: Option<u64>,
     },
-    /// `graph.graph_version` isn't `1` (`None` when it is missing or not a
+    /// `graph.graph_version` isn't `2` (`None` when it is missing or not a
     /// number).
     GraphVersion {
         /// The version found.
@@ -764,7 +770,7 @@ mod tests {
 
     fn graph(project: &str) -> serde_json::Value {
         serde_json::json!({
-            "graph_version": 1,
+            "graph_version": 2,
             "roots": ["project:zap.ts"],
             "modules": [{
                 "id": "project:zap.ts",
@@ -779,7 +785,7 @@ mod tests {
                 "format": "javascript",
                 "imports": []
             }],
-            "consulted": [{"id": "project:package.json", "blake3": "11", "role": "search_bound"}],
+            "consulted": [{"id": "project:package.json", "blake3": "11", "fields": ["keys", "type"]}],
             "absent": ["project:node_modules/@x/lib"],
             "local": {"project": project, "box": [project, "/lib"], "paths": {"project:zap.ts": "/p/zap.ts"}}
         })
@@ -984,6 +990,7 @@ mod tests {
             "/graph/modules/0/blake3",
             "/graph/modules/0/format",
             "/graph/modules/1/origin/version",
+            "/graph/consulted/0/fields",
         ] {
             let mut envelope = envelope();
             let (parent, key) = pointer.rsplit_once('/').unwrap();
@@ -1146,13 +1153,63 @@ mod tests {
             read(&envelope, 0).unwrap_err(),
             ProtocolViolation::ProtocolVersion { found: None }
         );
+        for version in [1, 3] {
+            let mut envelope = self::envelope();
+            envelope["graph"]["graph_version"] = version.into();
+            envelope["graph"]["new_field"] = 1.into();
+            assert_eq!(
+                read(&envelope, 0).unwrap_err(),
+                ProtocolViolation::GraphVersion {
+                    found: Some(version)
+                }
+            );
+        }
+        // version 1's consulted shape, under version 2, is refused as a shape
         let mut envelope = self::envelope();
-        envelope["graph"]["graph_version"] = 2.into();
-        envelope["graph"]["new_field"] = 1.into();
+        envelope["graph"]["consulted"][0] = serde_json::json!({"id": "project:package.json", "blake3": "11", "role": "search_bound"});
+        assert!(matches!(
+            read(&envelope, 0),
+            Err(ProtocolViolation::Shape { reason }) if reason.contains("role")
+        ));
+    }
+
+    #[test]
+    fn every_consulted_field_is_read() {
+        let mut envelope = envelope();
+        envelope["graph"]["consulted"][0]["fields"] =
+            serde_json::json!(["exports", "imports", "keys", "name", "type", "version"]);
+        let Ok(Outcome::Value { graph, .. }) = read(&envelope, 0) else {
+            panic!("expected a value");
+        };
         assert_eq!(
-            read(&envelope, 0).unwrap_err(),
-            ProtocolViolation::GraphVersion { found: Some(2) }
+            graph.consulted,
+            [DumpConsulted {
+                id: "project:package.json".to_owned(),
+                blake3: "11".to_owned(),
+                fields: vec![
+                    DumpField::Exports,
+                    DumpField::Imports,
+                    DumpField::Keys,
+                    DumpField::Name,
+                    DumpField::Type,
+                    DumpField::Version,
+                ],
+            }]
         );
+        for fields in [
+            serde_json::json!(["main"]),
+            serde_json::json!(["package_scope"]),
+            serde_json::json!(["search_bound"]),
+            serde_json::json!("keys"),
+            serde_json::Value::Null,
+        ] {
+            let mut envelope = self::envelope();
+            envelope["graph"]["consulted"][0]["fields"] = fields.clone();
+            assert!(
+                matches!(read(&envelope, 0), Err(ProtocolViolation::Shape { .. })),
+                "{fields}"
+            );
+        }
     }
 
     #[test]

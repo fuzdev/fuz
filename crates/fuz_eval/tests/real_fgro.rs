@@ -22,8 +22,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use fuz_eval::{
-    DumpOrigin, EvalError, EvalErrorKind, EvalFailure, EvalOutput, EvalRequest, FgroPin,
-    TrustRootProblem, eval_module, fgro_blake3,
+    DumpConsulted, DumpField, DumpOrigin, EvalError, EvalErrorKind, EvalFailure, EvalOutput,
+    EvalRequest, FgroPin, TrustRootProblem, eval_module, fgro_blake3,
 };
 
 use common::{Scratch, project, write};
@@ -107,6 +107,17 @@ async fn a_config_and_its_local_import_evaluate() {
     let ids: Vec<&str> = graph.modules.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, ["project:config.ts", "project:dep.ts"]);
     assert!(graph.modules.iter().all(|m| m.blake3.is_some()));
+    // the project's package.json, read for its keys on the walk for the root
+    assert_eq!(
+        graph.consulted,
+        [DumpConsulted {
+            id: "project:package.json".to_owned(),
+            blake3: blake3::hash(br#"{"name":"p","private":true}"#)
+                .to_hex()
+                .to_string(),
+            fields: vec![DumpField::Keys],
+        }]
+    );
 }
 
 /// A type marker between the config and its project is walked past by both
@@ -124,6 +135,20 @@ async fn a_type_marker_between_the_config_and_its_project_is_walked_past() {
     let output = eval(&config).await.unwrap();
     assert_eq!(output.value_json, r#""deployed""#);
     assert_eq!(output.graph.local.project, scratch.path().to_str().unwrap());
+    // both read for their keys: the marker, walked past, and the root
+    let consulted: Vec<(&str, &[DumpField])> = output
+        .graph
+        .consulted
+        .iter()
+        .map(|c| (c.id.as_str(), c.fields.as_slice()))
+        .collect();
+    assert_eq!(
+        consulted,
+        [
+            ("project:deploy/package.json", &[DumpField::Keys][..]),
+            ("project:package.json", &[DumpField::Keys][..]),
+        ]
+    );
 }
 
 /// A package linked into the project's `node_modules` from beside it — a path

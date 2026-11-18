@@ -24,9 +24,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use fuz_eval::{
-    DumpFormat, DumpOrigin, EvalError, EvalErrorKind, EvalOutput, EvalRequest, FgroPin,
-    MAX_STDOUT_SIZE, ProtocolViolation, TIMEOUT_GRACE, TrustRootProblem, WalkStop, eval_module,
-    fgro_blake3,
+    DumpConsulted, DumpField, DumpFormat, DumpOrigin, EvalError, EvalErrorKind, EvalOutput,
+    EvalRequest, FgroPin, MAX_STDOUT_SIZE, ProtocolViolation, TIMEOUT_GRACE, TrustRootProblem,
+    WalkStop, eval_module, fgro_blake3,
 };
 
 use common::{Scratch, project, write};
@@ -89,6 +89,21 @@ async fn an_ok_envelope_is_the_value_with_sorted_keys_and_the_typed_graph() {
     assert_eq!(
         graph.local.paths["project:config.ts"],
         config.to_str().unwrap()
+    );
+    let package_json = scratch.path().join("package.json");
+    assert_eq!(
+        graph.consulted,
+        [DumpConsulted {
+            id: "project:package.json".to_owned(),
+            blake3: blake3::hash(&std::fs::read(&package_json).unwrap())
+                .to_hex()
+                .to_string(),
+            fields: vec![DumpField::Keys],
+        }]
+    );
+    assert_eq!(
+        graph.local.paths["project:package.json"],
+        package_json.to_str().unwrap()
     );
 }
 
@@ -172,7 +187,14 @@ async fn another_exit_code_or_a_signal_is_a_crash_whatever_stdout_holds() {
 #[tokio::test]
 async fn an_envelope_the_reader_does_not_know_is_refused() {
     let (_scratch, config) = project("fake_protocol", "export default 1;\n");
-    for pointer in ["", "/runtime", "/entry", "/graph", "/graph/local"] {
+    for pointer in [
+        "",
+        "/runtime",
+        "/entry",
+        "/graph",
+        "/graph/consulted/0",
+        "/graph/local",
+    ] {
         assert!(
             matches!(
                 violation(&config, &format!("unknown-field {pointer}")).await,
@@ -191,7 +213,7 @@ async fn an_envelope_the_reader_does_not_know_is_refused() {
     ));
     assert_eq!(
         violation(&config, "graph-version").await,
-        ProtocolViolation::GraphVersion { found: Some(2) }
+        ProtocolViolation::GraphVersion { found: Some(3) }
     );
     assert_eq!(
         violation(&config, "null-graph").await,
