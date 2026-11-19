@@ -1214,6 +1214,7 @@ dependencies = [
  "fuz_crypto",
  "fuz_db",
  "fuz_http",
+ "fuz_realtime",
  "fuz_sys",
  "getrandom 0.3.4",
  "parking_lot",

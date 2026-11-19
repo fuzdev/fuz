@@ -210,8 +210,8 @@ impl fuz_cell_actions::CellGrantRevokeAuthorize for TestCellGrantStewardRevokeAu
 /// A test policy, not a model. The `admin:` rule reads the grant live
 /// through the request's database, inside the reserve window, as every
 /// authorizer must (`fuz_actions::room::RoomAuthorize`); no other rule reads
-/// the database. Byte-equivalent with the TS twin of the same rules; the
-/// cross suite mounts both. A cross-language test contract.
+/// the database. Rule for rule the TS twin, `fuz_app`'s `test_room_authorize`;
+/// the rooms cross suite runs against both. A cross-language test contract.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TestRoomAuthorize;
 
@@ -753,6 +753,12 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // its byte budget deterministically (over HTTP it refuses: there is no
     // connection to queue onto).
     specs.push(fuz_testing::create_testing_flood_notifications_action_spec());
+    // `_testing_room_evict` — evict from the room registry the room verbs run
+    // on, as a consumer does after an authority change commits, so the rooms
+    // cross suite pins eviction (seats and watches alike) on both spines.
+    specs.push(fuz_testing::create_testing_room_evict_action_spec(
+        Arc::clone(&rooms),
+    ));
     // `_testing_mint_session` — forge an expired-by-construction server-side
     // session (backdated `auth_session` row behind a still-valid cookie) so the
     // expiry conformance cases exercise the DB-row expiry gate over real

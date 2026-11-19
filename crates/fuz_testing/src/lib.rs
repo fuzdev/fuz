@@ -46,6 +46,7 @@ pub mod testing_mint_session;
 pub mod testing_origin_check;
 pub mod testing_put_fact;
 pub mod testing_reset;
+pub mod testing_room_evict;
 pub mod testing_schema_snapshot;
 pub mod testing_server;
 pub mod testing_shorten_credential_expiry;
@@ -80,6 +81,7 @@ pub use testing_put_fact::create_testing_put_fact_action_spec;
 pub use testing_reset::{
     BoxFutureResetResult, ResetStateFn, TestingResetOptions, create_testing_reset_action_spec,
 };
+pub use testing_room_evict::{TESTING_ROOM_EVICT_METHOD, create_testing_room_evict_action_spec};
 pub use testing_schema_snapshot::create_testing_schema_snapshot_action_spec;
 pub use testing_server::{
     inert_app_backend, require_daemon_token_from_env, startup_reset_hook, testing_backend_options,
@@ -111,7 +113,8 @@ mod auth_gate_tests {
         create_testing_flood_notifications_action_spec,
         create_testing_migration_tracker_action_spec, create_testing_mint_session_action_spec,
         create_testing_origin_check_action_spec, create_testing_put_fact_action_spec,
-        create_testing_reset_action_spec, create_testing_schema_snapshot_action_spec,
+        create_testing_reset_action_spec, create_testing_room_evict_action_spec,
+        create_testing_schema_snapshot_action_spec,
         create_testing_shorten_credential_expiry_action_spec,
     };
 
@@ -159,6 +162,10 @@ mod auth_gate_tests {
             create_testing_flood_notifications_action_spec(),
             create_testing_origin_check_action_spec(),
             create_testing_shorten_credential_expiry_action_spec(),
+            create_testing_room_evict_action_spec(Arc::new(fuz_realtime::RoomRegistry::new(
+                Arc::new(fuz_realtime::ConnectionRegistry::new()),
+                fuz_realtime::RoomRegistryOptions::default(),
+            ))),
             create_testing_action_manifest_action_spec(&[]),
         ]
     }
@@ -179,7 +186,7 @@ mod auth_gate_tests {
     #[test]
     fn every_testing_spec_carries_the_daemon_token_gate() {
         let specs = all_testing_specs();
-        assert_eq!(specs.len(), 10, "every _testing_* spec must be covered");
+        assert_eq!(specs.len(), 11, "every _testing_* spec must be covered");
         for spec in &specs {
             assert!(
                 spec.method.starts_with("_testing_"),
