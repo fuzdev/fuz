@@ -561,6 +561,45 @@ impl ConnectionRegistry {
             .is_some_and(|recipient| self.deliver(&recipient, Utf8Bytes::from(message.to_owned())))
     }
 
+    /// Send one message to each admitted connection of `ids`, building the
+    /// frame once and collecting every recipient under one read lock — the
+    /// fan-out a room registry runs under its own lock (lock order: the room
+    /// registry, then this one). Unknown and pending ids are skipped; an id
+    /// listed twice is sent the frame twice, so callers dedupe. Each
+    /// recipient's overflow closes that connection alone, as in
+    /// [`Self::send_to`]. Returns how many it was queued for.
+    pub(crate) fn send_to_each(&self, ids: &[ConnectionId], message: &str) -> usize {
+        if ids.is_empty() {
+            return 0;
+        }
+        let recipients: Vec<Recipient> = {
+            let conns = self.connections.read();
+            ids.iter()
+                .filter_map(|id| {
+                    conns
+                        .get(id)
+                        .filter(|info| info.admitted)
+                        .map(|info| (*id, info.identity.account_id, info.sender.handle()))
+                })
+                .collect()
+        };
+        self.deliver_all(&recipients, &Utf8Bytes::from(message.to_owned()))
+    }
+
+    /// The socket-scoped token of an admitted connection — the token every
+    /// close path cancels (a revocation, the cap, an overflow, the shutdown,
+    /// and the loop's own exit) — or `None` once it is gone or while it is
+    /// still pending admission. Crate-private: a room registry waits on it to
+    /// release a connection's seats, and nothing outside the crate may hold a
+    /// socket's teardown signal.
+    pub(crate) fn socket_signal(&self, id: ConnectionId) -> Option<CancellationToken> {
+        self.connections
+            .read()
+            .get(&id)
+            .filter(|info| info.admitted)
+            .map(|info| info.signal.clone())
+    }
+
     /// Queue `frame` for one collected recipient, outside the registry lock.
     /// `true` when it was queued; an overflow closes the connection.
     fn deliver(&self, (id, account_id, handle): &Recipient, frame: Utf8Bytes) -> bool {

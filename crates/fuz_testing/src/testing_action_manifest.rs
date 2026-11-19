@@ -3,7 +3,7 @@
 //! Test binaries append this to their `ActionRegistry` after the rest of the
 //! mount is assembled. It dumps the live RPC method set as a normalized
 //! `{method, input, side_effects, account, actor, roles, credential_types,
-//! rate_limit}` manifest — JSON-shaped to match `fuz_app`'s TS `ActionManifest`
+//! rate_limit, transport?}` manifest — JSON-shaped to match `fuz_app`'s TS `ActionManifest`
 //! — so the cross-backend harness can diff a Rust backend's RPC surface
 //! against the TS reference's via
 //! `assert_action_manifests_equal` (exact method-set + per-method auth shape).
@@ -25,6 +25,13 @@
 //! mount list never contains them). `cancel` needs no filter on either side:
 //! it is a notification the WS read loop owns and is mounted on no dispatch
 //! map at all.
+//!
+//! **WS-only domain methods are listed, with `transport: "ws"`.** A domain
+//! spec marked [`ActionSpec::ws_only`] (the room verbs) is part of the
+//! surface both twins must mount alike, so it stays in the manifest; the
+//! entry says where it is served. A method served on both transports carries
+//! no `transport` key — read it as `"both"` — so a mount with no WS-only
+//! domain method dumps only the eight keys every entry carries.
 //!
 //! Read-only + daemon-token gated (`crate::TESTING_ACTION_AUTH`), matching
 //! `_testing_reset` and its siblings.
@@ -72,14 +79,18 @@ fn sorted_strings<'a>(items: impl Iterator<Item = &'a str>) -> Vec<String> {
 /// auth-family specs' included. It comes off the spec, so a consumer's own
 /// undeclared method reports `null` even when it shares a name with an auth
 /// family's.
+///
+/// `transport` is `"ws"` for a WS-only spec and absent otherwise (module
+/// doc).
 fn manifest_entry(
     method: &str,
     input: InputShape,
     auth: AuthSpec,
     side_effects: bool,
     rate_limit: Option<RateLimitClass>,
+    ws_only: bool,
 ) -> Value {
-    json!({
+    let mut entry = json!({
         "method": method,
         "input": input.name(),
         "side_effects": side_effects,
@@ -96,7 +107,11 @@ fn manifest_entry(
         // matching the TS entry's nullable-not-optional `rate_limit`, so a
         // missing key reads as drift rather than a default.
         "rate_limit": rate_limit.map(RateLimitClass::name),
-    })
+    });
+    if ws_only {
+        entry["transport"] = json!("ws");
+    }
+    entry
 }
 
 /// Build the normalized `{methods: [...]}` manifest from a backend's live RPC
@@ -118,7 +133,14 @@ fn build_action_manifest(mounted: &[ActionSpec]) -> Value {
         .map(|s| {
             (
                 s.method,
-                manifest_entry(s.method, s.input, s.auth, s.side_effects, s.rate_limit),
+                manifest_entry(
+                    s.method,
+                    s.input,
+                    s.auth,
+                    s.side_effects,
+                    s.rate_limit,
+                    s.ws_only,
+                ),
             )
         })
         .collect();
@@ -130,6 +152,7 @@ fn build_action_manifest(mounted: &[ActionSpec]) -> Value {
             crate::TESTING_ACTION_AUTH,
             false,
             None,
+            false,
         ),
     ));
     entries.sort_by(|a, b| a.0.cmp(b.0));
@@ -236,6 +259,16 @@ mod tests {
             InputShape::Object,
             noop_handler(),
         ));
+        // A WS-only domain method — the room verbs' shape.
+        specs.push(
+            ActionSpec::read_only(
+                "pi_ws_only_send",
+                AuthSpec::authenticated(CredentialGate::Any),
+                InputShape::Object,
+                noop_handler(),
+            )
+            .with_ws_only(),
+        );
         specs
     }
 
@@ -373,5 +406,52 @@ mod tests {
         assert_eq!(input_of("zeta_read"), "object");
         // The manifest's own `s.void` input is a void input.
         assert_eq!(input_of(TESTING_ACTION_MANIFEST_METHOD), "void");
+    }
+
+    /// A WS-only domain method stays in the manifest and says so; every other
+    /// entry carries no `transport` key, so a mount without one dumps only the
+    /// common keys. The WS-only protocol method (`heartbeat`) is still dropped.
+    #[test]
+    fn entry_reports_a_ws_only_transport_and_omits_both() {
+        let manifest = build_action_manifest(&sample_mount());
+        let methods = manifest["methods"].as_array().expect("methods array");
+        for entry in methods {
+            let expected = (entry["method"] == "pi_ws_only_send").then(|| Value::from("ws"));
+            assert_eq!(entry.get("transport").cloned(), expected, "{entry}");
+        }
+        assert!(
+            methods.iter().any(|m| m["method"] == "pi_ws_only_send"),
+            "WS-only domain methods are listed"
+        );
+        assert!(
+            !methods.iter().any(|m| m["method"] == "heartbeat"),
+            "the protocol filter still applies"
+        );
+        // the key set of a both-transport entry is the one the TS twin's
+        // published schema parses, exactly
+        let zeta = methods
+            .iter()
+            .find(|m| m["method"] == "zeta_read")
+            .expect("zeta_read");
+        let mut keys: Vec<&str> = zeta
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "account",
+                "actor",
+                "credential_types",
+                "input",
+                "method",
+                "rate_limit",
+                "roles",
+                "side_effects"
+            ]
+        );
     }
 }

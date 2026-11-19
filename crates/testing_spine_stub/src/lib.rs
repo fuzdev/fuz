@@ -4,7 +4,9 @@
 //! (`/api/account/{status,login,logout,password,bootstrap,signup}`),
 //! the unified RPC dispatcher (`/api/rpc`) and WS endpoint (`/api/ws`)
 //! carrying the protocol (`heartbeat` WS-only, `peer/ping` on both) +
-//! account + admin + role-grant-offer action families plus the opt-in
+//! account + admin + role-grant-offer action families, the WS-only room
+//! verbs (over an exclusive registry, gated by [`TestRoomAuthorize`]), plus
+//! the opt-in
 //! `actor_lookup` + `actor_search` specs, audit emission with
 //! the revocation guard, and every `fuz_testing` `_testing_*` spec — plus
 //! `fuz_cell`'s full surface (CRUD + clone + grant ACL + field / item
@@ -36,6 +38,7 @@ use fuz_actions::server::{
     AppBackendSpec, BootedAppBackend, ServeOptions, SpineBackendOptions, StartupError,
     compile_action_registry, create_app_backend, serve_until_shutdown,
 };
+use fuz_auth::actor_queries::query_active_actor_holds_any_global_role;
 use fuz_http::{BaseServerEnv, ServerEnvOptions};
 
 /// Default loopback bind address (port 1177, slots beside zzz's test
@@ -190,6 +193,113 @@ impl fuz_cell_actions::CellGrantRevokeAuthorize for TestCellGrantStewardRevokeAu
         let stewards = auth.has_scoped_role("participant", Some(input.scope_id));
         Box::pin(async move { Ok(stewards) })
     }
+}
+
+/// Test [`fuz_actions::room::RoomAuthorize`] policy the rooms cross suite
+/// drives: the room id's prefix decides, so a case picks its rule by naming
+/// its room.
+///
+/// - `open:<rest>` — join and watch, no scope, the registry's cap;
+/// - `scoped:<scope>:<rest>` — join and watch under the scope `<scope>`;
+/// - `pair:<rest>` — join and watch, at most two members;
+/// - `watch:<rest>` — watch only; a join is denied;
+/// - `admin:<rest>` — join and watch for an actor holding the global `admin`
+///   role, denied to anyone else;
+/// - anything else — denied (`room_not_found`).
+///
+/// A test policy, not a model. The `admin:` rule reads the grant live
+/// through the request's database, inside the reserve window, as every
+/// authorizer must (`fuz_actions::room::RoomAuthorize`); no other rule reads
+/// the database. Byte-equivalent with the TS twin of the same rules; the
+/// cross suite mounts both. A cross-language test contract.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TestRoomAuthorize;
+
+impl TestRoomAuthorize {
+    /// Whether `room_id`'s rule reads the actor's global `admin` grant.
+    #[must_use]
+    pub fn reads_admin(room_id: &str) -> bool {
+        room_id
+            .split_once(':')
+            .is_some_and(|(kind, _)| kind == "admin")
+    }
+
+    /// The verdict for `room_id`, as the type doc lists; `holds_admin` is
+    /// the live read, consulted only by the `admin:` rule.
+    #[must_use]
+    pub fn verdict(
+        room_id: &str,
+        access: fuz_actions::room::RoomAccess,
+        holds_admin: bool,
+    ) -> fuz_actions::room::RoomVerdict {
+        use fuz_actions::room::{RoomAccess, RoomVerdict};
+        let allow = |scope: Option<&str>, max_members: Option<usize>| RoomVerdict::Allow {
+            scope: scope.map(fuz_realtime::RoomScope::new),
+            max_members,
+        };
+        let Some((kind, rest)) = room_id.split_once(':') else {
+            return RoomVerdict::Deny;
+        };
+        match kind {
+            "open" => allow(None, None),
+            "scoped" => rest
+                .split_once(':')
+                .filter(|(scope, _)| !scope.is_empty())
+                .map_or(RoomVerdict::Deny, |(scope, _)| allow(Some(scope), None)),
+            "pair" => allow(None, Some(2)),
+            "watch" if access == RoomAccess::Watch => allow(None, None),
+            "admin" if holds_admin => allow(None, None),
+            _ => RoomVerdict::Deny,
+        }
+    }
+}
+
+impl fuz_actions::room::RoomAuthorize for TestRoomAuthorize {
+    fn authorize<'a>(
+        &'a self,
+        input: &'a fuz_actions::room::RoomAuthorizeInput<'a>,
+        db: &'a fuz_db::ActionDb<'a>,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<fuz_actions::room::RoomVerdict, fuz_http::JsonrpcError>,
+    > {
+        Box::pin(async move {
+            let room_id = input.room_id.as_str();
+            let holds_admin = if Self::reads_admin(room_id) {
+                let roles = [fuz_auth::ROLE_ADMIN];
+                let actor_id = &input.actor_id;
+                match db {
+                    fuz_db::ActionDb::Pool(client) => {
+                        query_active_actor_holds_any_global_role(*client, actor_id, &roles).await
+                    }
+                    fuz_db::ActionDb::Tx(tx) => {
+                        query_active_actor_holds_any_global_role(*tx, actor_id, &roles).await
+                    }
+                }
+                .map_err(|e| {
+                    fuz_http::internal_error_with_source("room authorizer query failed", &e)
+                })?
+            } else {
+                false
+            };
+            Ok(Self::verdict(room_id, input.access, holds_admin))
+        })
+    }
+}
+
+/// The stub's room registry: exclusive — one seat per actor, the newest
+/// admitted winning, with the rejoin guard — at the spine's default bounds.
+#[must_use]
+pub fn stub_room_registry(
+    connections: Arc<fuz_realtime::ConnectionRegistry>,
+) -> Arc<fuz_realtime::RoomRegistry> {
+    Arc::new(fuz_realtime::RoomRegistry::new(
+        connections,
+        fuz_realtime::RoomRegistryOptions {
+            exclusive: true,
+            ..fuz_realtime::RoomRegistryOptions::default()
+        },
+    ))
 }
 
 /// Options for [`run_app`].
@@ -602,15 +712,40 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             ..Default::default()
         },
     ));
+    // Rooms over the WS registry both endpoints share — WS-only verbs, so the
+    // manifest reports them `transport: "ws"`. The test authorizer's rules
+    // ride the room id; the limiter stays on at the spine's defaults, which no
+    // cross case nears unless it means to (it is per connection, so a fresh
+    // socket starts with a full budget).
+    let rooms = stub_room_registry(Arc::clone(&backend.realtime));
+    specs.extend(
+        fuz_actions::room::build_room_spec_set(fuz_actions::room::RoomSpecSetOptions {
+            registry: Arc::clone(&rooms),
+            authorizer: Arc::new(TestRoomAuthorize),
+            limiter: Some(Arc::new(fuz_actions::room::RoomRateLimiter::new(
+                fuz_actions::room::DEFAULT_ROOM_RATE_LIMIT,
+            ))),
+            join_extra: None,
+        })
+        .map_err(|e| StartupError::Config(format!("room verbs: {e}")))?,
+    );
     // `_testing_reset`, its domain-state callback emptying every cell and
     // fact table on the reset's own transaction (before the auth-table wipe +
     // fresh-keeper re-seed), so a test never sees another test's cells or
-    // facts — the set the TS spine binary empties; and `_testing_drain_effects`.
+    // facts — the set the TS spine binary empties — and dropping every room,
+    // silently, so no seat or watch outlives its test; and
+    // `_testing_drain_effects`.
+    let truncate = fuz_testing::truncate_reset_state(
+        &[fuz_cell::CELL_DROP_TABLES, fuz_fact::FACT_DROP_TABLES].concat(),
+    );
+    let reset_rooms = Arc::clone(&rooms);
+    let reset_state: fuz_testing::ResetStateFn = Arc::new(move |db| {
+        reset_rooms.clear();
+        truncate(db)
+    });
     specs.extend(fuz_testing::testing_reset_specs(
         &backend.extra_action_specs_runtime(),
-        Some(fuz_testing::truncate_reset_state(
-            &[fuz_cell::CELL_DROP_TABLES, fuz_fact::FACT_DROP_TABLES].concat(),
-        )),
+        Some(reset_state),
     )?);
     // `_testing_flood_notifications` — queue a burst of notifications onto the
     // caller's own WebSocket connection inside one handler poll, so the
@@ -779,6 +914,55 @@ mod tests {
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    /// The rules the TS twin repeats, row by row.
+    #[test]
+    fn the_test_room_authorizer_reads_the_room_id() {
+        use fuz_actions::room::{RoomAccess, RoomVerdict};
+        // the live read's answer, for the `admin:` rule
+        let (member, admin) = (false, true);
+        let allow = |scope: Option<&str>, max_members| RoomVerdict::Allow {
+            scope: scope.map(fuz_realtime::RoomScope::new),
+            max_members,
+        };
+        for (auth, room_id, access, expected) in [
+            (&member, "open:a", RoomAccess::Join, allow(None, None)),
+            (&member, "open:", RoomAccess::Watch, allow(None, None)),
+            (
+                &member,
+                "scoped:g1:a",
+                RoomAccess::Join,
+                allow(Some("g1"), None),
+            ),
+            (
+                &member,
+                "scoped:g1:",
+                RoomAccess::Watch,
+                allow(Some("g1"), None),
+            ),
+            (&member, "scoped::a", RoomAccess::Join, RoomVerdict::Deny),
+            (&member, "scoped:g1", RoomAccess::Join, RoomVerdict::Deny),
+            (&member, "pair:a", RoomAccess::Join, allow(None, Some(2))),
+            (&member, "watch:a", RoomAccess::Watch, allow(None, None)),
+            (&member, "watch:a", RoomAccess::Join, RoomVerdict::Deny),
+            (&member, "admin:a", RoomAccess::Join, RoomVerdict::Deny),
+            (&admin, "admin:a", RoomAccess::Join, allow(None, None)),
+            (&admin, "admin:a", RoomAccess::Watch, allow(None, None)),
+            (&member, "other:a", RoomAccess::Join, RoomVerdict::Deny),
+            (&admin, "open", RoomAccess::Join, RoomVerdict::Deny),
+        ] {
+            assert_eq!(
+                TestRoomAuthorize::verdict(room_id, access, *auth),
+                expected,
+                "{room_id} {access:?}"
+            );
+        }
+        assert!(TestRoomAuthorize::reads_admin("admin:a"));
+        assert!(TestRoomAuthorize::reads_admin("admin:"));
+        for room_id in ["admin", "open:a", "administrator:a", "x:admin:a"] {
+            assert!(!TestRoomAuthorize::reads_admin(room_id), "{room_id}");
+        }
     }
 
     #[test]

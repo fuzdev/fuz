@@ -21,7 +21,7 @@
 //! credential lookup, so a bearer-carrying request is measurably faster than
 //! one that dispatches; the set of WS-only methods is a published protocol
 //! constant, so there is nothing for that side channel to disclose.
-//! `heartbeat` is the only such spec today.
+//! `heartbeat` and the room verbs ([`crate::room`]) are such specs.
 //!
 //! ## The GET transport
 //!

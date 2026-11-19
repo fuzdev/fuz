@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Realtime transport for the fuz spine — WebSocket and SSE connection registries, broadcast, identity-keyed revocation (RealtimeCloser), the admin audit stream, notify + cancellation seam"
+description = "Realtime transport for the fuz spine — WebSocket and SSE connection registries, broadcast, identity-keyed revocation (RealtimeCloser), the admin audit stream, rooms, notify + cancellation seam"
 
 [dependencies]
 fuz_auth.workspace = true

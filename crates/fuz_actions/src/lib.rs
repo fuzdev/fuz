@@ -60,6 +60,14 @@
 //! transport serializes once, straight into the response, with no
 //! intermediate `Value` tree. Both render through [`write_success_response`].
 //!
+//! ## Rooms
+//!
+//! [`room`] is a spec set a consumer mounts beside its own: the WS-only
+//! `room_*` verbs over `fuz_realtime`'s `RoomRegistry`, with the consumer's
+//! [`room::RoomAuthorize`] deciding each join and watch, joins and watches
+//! on the per-account rate-limit class, and a per-connection
+//! [`room::RoomRateLimiter`] bounding what a socket fans out.
+//!
 //! ## Protocol actions
 //!
 //! [`heartbeat`] and [`peer_ping`] are the protocol specs every consumer
@@ -95,6 +103,9 @@ pub mod rpc_router;
 // === WS binding ===
 pub mod register_action_ws;
 pub mod ws_dispatch;
+
+// === rooms over the WS registry ===
+pub mod room;
 
 // === spine-consumer server toolkit ===
 pub mod server;

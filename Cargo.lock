@@ -775,6 +775,7 @@ dependencies = [
  "fuz_realtime",
  "fuz_sys",
  "fuz_testing",
+ "parking_lot",
  "serde",
  "serde_json",
  "thiserror",

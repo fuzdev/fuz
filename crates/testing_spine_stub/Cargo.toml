@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Test-only spine stub binary — mounts the spine's standard surface (auth, account, admin, audit, role-grant) plus the cell verbs and cell-gated fact serving, for cross-backend integration tests. NEVER ship in a release."
+description = "Test-only spine stub binary — mounts the spine's standard surface (auth, account, admin, audit, role-grant) plus the cell verbs, the room verbs, and cell-gated fact serving, for cross-backend integration tests. NEVER ship in a release."
 
 [[bin]]
 name = "testing_spine_stub"

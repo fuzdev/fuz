@@ -35,8 +35,10 @@
 //!   capture); WS passes a borrow of the per-socket closure built once
 //!   via [`fuz_realtime::ws_notify_for_connection`].
 //! - `signal` — `fuz_realtime::SignalToken` (alias of
-//!   `tokio_util::sync::CancellationToken`). Per-socket on WS, fresh
-//!   per-request on HTTP.
+//!   `tokio_util::sync::CancellationToken`). On WS, a per-request child of
+//!   the socket's token: it fires when the client `cancel`s the request or
+//!   when the socket closes, and a clone kept past the response fires only
+//!   at the close. Fresh per-request on HTTP.
 //! - `audit` — borrowed `&Arc<AuditEmitter>` for pool-routed
 //!   fire-and-forget emits (`ctx.audit.emit(input)`). For routing-
 //!   aware emits that pick pool-vs-in-tx based on the event's
@@ -99,8 +101,9 @@ pub struct ActionContext<'a> {
     /// HTTP: `&fuz_realtime::http_no_op_notify`. WS: borrow of the
     /// per-socket closure.
     pub notify: &'a (dyn Fn(&str, &Value) + Send + Sync),
-    /// Per-request cancellation token. WS: per-socket (cancelled on
-    /// disconnect). HTTP: fresh per-request.
+    /// Per-request cancellation token. WS: a child of the socket's token,
+    /// cancelled by the client's `cancel` of this request or by the socket
+    /// closing. HTTP: fresh per-request.
     pub signal: &'a SignalToken,
     /// Effects queued for post-commit drain (audit listener fan-out,
     /// WS broadcasts, log lines).

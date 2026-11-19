@@ -64,8 +64,10 @@ command. `fuz`/`fuzd` must not depend on it **(audited)**.
 
 **Test-only, never shipped** (the packaging filter, and `check_no_test_binaries`
 at publish and at manifest read). A domain-free spine server — the auth /
-account / admin / audit / role-grant-offer surface, the cell verbs, and
-cell-gated fact serving — its own `run_app` over the `fuz_actions::server`
+account / admin / audit / role-grant-offer surface, the cell verbs, the room
+verbs (an exclusive registry, `TestRoomAuthorize` deciding by the room id's
+prefix, cleared by `_testing_reset`), and cell-gated fact serving — its own
+`run_app` over the `fuz_actions::server`
 toolkit, with `fuz_testing`'s hasher, every
 `_testing_*` spec, and an env-gated startup DB reset. Default port 1177; its
 command line is the harness's `--port <port>` alone. Driven by fuz_app's
@@ -543,6 +545,20 @@ callback `fuz_actions` supplies.
 - `RealtimeCloser` fans each close to both registries; it's the closer every
   consumer mounting the audit stream binds, and the closer it passes
   `serve_with_shutdown`.
+- `RoomRegistry` (`room_registry`) — rooms over one `ConnectionRegistry`:
+  seats with random member ids (a connection id never reaches the wire),
+  relayed payloads, member state, and watches, all in memory; seats are
+  keyed by connection and actor, so under `acting` each actor's seat
+  operations touch only its own. What a change
+  must keep: one lock over rooms and indexes, every event queued under it
+  with a per-room `seq` (lock order: rooms, then connections, which never
+  calls back); the two-phase join (reserve before the consumer's
+  authorizer, admit after), so an eviction reaches a join in flight;
+  eviction covering seats, watches, and joins in flight; one disconnect
+  waiter per connection on its socket token, which the registry reads
+  crate-privately; on an exclusive registry, one seat per actor with the
+  newest admitted winning, and the rejoin tombstone that keeps a dead seat
+  from taking back its actor's newer one. The verbs are `fuz_actions`'.
 
 ### `fuz_actions`
 
@@ -576,6 +592,22 @@ keep:
 - `ConnectionRegistry::broadcast` applies no per-recipient filter, so the WS
   endpoint's role gate is a consumer's ACL over broadcasts unless it uses
   `broadcast_filtered`.
+- `room` is the room verb set (`build_room_spec_set`, its seams on
+  `RoomSpecSetOptions`): WS-only, actor-required specs without side
+  effects. A consumer's `RoomAuthorize` decides each join and watch, a deny
+  answering `room_not_found` like a missing room; it gets the caller's ids
+  and the database, never the request's role grants, which the dispatcher
+  loaded before the registry's reserve, so authority is read live inside
+  the reserve window. The consumer evicts through the registry after its own
+  change commits. `room_join` and `room_watch` carry the per-account
+  rate-limit class (each runs the consumer's database authorizer); joins,
+  sends, and state sets charge `RoomRateLimiter`, per connection, with a
+  byte budget beside the count, charged at each payload's or state's
+  JSON-escaped length and sized under the outbound queue a room-wide send
+  fills in every member; `build_room_spec_set` refuses a limiter that can
+  never cover a max-size payload or state. `_testing_action_manifest` lists
+  WS-only domain specs with `transport: "ws"` and omits the key for the
+  rest, so a mount without one dumps only the keys every entry carries.
 - WS upgrade admission: § Spine cross-crate rules.
 
 ### `fuz_cell` / `fuz_cell_actions`

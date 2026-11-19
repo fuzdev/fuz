@@ -241,9 +241,9 @@ impl ActionSpec {
 
     /// Mark the spec WebSocket-only (builder form).
     ///
-    /// See [`ActionSpec::ws_only`]. `heartbeat` is the only spec that carries
-    /// it today; a consumer whose method is meaningless without a socket may
-    /// opt in the same way.
+    /// See [`ActionSpec::ws_only`]. `heartbeat` and the room verbs
+    /// ([`crate::room`]) carry it; a consumer whose method is meaningless
+    /// without a socket may opt in the same way.
     #[must_use]
     pub const fn with_ws_only(mut self) -> Self {
         self.ws_only = true;

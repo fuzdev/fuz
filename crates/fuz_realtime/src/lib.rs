@@ -57,6 +57,13 @@
 //!   ([`CREDENTIAL_DEADLINE_SLEEP_CAP`]), so a far deadline never meets
 //!   tokio's sleep ceiling, and checks the wall clock on each wake-up, so a
 //!   host suspend does not hold a connection past its credential.
+//! - [`room_registry`] — rooms over the WS registry ([`RoomRegistry`]):
+//!   seats keyed by a consumer's room id, each with a random [`MemberId`],
+//!   relayed payloads, member state, occupancy watches, a two-phase join an
+//!   eviction can reach mid-authorizer, an optional one-seat-per-actor rule
+//!   with its rejoin guard, and one disconnect waiter per connection on its
+//!   socket token. Every event fans out under the registry's lock with a
+//!   per-room `seq`. The verbs over it are `fuz_actions`' `room` module.
 //! - [`RealtimeCloser`] — the `ConnectionCloser` a consumer with both
 //!   transports binds: each close fans to the WS and SSE registries, so a
 //!   revocation handler's direct close reaches open streams without waiting
@@ -100,6 +107,9 @@ pub mod realtime_closer;
 // === audit-log SSE route ===
 pub mod audit_stream;
 
+// === rooms over the WS registry ===
+pub mod room_registry;
+
 // -- Public API re-exports ---------------------------------------------------
 
 pub use audit_stream::{
@@ -123,6 +133,16 @@ pub use peer::{
     noop_action_peer,
 };
 pub use realtime_closer::RealtimeCloser;
+pub use room_registry::{
+    DEFAULT_ROOM_MAX_MEMBERS, DEFAULT_ROOM_MAX_PAYLOAD_BYTES, DEFAULT_ROOM_MAX_STATE_BYTES,
+    DEFAULT_ROOM_MAX_WATCHES_PER_CONNECTION, MAX_POISONED_SCOPES, MemberId, PendingSeat,
+    PendingWatch, ROOM_ID_MAX_LENGTH, ROOM_MEMBER_JOINED_METHOD, ROOM_MEMBER_LEFT_METHOD,
+    ROOM_MEMBER_STATE_METHOD, ROOM_MESSAGE_METHOD, ROOM_REJOIN_TOMBSTONE_TTL,
+    ROOM_REJOIN_TOMBSTONES_PER_ACTOR, ROOM_SEAT_LOST_METHOD, ROOM_WATCH_ENDED_METHOD, RoomError,
+    RoomEvictReason, RoomEvictTarget, RoomEvicted, RoomId, RoomIdError, RoomJoined, RoomLeftReason,
+    RoomMember, RoomOccupancy, RoomRegistry, RoomRegistryOptions, RoomScope, RoomSeatAdmit,
+    RoomSeatLostReason, RoomSeatRequest, RoomTopology,
+};
 pub use sse::{
     PendingSseStream, SSE_CONNECTED_COMMENT, SSE_KEEP_ALIVE_COMMENT, SSE_KEEP_ALIVE_INTERVAL,
     SSE_KEEP_ALIVE_INTERVAL_MAX, SSE_OUTBOUND_QUEUE_BYTES, SseRegistry, SseSubscription,

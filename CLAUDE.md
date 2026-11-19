@@ -342,9 +342,10 @@ shipped).
 - `fuz_http` — JSON-RPC envelopes, gates, and `compose_stack`, the one
   composition root.
 - `fuz_auth` — credentials, sessions, roles, rate limits, audit.
-- `fuz_realtime` — WS + SSE transport.
-- `fuz_actions` — `ActionSpec` / `perform_action`, the top of the spine, and
-  `server`, the toolkit a spine server's `run_app` composes.
+- `fuz_realtime` — WS + SSE transport, and rooms over the WS registry.
+- `fuz_actions` — `ActionSpec` / `perform_action`, the top of the spine,
+  `server`, the toolkit a spine server's `run_app` composes, and `room`, the
+  room verbs.
 - `fuz_cell` / `fuz_cell_actions` — cell storage and authz / the cell RPC verbs.
 - `fuz_fact` / `fuz_fact_serving` — the content-addressed byte store / its sole
   authz'd reader.

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Action dispatch framework for the fuz spine — ActionSpec, registry, perform_action, HTTP RPC + WS bindings"
+description = "Action dispatch framework for the fuz spine — ActionSpec, registry, perform_action, HTTP RPC + WS bindings, the room verbs"
 
 [dependencies]
 fuz_auth.workspace = true
@@ -23,6 +23,7 @@ deadpool-postgres.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 uuid.workspace = true
+parking_lot.workspace = true
 
 [dev-dependencies]
 # Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`). A dev
