@@ -125,62 +125,53 @@ fn the_inputs_are_strict() {
     let parse_id = |params: Value| fuz_http::parse_strict_params::<RoomIdInput>(params);
     assert!(parse_id(json!({"room_id": "r", "acting": member})).is_ok());
     assert!(parse_id(json!({})).is_err());
-    assert!(super::parse_room_id("has space").is_err());
-    assert!(super::parse_room_id(&"x".repeat(129)).is_err());
+
+    // a bad room id is refused at the parse, as the generic invalid params
+    for bad in [String::new(), "has space".to_owned(), "x".repeat(129)] {
+        for error in [
+            parse_id(json!({"room_id": bad})).unwrap_err(),
+            parse_join(json!({"room_id": bad})).unwrap_err(),
+            parse_send(json!({"room_id": bad, "to": null, "payload": "p"})).unwrap_err(),
+        ] {
+            assert_eq!(error.code, JsonrpcErrorCode::InvalidParams, "{bad:?}");
+            assert_eq!(error.message, fuz_http::INVALID_PARAMS_MESSAGE, "{bad:?}");
+            assert!(error.data.is_none(), "{bad:?}");
+        }
+    }
 }
 
 #[test]
 fn each_refusal_names_its_reason() {
-    let reason = |error: RoomError| {
-        let error = room_error(error);
-        (
-            error.code,
-            error
-                .data
-                .and_then(|d| d["reason"].as_str().map(ToOwned::to_owned)),
-        )
+    use JsonrpcErrorCode::{Conflict, InvalidParams, NotFound, RequestCancelled};
+    use RoomError::{
+        ConnectionClosed, Evicted, Full, JoinSuperseded, MemberNotFound, NotJoined,
+        PayloadTooLarge, SeatMoved, StateTooLarge, WatchLimit,
     };
-    let named = |code, reason: &str| (code, Some(reason.to_owned()));
-    assert_eq!(
-        reason(RoomError::Evicted),
-        named(JsonrpcErrorCode::NotFound, "room_not_found")
-    );
-    assert_eq!(
-        reason(RoomError::Full),
-        named(JsonrpcErrorCode::Conflict, "room_full")
-    );
-    assert_eq!(
-        reason(RoomError::JoinSuperseded),
-        named(JsonrpcErrorCode::Conflict, "room_join_superseded")
-    );
-    assert_eq!(
-        reason(RoomError::SeatMoved),
-        named(JsonrpcErrorCode::Conflict, "room_seat_moved")
-    );
-    assert_eq!(
-        reason(RoomError::NotJoined),
-        named(JsonrpcErrorCode::Conflict, "room_not_joined")
-    );
-    assert_eq!(
-        reason(RoomError::MemberNotFound),
-        named(JsonrpcErrorCode::NotFound, "room_member_not_found")
-    );
-    assert_eq!(
-        reason(RoomError::PayloadTooLarge),
-        named(JsonrpcErrorCode::InvalidParams, "room_payload_too_large")
-    );
-    assert_eq!(
-        reason(RoomError::StateTooLarge),
-        named(JsonrpcErrorCode::InvalidParams, "room_state_too_large")
-    );
-    assert_eq!(
-        reason(RoomError::WatchLimit),
-        named(JsonrpcErrorCode::Conflict, "room_watch_limit")
-    );
-    assert_eq!(
-        reason(RoomError::ConnectionClosed),
-        (JsonrpcErrorCode::RequestCancelled, None)
-    );
+    let cases = [
+        (Evicted, NotFound, Some("room_not_found")),
+        (Full, Conflict, Some("room_full")),
+        (JoinSuperseded, Conflict, Some("room_join_superseded")),
+        (SeatMoved, Conflict, Some("room_seat_moved")),
+        (NotJoined, Conflict, Some("room_not_joined")),
+        (MemberNotFound, NotFound, Some("room_member_not_found")),
+        (
+            PayloadTooLarge,
+            InvalidParams,
+            Some("room_payload_too_large"),
+        ),
+        (StateTooLarge, InvalidParams, Some("room_state_too_large")),
+        (WatchLimit, Conflict, Some("room_watch_limit")),
+        (ConnectionClosed, RequestCancelled, None),
+    ];
+    for (refusal, code, reason) in cases {
+        let error = room_error(refusal);
+        assert_eq!(error.code, code, "{refusal:?}");
+        assert_eq!(
+            error.data.as_ref().and_then(|d| d["reason"].as_str()),
+            reason,
+            "{refusal:?}"
+        );
+    }
 }
 
 /// The charge is the length `serde_json` writes, character class by class.

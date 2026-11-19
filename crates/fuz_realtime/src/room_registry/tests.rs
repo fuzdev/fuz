@@ -31,6 +31,12 @@ struct Client {
     signal: CancellationToken,
 }
 
+impl Default for Harness {
+    fn default() -> Self {
+        Self::new(RoomRegistryOptions::default())
+    }
+}
+
 impl Harness {
     fn new(options: RoomRegistryOptions) -> Self {
         let connections = Arc::new(ConnectionRegistry::new());
@@ -100,6 +106,20 @@ impl Harness {
     ) -> Result<RoomJoined, RoomError> {
         let pending = self.reserve_rejoin(client, room, rejoin_of)?;
         self.rooms.admit_seat(pending, admit)
+    }
+
+    /// A connection for a new actor, seated in `room`.
+    fn join_in(&self, room: &RoomId) -> (Client, RoomJoined) {
+        let client = self.connect();
+        let joined = self.join(&client, room).unwrap();
+        (client, joined)
+    }
+
+    /// A connection for a new actor, watching `room`.
+    fn watch_in(&self, room: &RoomId) -> Client {
+        let client = self.connect();
+        self.watch(&client, room).unwrap();
+        client
     }
 
     fn watch(&self, client: &Client, room: &RoomId) -> Result<super::RoomOccupancy, RoomError> {
@@ -173,7 +193,7 @@ fn room_ids_are_bounded_printable_ascii() {
 
 #[tokio::test]
 async fn a_join_answers_the_room_and_tells_the_others() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let mut a = h.connect();
     let mut b = h.connect();
@@ -231,12 +251,10 @@ async fn a_join_answers_the_room_and_tells_the_others() {
 
 #[tokio::test]
 async fn a_leave_tells_the_others_and_an_empty_room_is_deleted() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
-    let mut a = h.connect();
-    let b = h.connect();
-    h.join(&a, &line).unwrap();
-    let joined_b = h.join(&b, &line).unwrap();
+    let (mut a, _) = h.join_in(&line);
+    let (b, joined_b) = h.join_in(&line);
     frames(&mut a);
 
     assert!(h.rooms.leave(b.id, b.actor, &line));
@@ -261,14 +279,10 @@ async fn a_send_reaches_its_addressee_or_the_room_minus_the_sender() {
         ..RoomRegistryOptions::default()
     });
     let line = room("line");
-    let mut a = h.connect();
-    let mut b = h.connect();
-    let mut c = h.connect();
-    let mut watcher = h.connect();
-    let joined_a = h.join(&a, &line).unwrap();
-    let joined_b = h.join(&b, &line).unwrap();
-    h.join(&c, &line).unwrap();
-    h.watch(&watcher, &line).unwrap();
+    let (mut a, joined_a) = h.join_in(&line);
+    let (mut b, joined_b) = h.join_in(&line);
+    let (mut c, _) = h.join_in(&line);
+    let mut watcher = h.watch_in(&line);
     for client in [&mut a, &mut b, &mut c, &mut watcher] {
         frames(client);
     }
@@ -325,12 +339,9 @@ async fn state_reaches_the_others_and_the_watchers_and_is_bounded() {
         ..RoomRegistryOptions::default()
     });
     let line = room("line");
-    let mut a = h.connect();
-    let mut b = h.connect();
-    let mut watcher = h.connect();
-    let joined_a = h.join(&a, &line).unwrap();
-    h.join(&b, &line).unwrap();
-    h.watch(&watcher, &line).unwrap();
+    let (mut a, joined_a) = h.join_in(&line);
+    let (mut b, _) = h.join_in(&line);
+    let mut watcher = h.watch_in(&line);
     frames(&mut a);
     frames(&mut watcher);
 
@@ -373,20 +384,22 @@ async fn state_reaches_the_others_and_the_watchers_and_is_bounded() {
         ),
         Err(RoomError::StateTooLarge)
     );
+    assert!(
+        h.rooms.state.lock().pending.is_empty(),
+        "the refused join leaves flight"
+    );
 }
 
 /// Every event in a room takes the next `seq`, whatever its kind, so a
 /// watcher sees one strictly increasing sequence.
 #[tokio::test]
 async fn every_event_in_a_room_takes_the_next_seq() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let mut watcher = h.connect();
     assert_eq!(h.watch(&watcher, &line).unwrap().seq, 0);
-    let a = h.connect();
-    let b = h.connect();
-    h.join(&a, &line).unwrap();
-    h.join(&b, &line).unwrap();
+    let (a, _) = h.join_in(&line);
+    let (b, _) = h.join_in(&line);
     let send_seq = h.rooms.send(a.id, a.actor, &line, None, "x").unwrap();
     h.rooms
         .set_state(b.id, b.actor, &line, "s".to_owned())
@@ -412,8 +425,7 @@ async fn a_watch_sees_the_members_without_joining_and_is_bounded() {
         ..RoomRegistryOptions::default()
     });
     let line = room("line");
-    let a = h.connect();
-    let joined_a = h.join(&a, &line).unwrap();
+    let (a, joined_a) = h.join_in(&line);
     let mut watcher = h.connect();
 
     let occupancy = h.watch(&watcher, &line).unwrap();
@@ -569,7 +581,7 @@ async fn the_last_admitted_of_two_sockets_wins() {
 /// registry.
 #[tokio::test]
 async fn joining_again_moves_the_connections_own_seat() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let mut a = h.connect();
     let first = h.join(&a, &line).unwrap();
@@ -583,7 +595,7 @@ async fn joining_again_moves_the_connections_own_seat() {
 /// for each, and every seat operation touches only the acting actor's own.
 #[tokio::test]
 async fn seats_are_per_actor_on_one_connection() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let mut tab = h.connect();
     let other_actor = Uuid::new_v4();
@@ -651,7 +663,7 @@ async fn seats_are_per_actor_on_one_connection() {
 
 #[tokio::test]
 async fn a_shared_registry_seats_an_actor_on_each_socket() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let actor = Uuid::new_v4();
     let tab_1 = h.connect_as(actor);
@@ -694,7 +706,12 @@ async fn a_seat_lost_to_a_disconnect_is_rejoined() {
     )
     .unwrap();
     assert!(
-        !h.rooms.state.lock().tombstones.contains_key(&actor),
+        !h.rooms
+            .state
+            .lock()
+            .tombstones
+            .by_actor
+            .contains_key(&actor),
         "the rejoin spends the tombstone"
     );
 }
@@ -770,7 +787,7 @@ async fn tombstones_are_short_and_few() {
     for _ in 0..ROOM_REJOIN_TOMBSTONES_PER_ACTOR + 2 {
         seats.push(h.join(&tab, &first).unwrap().member_id);
     }
-    let tombstones = h.rooms.state.lock().tombstones[&actor].len();
+    let tombstones = h.rooms.state.lock().tombstones.by_actor[&actor].len();
     assert_eq!(tombstones, ROOM_REJOIN_TOMBSTONES_PER_ACTOR);
     let fresh = h.connect_as(actor);
     drop(h.reserve_rejoin(&fresh, &first, Some(seats[0])).unwrap());
@@ -785,7 +802,7 @@ async fn tombstones_are_short_and_few() {
 /// and by room outright, by scope only when the verdict names that scope.
 #[tokio::test]
 async fn an_eviction_reaches_a_join_in_flight() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let a = h.connect();
     let scope = RoomScope::new("group-1");
@@ -838,7 +855,7 @@ async fn an_eviction_reaches_a_join_in_flight() {
 
 #[tokio::test]
 async fn an_eviction_covers_seats_and_watches() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let scope = RoomScope::new("group");
     let actor = Uuid::new_v4();
@@ -897,18 +914,38 @@ async fn an_eviction_covers_seats_and_watches() {
     assert_eq!(h.rooms.occupancy(&line).unwrap().members.len(), 1);
 }
 
+/// A join or watch admitted on a registry that didn't issue it is refused,
+/// and withdrawn from the one that did.
+#[tokio::test]
+async fn an_admit_on_another_registry_is_refused() {
+    let h = Harness::default();
+    let other = Harness::default();
+    let a = h.connect();
+    let line = room("line");
+    let pending = h.reserve(&a, &line).unwrap();
+    assert_eq!(
+        other.rooms.admit_seat(pending, RoomSeatAdmit::default()),
+        Err(RoomError::Evicted)
+    );
+    let pending = h.rooms.reserve_watch(a.id, a.actor, line).unwrap();
+    assert_eq!(
+        other.rooms.admit_watch(pending, None).map(|_| ()),
+        Err(RoomError::Evicted)
+    );
+    let state = h.rooms.state.lock();
+    assert!(state.pending.is_empty());
+    assert!(state.connections[&a.id].pending.is_empty());
+}
+
 /// Closing a room tells each member its seat is lost and each watcher its
 /// watch ended, and no one about the others leaving.
 #[tokio::test]
 async fn closing_a_room_ends_every_seat_and_watch() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
-    let mut a = h.connect();
-    let mut b = h.connect();
-    let mut watcher = h.connect();
-    h.join(&a, &line).unwrap();
-    h.join(&b, &line).unwrap();
-    h.watch(&watcher, &line).unwrap();
+    let (mut a, _) = h.join_in(&line);
+    let (mut b, _) = h.join_in(&line);
+    let mut watcher = h.watch_in(&line);
     for client in [&mut a, &mut b, &mut watcher] {
         frames(client);
     }
@@ -930,7 +967,7 @@ async fn closing_a_room_ends_every_seat_and_watch() {
 
 #[tokio::test]
 async fn a_leave_supersedes_the_connections_join_in_flight() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let a = h.connect();
     let pending = h.reserve(&a, &line).unwrap();
@@ -947,7 +984,7 @@ async fn a_leave_supersedes_the_connections_join_in_flight() {
 
 #[tokio::test]
 async fn a_dropped_join_in_flight_leaves_nothing() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let a = h.connect();
     let pending = h.reserve(&a, &room("line")).unwrap();
     assert_eq!(h.rooms.state.lock().pending.len(), 1);
@@ -959,7 +996,7 @@ async fn a_dropped_join_in_flight_leaves_nothing() {
 
 #[tokio::test]
 async fn a_closed_socket_is_refused_at_either_phase() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
 
     // cancelled while still registered — the window between a close path
@@ -1012,7 +1049,7 @@ async fn a_closed_socket_is_refused_at_either_phase() {
 
 #[tokio::test]
 async fn a_disconnect_releases_every_seat_and_watch() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let (first, second, watched) = (room("first"), room("second"), room("watched"));
     let mut other = h.connect();
     h.join(&other, &first).unwrap();
@@ -1092,7 +1129,7 @@ async fn a_disconnect_releases_every_actors_seat() {
 /// asked: evicting that actor ends it, evicting an earlier asker doesn't.
 #[tokio::test]
 async fn a_watch_is_held_for_the_actor_that_last_asked() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
     let mut tab = h.connect();
     let second_actor = Uuid::new_v4();
@@ -1156,11 +1193,10 @@ async fn one_waiter_per_connection_across_many_joins() {
 /// a disconnect.
 #[tokio::test]
 async fn a_slow_member_is_closed_and_released() {
-    let h = Harness::new(RoomRegistryOptions::default());
+    let h = Harness::default();
     let line = room("line");
-    let mut sender = h.connect();
+    let (mut sender, _) = h.join_in(&line);
     let slow = h.connect_with_budget(Uuid::new_v4(), 256);
-    h.join(&sender, &line).unwrap();
     let slow_seat = h.join(&slow, &line).unwrap();
     frames(&mut sender);
 
@@ -1203,7 +1239,7 @@ async fn clear_drops_everything_and_refuses_what_is_in_flight() {
         RoomError::Evicted
     );
     let state = h.rooms.state.lock();
-    assert!(state.tombstones.is_empty());
+    assert!(state.tombstones.by_actor.is_empty());
     assert!(state.seat_of_actor.is_empty());
     assert_eq!(state.connections.len(), 1, "the waiter's entry stays");
     drop(state);

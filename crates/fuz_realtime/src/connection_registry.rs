@@ -561,14 +561,14 @@ impl ConnectionRegistry {
             .is_some_and(|recipient| self.deliver(&recipient, Utf8Bytes::from(message.to_owned())))
     }
 
-    /// Send one message to each admitted connection of `ids`, building the
-    /// frame once and collecting every recipient under one read lock — the
-    /// fan-out a room registry runs under its own lock (lock order: the room
-    /// registry, then this one). Unknown and pending ids are skipped; an id
-    /// listed twice is sent the frame twice, so callers dedupe. Each
-    /// recipient's overflow closes that connection alone, as in
-    /// [`Self::send_to`]. Returns how many it was queued for.
-    pub(crate) fn send_to_each(&self, ids: &[ConnectionId], message: &str) -> usize {
+    /// Send one message to each admitted connection of `ids`, taking the
+    /// frame's buffer without a copy and collecting every recipient under
+    /// one read lock — the fan-out a room registry runs under its own lock
+    /// (lock order: the room registry, then this one). Unknown and pending
+    /// ids are skipped; an id listed twice is sent the frame twice, so
+    /// callers dedupe. Each recipient's overflow closes that connection
+    /// alone, as in [`Self::send_to`]. Returns how many it was queued for.
+    pub(crate) fn send_to_each(&self, ids: &[ConnectionId], message: String) -> usize {
         if ids.is_empty() {
             return 0;
         }
@@ -583,7 +583,7 @@ impl ConnectionRegistry {
                 })
                 .collect()
         };
-        self.deliver_all(&recipients, &Utf8Bytes::from(message.to_owned()))
+        self.deliver_all(&recipients, &Utf8Bytes::from(message))
     }
 
     /// The socket-scoped token of an admitted connection — the token every

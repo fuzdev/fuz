@@ -376,7 +376,7 @@ struct Rooms {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoomJoinInput {
-    room_id: String,
+    room_id: RoomId,
     #[serde(default)]
     state: Option<String>,
     #[serde(default, deserialize_with = "fuz_http::deserialize_optional_wire_uuid")]
@@ -394,7 +394,7 @@ struct RoomJoinInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoomIdInput {
-    room_id: String,
+    room_id: RoomId,
     #[serde(
         default,
         rename = "acting",
@@ -406,7 +406,7 @@ struct RoomIdInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoomSendInput {
-    room_id: String,
+    room_id: RoomId,
     /// Required, `null` for the whole room.
     #[serde(deserialize_with = "fuz_http::deserialize_nullish_wire_uuid")]
     to: Option<Uuid>,
@@ -422,7 +422,7 @@ struct RoomSendInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoomStateSetInput {
-    room_id: String,
+    room_id: RoomId,
     state: String,
     #[serde(
         default,
@@ -444,7 +444,6 @@ struct RoomJoinOutput {
 impl Rooms {
     async fn join(&self, params: Value, ctx: &ActionContext<'_>) -> Result<Value, JsonrpcError> {
         let input: RoomJoinInput = fuz_http::parse_strict_params(params)?;
-        let room_id = parse_room_id(&input.room_id)?;
         let (auth, connection_id) = caller(ctx, ROOM_JOIN_METHOD)?;
         if input
             .state
@@ -462,14 +461,14 @@ impl Rooms {
             .reserve_seat(RoomSeatRequest {
                 connection_id,
                 actor_id: auth.actor.id,
-                room_id: room_id.clone(),
+                room_id: input.room_id.clone(),
                 rejoin_of: input.rejoin_of.map(MemberId::from_uuid),
             })
             .map_err(room_error)?;
         let authorize_input = RoomAuthorizeInput {
             actor_id: auth.actor.id,
             account_id: auth.account.id,
-            room_id: &room_id,
+            room_id: &input.room_id,
             access: RoomAccess::Join,
         };
         let RoomVerdict::Allow { scope, max_members } =
@@ -494,7 +493,7 @@ impl Rooms {
         let extra = self.join_extra.as_ref().map_or(Value::Null, |extra| {
             extra(&RoomJoinExtraInput {
                 auth,
-                room_id: &room_id,
+                room_id: &input.room_id,
                 member_id: joined.member_id,
             })
         });
@@ -503,15 +502,15 @@ impl Rooms {
 
     fn leave(&self, params: Value, ctx: &ActionContext<'_>) -> Result<Value, JsonrpcError> {
         let input: RoomIdInput = fuz_http::parse_strict_params(params)?;
-        let room_id = parse_room_id(&input.room_id)?;
         let (auth, connection_id) = caller(ctx, ROOM_LEAVE_METHOD)?;
-        let left = self.registry.leave(connection_id, auth.actor.id, &room_id);
+        let left = self
+            .registry
+            .leave(connection_id, auth.actor.id, &input.room_id);
         Ok(json!({ "left": left }))
     }
 
     fn send(&self, params: Value, ctx: &ActionContext<'_>) -> Result<Value, JsonrpcError> {
         let input: RoomSendInput = fuz_http::parse_strict_params_allowing_null(params, &["to"])?;
-        let room_id = parse_room_id(&input.room_id)?;
         let (auth, connection_id) = caller(ctx, ROOM_SEND_METHOD)?;
         if input.payload.len() > self.registry.options().max_payload_bytes {
             return Err(room_error(RoomError::PayloadTooLarge));
@@ -521,7 +520,7 @@ impl Rooms {
             .send(
                 connection_id,
                 auth.actor.id,
-                &room_id,
+                &input.room_id,
                 input.to.map(MemberId::from_uuid),
                 &input.payload,
             )
@@ -531,7 +530,6 @@ impl Rooms {
 
     fn set_state(&self, params: Value, ctx: &ActionContext<'_>) -> Result<Value, JsonrpcError> {
         let input: RoomStateSetInput = fuz_http::parse_strict_params(params)?;
-        let room_id = parse_room_id(&input.room_id)?;
         let (auth, connection_id) = caller(ctx, ROOM_STATE_SET_METHOD)?;
         if input.state.len() > self.registry.options().max_state_bytes {
             return Err(room_error(RoomError::StateTooLarge));
@@ -539,23 +537,22 @@ impl Rooms {
         self.charge(connection_id, json_escaped_len(&input.state))?;
         let seq = self
             .registry
-            .set_state(connection_id, auth.actor.id, &room_id, input.state)
+            .set_state(connection_id, auth.actor.id, &input.room_id, input.state)
             .map_err(room_error)?;
         Ok(json!({ "seq": seq }))
     }
 
     async fn watch(&self, params: Value, ctx: &ActionContext<'_>) -> Result<Value, JsonrpcError> {
         let input: RoomIdInput = fuz_http::parse_strict_params(params)?;
-        let room_id = parse_room_id(&input.room_id)?;
         let (auth, connection_id) = caller(ctx, ROOM_WATCH_METHOD)?;
         let pending = self
             .registry
-            .reserve_watch(connection_id, auth.actor.id, room_id.clone())
+            .reserve_watch(connection_id, auth.actor.id, input.room_id.clone())
             .map_err(room_error)?;
         let authorize_input = RoomAuthorizeInput {
             actor_id: auth.actor.id,
             account_id: auth.account.id,
-            room_id: &room_id,
+            room_id: &input.room_id,
             access: RoomAccess::Watch,
         };
         let RoomVerdict::Allow { scope, .. } =
@@ -575,9 +572,8 @@ impl Rooms {
 
     fn unwatch(&self, params: Value, ctx: &ActionContext<'_>) -> Result<Value, JsonrpcError> {
         let input: RoomIdInput = fuz_http::parse_strict_params(params)?;
-        let room_id = parse_room_id(&input.room_id)?;
         let (_, connection_id) = caller(ctx, ROOM_UNWATCH_METHOD)?;
-        let unwatched = self.registry.unwatch(connection_id, &room_id);
+        let unwatched = self.registry.unwatch(connection_id, &input.room_id);
         Ok(json!({ "unwatched": unwatched }))
     }
 
@@ -607,11 +603,6 @@ fn caller<'c>(
         .connection_id
         .ok_or_else(|| fuz_http::method_not_found(method))?;
     Ok((auth, connection_id))
-}
-
-/// Read a wire room id, refused as the twin's input schema refuses it.
-fn parse_room_id(raw: &str) -> Result<RoomId, JsonrpcError> {
-    RoomId::parse(raw).map_err(|e| fuz_http::invalid_input_params(&format!("room_id: {e}"), None))
 }
 
 fn to_output<T: Serialize>(output: &T) -> Result<Value, JsonrpcError> {

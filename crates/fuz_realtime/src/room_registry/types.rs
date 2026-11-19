@@ -4,7 +4,7 @@
 use std::fmt;
 use std::num::NonZeroUsize;
 
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The notification a room's members and watchers get when a member is
 /// seated: `{room_id, seq, member}`.
@@ -45,7 +45,8 @@ pub const DEFAULT_ROOM_MAX_WATCHES_PER_CONNECTION: usize = 256;
 /// Bounded: 1 to [`ROOM_ID_MAX_LENGTH`] printable ASCII characters (`!`
 /// through `~`, so no whitespace or control characters). ASCII keeps the
 /// bound one number on both twins, where a UTF-16 length and a UTF-8 one
-/// would differ.
+/// would differ. It deserializes through the same check, so an input field
+/// typed `RoomId` refuses a bad id at params parse.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct RoomId(String);
@@ -58,12 +59,7 @@ impl RoomId {
     /// [`RoomIdError`] when `raw` is empty, longer than
     /// [`ROOM_ID_MAX_LENGTH`], or holds a character outside `!`..=`~`.
     pub fn parse(raw: &str) -> Result<Self, RoomIdError> {
-        if raw.is_empty() || raw.len() > ROOM_ID_MAX_LENGTH {
-            return Err(RoomIdError::Length);
-        }
-        if !raw.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(RoomIdError::Character);
-        }
+        check_room_id(raw)?;
         Ok(Self(raw.to_owned()))
     }
 
@@ -72,6 +68,35 @@ impl RoomId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+impl TryFrom<String> for RoomId {
+    type Error = RoomIdError;
+
+    /// [`RoomId::parse`], keeping `raw`'s buffer.
+    fn try_from(raw: String) -> Result<Self, RoomIdError> {
+        check_room_id(&raw)?;
+        Ok(Self(raw))
+    }
+}
+
+/// By hand, since serde's `try_from` does not combine with the
+/// `transparent` the serialization keeps.
+impl<'de> Deserialize<'de> for RoomId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The bounds of a [`RoomId`].
+fn check_room_id(raw: &str) -> Result<(), RoomIdError> {
+    if raw.is_empty() || raw.len() > ROOM_ID_MAX_LENGTH {
+        return Err(RoomIdError::Length);
+    }
+    if !raw.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(RoomIdError::Character);
+    }
+    Ok(())
 }
 
 impl fmt::Display for RoomId {

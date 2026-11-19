@@ -33,7 +33,10 @@
 //! `seq` orders a room's events, and lets a client drop the events at or
 //! below the snapshot a join or watch answered; it is not contiguous per
 //! client (an addressed message bumps it, and only the addressee sees that
-//! one), and it restarts when a room is deleted and created again.
+//! one), and it restarts when a room is deleted and created again. Order
+//! across rooms is unspecified: one eviction or disconnect spanning several
+//! rooms tells them in no promised order; within a room, the events that
+//! carry a `seq` follow it.
 //!
 //! Nothing here waits: a recipient that cannot take a frame is closed for
 //! the overflow (4005) by the connection registry, and its seats are then
@@ -247,7 +250,9 @@ impl RoomRegistry {
             let state = &mut *guard;
             if self.options.exclusive
                 && let Some(rejoin_of) = rejoin_of
-                && state.rejoin_moved(actor_id, rejoin_of, Instant::now())
+                && state
+                    .tombstones
+                    .rejoin_moved(actor_id, rejoin_of, Instant::now())
             {
                 return Err(RoomError::SeatMoved);
             }
@@ -272,11 +277,9 @@ impl RoomRegistry {
             ticket
         };
         Ok(PendingSeat {
-            registry: Arc::clone(self),
-            ticket,
+            ticket: PendingTicket::new(self, ticket),
             member_id,
             room_id,
-            armed: true,
         })
     }
 
@@ -300,27 +303,26 @@ impl RoomRegistry {
         pending: PendingSeat,
         admit: RoomSeatAdmit,
     ) -> Result<RoomJoined, RoomError> {
-        if !std::ptr::eq(Arc::as_ptr(&pending.registry), self) {
-            return Err(RoomError::Evicted);
-        }
+        let ticket = pending.ticket.take(self).ok_or(RoomError::Evicted)?;
         let RoomSeatAdmit {
             scope,
             max_members,
             state: member_state,
         } = admit;
+        let exclusive = self.options.exclusive;
+        let out = Out(&self.connections);
+
+        let mut guard = self.state.lock();
+        let state = &mut *guard;
+        // the join leaves flight whatever the answer
+        let entry = state.take_pending(ticket);
         if member_state
             .as_ref()
             .is_some_and(|s| s.len() > self.options.max_state_bytes)
         {
             return Err(RoomError::StateTooLarge);
         }
-        let ticket = pending.disarm();
-        let exclusive = self.options.exclusive;
-        let out = Out(&self.connections);
-
-        let mut guard = self.state.lock();
-        let state = &mut *guard;
-        let entry = state.take_pending(ticket).ok_or(RoomError::Evicted)?;
+        let entry = entry.ok_or(RoomError::Evicted)?;
         let PendingKind::Seat {
             member_id,
             rejoin_of,
@@ -344,7 +346,7 @@ impl RoomRegistry {
         let now = Instant::now();
         if exclusive
             && let Some(rejoin_of) = rejoin_of
-            && state.rejoin_moved(actor_id, rejoin_of, now)
+            && state.tombstones.rejoin_moved(actor_id, rejoin_of, now)
         {
             return Err(RoomError::SeatMoved);
         }
@@ -374,20 +376,12 @@ impl RoomRegistry {
         }
 
         for (room, seat) in displaced {
-            let removed = state.remove(
-                out,
-                &Removal {
-                    room_id: &room,
-                    seats: &[seat],
-                    watchers: &[],
-                    left: RoomLeftReason::Moved,
-                    seat_lost: Some((RoomSeatLostReason::Moved, Some(&room_id))),
-                    watch_ended: None,
-                },
-            );
+            let removed = state.remove(out, &room, &[seat], &[], Departure::Moved { to: &room_id });
             if exclusive {
                 for seat in removed {
-                    state.push_tombstone(seat.actor_id, seat.member_id, now, true);
+                    state
+                        .tombstones
+                        .push(seat.actor_id, seat.member_id, now, TombstoneKind::Moved);
                 }
             }
         }
@@ -422,7 +416,7 @@ impl RoomRegistry {
             state
                 .seat_of_actor
                 .insert(actor_id, (room_id.clone(), member_id));
-            state.settle_tombstones(actor_id, rejoin_of, now);
+            state.tombstones.settle(actor_id, rejoin_of, now);
         }
         Ok(RoomJoined {
             room_id,
@@ -460,17 +454,7 @@ impl RoomRegistry {
             }
         }
         if let Some(seat) = seat {
-            state.remove(
-                out,
-                &Removal {
-                    room_id,
-                    seats: &[seat],
-                    watchers: &[],
-                    left: RoomLeftReason::Left,
-                    seat_lost: None,
-                    watch_ended: None,
-                },
-            );
+            state.remove(out, room_id, &[seat], &[], Departure::Left);
             left = true;
         }
         left
@@ -558,20 +542,16 @@ impl RoomRegistry {
             .and_then(|conn| conn.seat(room_id, actor_id))
             .ok_or(RoomError::NotJoined)?;
         let room = state.rooms.get_mut(room_id).ok_or(RoomError::NotJoined)?;
-        let seat = room
-            .seats
-            .iter_mut()
-            .find(|seat| seat.member_id == member_id)
-            .ok_or(RoomError::NotJoined)?;
-        seat.state = Some(member_state);
-        let seq = room.next_seq();
-        let seat_state = room
+        let index = room
             .seats
             .iter()
-            .find(|seat| seat.member_id == member_id)
-            .and_then(|seat| seat.state.as_deref());
+            .position(|seat| seat.member_id == member_id)
+            .ok_or(RoomError::NotJoined)?;
+        let recipients = room.recipients(Some(member_id));
+        let seq = room.next_seq();
+        let seat_state: &str = room.seats[index].state.insert(member_state);
         out.send(
-            &room.recipients(Some(member_id)),
+            &recipients,
             ROOM_MEMBER_STATE_METHOD,
             &MemberStateParams {
                 room_id,
@@ -619,10 +599,8 @@ impl RoomRegistry {
             ticket
         };
         Ok(PendingWatch {
-            registry: Arc::clone(self),
-            ticket,
+            ticket: PendingTicket::new(self, ticket),
             room_id,
-            armed: true,
         })
     }
 
@@ -640,10 +618,7 @@ impl RoomRegistry {
         pending: PendingWatch,
         scope: Option<RoomScope>,
     ) -> Result<RoomOccupancy, RoomError> {
-        if !std::ptr::eq(Arc::as_ptr(&pending.registry), self) {
-            return Err(RoomError::Evicted);
-        }
-        let ticket = pending.disarm();
+        let ticket = pending.ticket.take(self).ok_or(RoomError::Evicted)?;
         let mut guard = self.state.lock();
         let state = &mut *guard;
         let entry = state.take_pending(ticket).ok_or(RoomError::Evicted)?;
@@ -701,17 +676,7 @@ impl RoomRegistry {
             .get(&connection_id)
             .is_some_and(|conn| conn.watches.contains(room_id));
         if watching {
-            state.remove(
-                out,
-                &Removal {
-                    room_id,
-                    seats: &[],
-                    watchers: &[connection_id],
-                    left: RoomLeftReason::Left,
-                    seat_lost: None,
-                    watch_ended: None,
-                },
-            );
+            state.remove(out, room_id, &[], &[connection_id], Departure::Left);
         }
         watching
     }
@@ -780,17 +745,7 @@ impl RoomRegistry {
             }
             evicted.seats += seats.len();
             evicted.watches += watchers.len();
-            state.remove(
-                out,
-                &Removal {
-                    room_id: &room_id,
-                    seats: &seats,
-                    watchers: &watchers,
-                    left: reason.into(),
-                    seat_lost: Some((reason.into(), None)),
-                    watch_ended: Some(reason),
-                },
-            );
+            state.remove(out, &room_id, &seats, &watchers, Departure::Evicted(reason));
         }
         evicted
     }
@@ -894,34 +849,19 @@ impl RoomRegistry {
             }
         }
         for room_id in &conn.watches {
-            state.remove(
-                out,
-                &Removal {
-                    room_id,
-                    seats: &[],
-                    watchers: &[connection_id],
-                    left: RoomLeftReason::Disconnected,
-                    seat_lost: None,
-                    watch_ended: None,
-                },
-            );
+            state.remove(out, room_id, &[], &[connection_id], Departure::Disconnected);
         }
         let now = Instant::now();
         for (room_id, seat) in conn.all_seats() {
-            let removed = state.remove(
-                out,
-                &Removal {
-                    room_id,
-                    seats: &[seat],
-                    watchers: &[],
-                    left: RoomLeftReason::Disconnected,
-                    seat_lost: None,
-                    watch_ended: None,
-                },
-            );
+            let removed = state.remove(out, room_id, &[seat], &[], Departure::Disconnected);
             if self.options.exclusive {
                 for seat in removed {
-                    state.push_tombstone(seat.actor_id, seat.member_id, now, false);
+                    state.tombstones.push(
+                        seat.actor_id,
+                        seat.member_id,
+                        now,
+                        TombstoneKind::Disconnected,
+                    );
                 }
             }
         }
@@ -944,11 +884,9 @@ impl RoomRegistry {
 /// request, a socket closed mid-authorizer — removes it.
 #[must_use = "admit it with `RoomRegistry::admit_seat`; dropping it withdraws the join"]
 pub struct PendingSeat {
-    registry: Arc<RoomRegistry>,
-    ticket: u64,
+    ticket: PendingTicket,
     member_id: MemberId,
     room_id: RoomId,
-    armed: bool,
 }
 
 impl PendingSeat {
@@ -962,20 +900,6 @@ impl PendingSeat {
     #[must_use]
     pub const fn room_id(&self) -> &RoomId {
         &self.room_id
-    }
-
-    /// Hand the ticket to the admit, which removes the entry itself.
-    fn disarm(mut self) -> u64 {
-        self.armed = false;
-        self.ticket
-    }
-}
-
-impl Drop for PendingSeat {
-    fn drop(&mut self) {
-        if self.armed {
-            self.registry.forget_pending(self.ticket);
-        }
     }
 }
 
@@ -992,10 +916,8 @@ impl std::fmt::Debug for PendingSeat {
 /// [`RoomRegistry::admit_watch`]. Dropping it removes it.
 #[must_use = "admit it with `RoomRegistry::admit_watch`; dropping it withdraws the watch"]
 pub struct PendingWatch {
-    registry: Arc<RoomRegistry>,
-    ticket: u64,
+    ticket: PendingTicket,
     room_id: RoomId,
-    armed: bool,
 }
 
 impl PendingWatch {
@@ -1004,20 +926,6 @@ impl PendingWatch {
     pub const fn room_id(&self) -> &RoomId {
         &self.room_id
     }
-
-    /// Hand the ticket to the admit, which removes the entry itself.
-    fn disarm(mut self) -> u64 {
-        self.armed = false;
-        self.ticket
-    }
-}
-
-impl Drop for PendingWatch {
-    fn drop(&mut self) {
-        if self.armed {
-            self.registry.forget_pending(self.ticket);
-        }
-    }
 }
 
 impl std::fmt::Debug for PendingWatch {
@@ -1025,6 +933,43 @@ impl std::fmt::Debug for PendingWatch {
         f.debug_struct("PendingWatch")
             .field("room_id", &self.room_id)
             .finish_non_exhaustive()
+    }
+}
+
+/// The ticket of a join or watch in flight, held for its admit: dropped
+/// unadmitted, it removes its entry from the registry that issued it.
+struct PendingTicket {
+    registry: Arc<RoomRegistry>,
+    ticket: u64,
+    armed: bool,
+}
+
+impl PendingTicket {
+    fn new(registry: &Arc<RoomRegistry>, ticket: u64) -> Self {
+        Self {
+            registry: Arc::clone(registry),
+            ticket,
+            armed: true,
+        }
+    }
+
+    /// Hand the ticket to `registry`'s admit, which removes the entry
+    /// itself — or `None` when another registry issued it, which then
+    /// removes its own entry on the drop.
+    fn take(mut self, registry: &RoomRegistry) -> Option<u64> {
+        if !std::ptr::eq(Arc::as_ptr(&self.registry), registry) {
+            return None;
+        }
+        self.armed = false;
+        Some(self.ticket)
+    }
+}
+
+impl Drop for PendingTicket {
+    fn drop(&mut self) {
+        if self.armed {
+            self.registry.forget_pending(self.ticket);
+        }
     }
 }
 
@@ -1074,7 +1019,7 @@ impl Out<'_> {
         }
         let frame = fuz_http::notification(method, params);
         if !frame.is_empty() {
-            self.0.send_to_each(ids, &frame);
+            self.0.send_to_each(ids, frame);
         }
     }
 }
@@ -1101,7 +1046,7 @@ struct MemberStateParams<'a> {
     room_id: &'a RoomId,
     seq: u64,
     member_id: MemberId,
-    state: Option<&'a str>,
+    state: &'a str,
 }
 
 #[derive(Serialize)]
@@ -1138,10 +1083,8 @@ struct State {
     last_ticket: u64,
     /// Each actor's one seat, on an exclusive registry.
     seat_of_actor: HashMap<Uuid, (RoomId, MemberId)>,
-    /// Seats ended without a leave, per actor, on an exclusive registry.
-    tombstones: HashMap<Uuid, VecDeque<Tombstone>>,
-    /// The actor count past which the tombstones sweep.
-    tombstone_sweep_at: usize,
+    /// Seats ended without a leave, on an exclusive registry.
+    tombstones: Tombstones,
 }
 
 #[derive(Debug, Default)]
@@ -1249,24 +1192,50 @@ enum PendingKind {
     Watch,
 }
 
-#[derive(Debug)]
-struct Tombstone {
-    member_id: MemberId,
-    at: Instant,
-    /// Moved away, or released by a disconnect and the actor seated since.
-    moved: bool,
+/// Why seats and watches leave a room: what [`State::remove`] tells the
+/// room, each removed seat, and each removed watcher. The room hears each
+/// removed seat as `room_member_left`; a removed watch is told only on an
+/// eviction.
+#[derive(Debug, Clone, Copy)]
+enum Departure<'a> {
+    /// The member left, or the connection stopped watching: only the room
+    /// hears, of a seat.
+    Left,
+    /// The socket closed: only the room hears, of a seat.
+    Disconnected,
+    /// A newer seat took over, in room `to`: the moved seat hears where.
+    Moved { to: &'a RoomId },
+    /// The consumer evicted: seats and watchers hear why.
+    Evicted(RoomEvictReason),
 }
 
-/// One room's removals, told as `left`, with `seat_lost` to each removed
-/// seat's connection and `watch_ended` to each removed watcher when given.
-#[derive(Clone, Copy)]
-struct Removal<'a> {
-    room_id: &'a RoomId,
-    seats: &'a [MemberId],
-    watchers: &'a [ConnectionId],
-    left: RoomLeftReason,
-    seat_lost: Option<(RoomSeatLostReason, Option<&'a RoomId>)>,
-    watch_ended: Option<RoomEvictReason>,
+impl<'a> Departure<'a> {
+    /// The reason `room_member_left` gives the room.
+    fn left(self) -> RoomLeftReason {
+        match self {
+            Self::Left => RoomLeftReason::Left,
+            Self::Disconnected => RoomLeftReason::Disconnected,
+            Self::Moved { .. } => RoomLeftReason::Moved,
+            Self::Evicted(reason) => reason.into(),
+        }
+    }
+
+    /// What `room_seat_lost` tells a removed seat's connection, if it hears.
+    fn seat_lost(self) -> Option<(RoomSeatLostReason, Option<&'a RoomId>)> {
+        match self {
+            Self::Left | Self::Disconnected => None,
+            Self::Moved { to } => Some((RoomSeatLostReason::Moved, Some(to))),
+            Self::Evicted(reason) => Some((reason.into(), None)),
+        }
+    }
+
+    /// What `room_watch_ended` tells a removed watcher, if it hears.
+    const fn watch_ended(self) -> Option<RoomEvictReason> {
+        match self {
+            Self::Evicted(reason) => Some(reason),
+            Self::Left | Self::Disconnected | Self::Moved { .. } => None,
+        }
+    }
 }
 
 impl Room {
@@ -1330,18 +1299,20 @@ impl State {
         Some(pending)
     }
 
-    /// Remove seats and watchers from one room, then tell everyone what the
-    /// removal says (see [`Removal`]); delete the room if it is left empty.
+    /// Remove `seats` and `watchers` from one room, then tell everyone what
+    /// `why` says (see [`Departure`]); delete the room if it is left empty.
     /// Returns the removed seats.
-    fn remove(&mut self, out: Out<'_>, removal: &Removal<'_>) -> Vec<Seat> {
-        let Removal {
-            room_id,
-            seats,
-            watchers,
-            left,
-            seat_lost,
-            watch_ended,
-        } = *removal;
+    fn remove(
+        &mut self,
+        out: Out<'_>,
+        room_id: &RoomId,
+        seats: &[MemberId],
+        watchers: &[ConnectionId],
+        why: Departure<'_>,
+    ) -> Vec<Seat> {
+        let left = why.left();
+        let seat_lost = why.seat_lost();
+        let watch_ended = why.watch_ended();
         let Some(room) = self.rooms.get_mut(room_id) else {
             return Vec::new();
         };
@@ -1414,66 +1385,99 @@ impl State {
         }
         removed_seats
     }
+}
 
+// -- tombstones ---------------------------------------------------------------
+
+/// Seats that ended without a leave, per actor, for the rejoin guard
+/// (module doc, "Exclusivity and the rejoin guard").
+#[derive(Debug, Default)]
+struct Tombstones {
+    by_actor: HashMap<Uuid, VecDeque<Tombstone>>,
+    /// The actor count past which the map sweeps.
+    sweep_at: usize,
+}
+
+#[derive(Debug)]
+struct Tombstone {
+    member_id: MemberId,
+    at: Instant,
+    kind: TombstoneKind,
+}
+
+/// How a remembered seat ended, as the rejoin guard reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TombstoneKind {
+    /// Moved away, or released by a disconnect and the actor seated since:
+    /// a rejoin of it is refused.
+    Moved,
+    /// Released by its disconnect, the actor not seated since: a rejoin of
+    /// it is seated.
+    Disconnected,
+}
+
+impl Tombstones {
     /// Whether `actor_id`'s seat `member_id` has moved since it ended.
     fn rejoin_moved(&mut self, actor_id: Uuid, member_id: MemberId, now: Instant) -> bool {
-        self.live_tombstones(actor_id, now)
-            .is_some_and(|tombstones| {
-                tombstones
-                    .iter()
-                    .any(|tombstone| tombstone.member_id == member_id && tombstone.moved)
+        self.live(actor_id, now).is_some_and(|tombstones| {
+            tombstones.iter().any(|tombstone| {
+                tombstone.member_id == member_id && tombstone.kind == TombstoneKind::Moved
             })
+        })
     }
 
     /// Remember a seat of `actor_id` that ended without a leave.
-    fn push_tombstone(&mut self, actor_id: Uuid, member_id: MemberId, now: Instant, moved: bool) {
-        let tombstones = self.tombstones.entry(actor_id).or_default();
-        tombstones.retain(|tombstone| !tombstone_expired(tombstone, now));
+    fn push(&mut self, actor_id: Uuid, member_id: MemberId, now: Instant, kind: TombstoneKind) {
+        let tombstones = self.by_actor.entry(actor_id).or_default();
+        tombstones.retain(|tombstone| !tombstone.expired(now));
         tombstones.push_back(Tombstone {
             member_id,
             at: now,
-            moved,
+            kind,
         });
         while tombstones.len() > ROOM_REJOIN_TOMBSTONES_PER_ACTOR {
             tombstones.pop_front();
         }
-        if self.tombstones.len() > self.tombstone_sweep_at.max(TOMBSTONE_SWEEP_FLOOR) {
-            self.tombstones.retain(|_, tombstones| {
-                tombstones.retain(|tombstone| !tombstone_expired(tombstone, now));
+        if self.by_actor.len() > self.sweep_at.max(TOMBSTONE_SWEEP_FLOOR) {
+            self.by_actor.retain(|_, tombstones| {
+                tombstones.retain(|tombstone| !tombstone.expired(now));
                 !tombstones.is_empty()
             });
-            self.tombstone_sweep_at = self.tombstones.len() * 2;
+            self.sweep_at = self.by_actor.len() * 2;
         }
     }
 
     /// `actor_id` was just seated (by a rejoin of `rejoin_of`, or fresh):
     /// the rejoined seat's tombstone is spent, and every other seat it lost
     /// to a disconnect now counts as moved.
-    fn settle_tombstones(&mut self, actor_id: Uuid, rejoin_of: Option<MemberId>, now: Instant) {
-        let Some(tombstones) = self.live_tombstones(actor_id, now) else {
+    fn settle(&mut self, actor_id: Uuid, rejoin_of: Option<MemberId>, now: Instant) {
+        let Some(tombstones) = self.live(actor_id, now) else {
             return;
         };
         tombstones.retain(|tombstone| Some(tombstone.member_id) != rejoin_of);
         for tombstone in tombstones.iter_mut() {
-            tombstone.moved = true;
+            tombstone.kind = TombstoneKind::Moved;
         }
         if tombstones.is_empty() {
-            self.tombstones.remove(&actor_id);
+            self.by_actor.remove(&actor_id);
         }
     }
 
+    /// Forget every tombstone.
+    fn clear(&mut self) {
+        self.by_actor.clear();
+    }
+
     /// `actor_id`'s unexpired tombstones, pruning the expired ones.
-    fn live_tombstones(
-        &mut self,
-        actor_id: Uuid,
-        now: Instant,
-    ) -> Option<&mut VecDeque<Tombstone>> {
-        let tombstones = self.tombstones.get_mut(&actor_id)?;
-        tombstones.retain(|tombstone| !tombstone_expired(tombstone, now));
+    fn live(&mut self, actor_id: Uuid, now: Instant) -> Option<&mut VecDeque<Tombstone>> {
+        let tombstones = self.by_actor.get_mut(&actor_id)?;
+        tombstones.retain(|tombstone| !tombstone.expired(now));
         Some(tombstones)
     }
 }
 
-fn tombstone_expired(tombstone: &Tombstone, now: Instant) -> bool {
-    now.saturating_duration_since(tombstone.at) >= ROOM_REJOIN_TOMBSTONE_TTL
+impl Tombstone {
+    fn expired(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.at) >= ROOM_REJOIN_TOMBSTONE_TTL
+    }
 }
