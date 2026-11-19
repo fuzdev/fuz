@@ -15,6 +15,7 @@
 //! request_tracing_layer (optional, the whole router)
 //!   → catch_panic (the whole router)
 //!   → per group: body cap → host_layer (on by default) → origin_layer
+//!       → cookie_clear_layer (optional, with the origin check)
 //!       → simple_request_layer (optional, per group) → client_ip_middleware
 //!       → handler
 //! ```
@@ -87,6 +88,7 @@ use axum::response::Response;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::body_limit::body_limit_layer;
+use crate::cookie_clear::{CookieClearHook, cookie_clear_layer};
 use crate::host::{HostGate, host_layer};
 use crate::ip_resolve::client_ip_middleware;
 use crate::origin::{AllowedOrigins, origin_layer};
@@ -250,11 +252,18 @@ pub struct StackOptions {
     /// Wrap the router in [`request_tracing_layer`] — one access-log line per
     /// request. Off for a server whose request volume would drown its log.
     pub request_tracing: bool,
+    /// Clear a dead cookie on the response ([`crate::cookie_clear`]): mounted
+    /// in every group behind the origin check, inside that check, the fallback
+    /// included. `None` mounts nothing; a server with a `fuz_auth::AuthGate`
+    /// gets the gate's hook from `AuthGate::stack_options`, which clears an
+    /// invalid session cookie under the auth scope.
+    pub cookie_clear: Option<CookieClearHook>,
 }
 
 impl StackOptions {
     /// Options with the given allowlist (read from [`ALLOWED_ORIGINS_VAR`])
-    /// and trusted proxies, request tracing on, and the host gate on.
+    /// and trusted proxies, request tracing on, the host gate on, and no
+    /// cookie-clear hook.
     #[must_use]
     pub const fn new(
         allowed_origins: AllowedOrigins,
@@ -266,6 +275,7 @@ impl StackOptions {
             trusted_proxies,
             host_gate: true,
             request_tracing: true,
+            cookie_clear: None,
         }
     }
 }
@@ -435,6 +445,10 @@ fn gate_group(group: RouteGroup, options: &StackOptions) -> Router {
     }
     match origin {
         OriginScope::Checked => {
+            // inside the origin check, so a refused request gets no clear
+            if let Some(hook) = &options.cookie_clear {
+                router = router.layer(from_fn_with_state(hook.clone(), cookie_clear_layer));
+            }
             router = router.layer(from_fn_with_state(
                 options.allowed_origins.clone(),
                 origin_layer,
@@ -590,6 +604,209 @@ mod tests {
 
     async fn status(app: GatedRouter, req: Request<Body>) -> StatusCode {
         send(app, req).await.0
+    }
+
+    /// The clear a test hook answers with.
+    const CLEAR: &str = "dead=; Max-Age=0";
+
+    /// A hook that clears for a request carrying `cookie: dead=1` on a path
+    /// under `/scoped`, and records every path it was asked about.
+    fn test_cookie_clear(asked: Arc<std::sync::Mutex<Vec<String>>>) -> CookieClearHook {
+        CookieClearHook::new(move |path, headers| {
+            asked.lock().unwrap().push(path.to_owned());
+            (path.starts_with("/scoped")
+                && headers.get(header::COOKIE).is_some_and(|v| v == "dead=1"))
+            .then(|| axum::http::HeaderValue::from_static(CLEAR))
+        })
+    }
+
+    async fn sets_a_cookie() -> impl axum::response::IntoResponse {
+        (
+            axum::response::AppendHeaders([
+                (header::SET_COOKIE, "dead=fresh"),
+                (header::SET_COOKIE, "other=1"),
+            ]),
+            "ok",
+        )
+    }
+
+    async fn switches_protocols() -> StatusCode {
+        StatusCode::SWITCHING_PROTOCOLS
+    }
+
+    /// A stack with the cookie-clear hook: a checked group, a group that
+    /// refuses CORS-simple requests, a carved-out group, and the fallback.
+    fn cookie_clear_app(asked: &Arc<std::sync::Mutex<Vec<String>>>) -> GatedRouter {
+        let options = StackOptions {
+            cookie_clear: Some(test_cookie_clear(Arc::clone(asked))),
+            ..base_options()
+        };
+        compose_stack(
+            [
+                RouteGroup::new(
+                    "scoped",
+                    Router::new()
+                        .route("/scoped/ok", post(echo_body))
+                        .route("/scoped/login", post(sets_a_cookie))
+                        .route("/scoped/upgrade", get(switches_protocols))
+                        .route("/outside", post(echo_body)),
+                    BodyCap::Bytes(SMALL_CAP),
+                ),
+                RouteGroup::new(
+                    "json_only",
+                    Router::new().route("/scoped/json_only", post(echo_body)),
+                    BodyCap::Bytes(SMALL_CAP),
+                )
+                .refuse_simple_requests(),
+                RouteGroup::new(
+                    "carved",
+                    Router::new().route("/scoped/carved", post(echo_body)),
+                    BodyCap::Bytes(SMALL_CAP),
+                )
+                .origin_carve_out("test: refuses browser callers itself"),
+            ],
+            fallback(),
+            &options,
+        )
+    }
+
+    /// Send `req` and answer its status and `Set-Cookie` lines, in order.
+    async fn set_cookies(app: GatedRouter, req: Request<Body>) -> (StatusCode, Vec<String>) {
+        let response = app.into_router_for_testing().oneshot(req).await.unwrap();
+        let cookies = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_owned())
+            .collect();
+        (response.status(), cookies)
+    }
+
+    const DEAD_COOKIE: (&str, &str) = ("cookie", "dead=1");
+
+    #[tokio::test]
+    async fn the_cookie_clear_is_written_where_the_hook_says() {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let app = || cookie_clear_app(&asked);
+        // a routed path, an unrouted one (the fallback group), and a refusal
+        // from a layer inside the clear's — each cleared
+        for (path, content_type, status) in [
+            ("/scoped/ok", "application/json", StatusCode::OK),
+            (
+                "/scoped/unrouted",
+                "application/json",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "/scoped/json_only",
+                "text/plain",
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+        ] {
+            let mut req = post_req(path, 1, &[DEAD_COOKIE]);
+            req.headers_mut()
+                .insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+            assert_eq!(
+                set_cookies(app(), req).await,
+                (status, vec![CLEAR.to_owned()]),
+                "{path}"
+            );
+        }
+        // the hook's own verdict: another path, another cookie, no cookie
+        for (path, headers) in [
+            ("/outside", &[DEAD_COOKIE][..]),
+            ("/scoped/ok", &[("cookie", "dead=2")][..]),
+            ("/scoped/ok", &[][..]),
+        ] {
+            let (status, cookies) = set_cookies(app(), post_req(path, 1, headers)).await;
+            assert_eq!((status, cookies), (StatusCode::OK, vec![]), "{path}");
+        }
+        // the hook is handed the path the router read
+        assert!(
+            asked
+                .lock()
+                .unwrap()
+                .contains(&"/scoped/unrouted".to_owned())
+        );
+    }
+
+    /// The clear sits inside the gates: a request the body cap, the host gate,
+    /// or the origin check refuses never reaches the hook.
+    #[tokio::test]
+    async fn a_request_an_outer_gate_refuses_gets_no_cookie_clear() {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for (headers, len, status) in [
+            (
+                &[DEAD_COOKIE, ("origin", FOREIGN)][..],
+                1,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                &[DEAD_COOKIE, ("host", "rebind.example")][..],
+                1,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                &[DEAD_COOKIE][..],
+                SMALL_CAP + 1,
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let req = post_req("/scoped/ok", len, headers);
+            assert_eq!(
+                set_cookies(cookie_clear_app(&asked), req).await,
+                (status, vec![]),
+                "{headers:?}"
+            );
+        }
+        assert!(asked.lock().unwrap().is_empty(), "the hook was never asked");
+        // a group carved out of the origin check has no clear layer either
+        let req = post_req("/scoped/carved", 1, &[DEAD_COOKIE]);
+        assert_eq!(
+            set_cookies(cookie_clear_app(&asked), req).await,
+            (StatusCode::OK, vec![])
+        );
+        assert!(asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_cookie_clear_precedes_the_handlers_own_set_cookie() {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let req = post_req("/scoped/login", 1, &[DEAD_COOKIE]);
+        assert_eq!(
+            set_cookies(cookie_clear_app(&asked), req).await,
+            (
+                StatusCode::OK,
+                vec![
+                    CLEAR.to_owned(),
+                    "dead=fresh".to_owned(),
+                    "other=1".to_owned()
+                ]
+            )
+        );
+        // without a dead cookie the handler's lines stand alone
+        let req = post_req("/scoped/login", 1, &[]);
+        assert_eq!(
+            set_cookies(cookie_clear_app(&asked), req).await.1,
+            ["dead=fresh", "other=1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_accepted_upgrade_carries_no_cookie_clear() {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut req = Request::get("/scoped/upgrade")
+            .header(DEAD_COOKIE.0, DEAD_COOKIE.1)
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4000))));
+        assert_eq!(
+            set_cookies(cookie_clear_app(&asked), req).await,
+            (StatusCode::SWITCHING_PROTOCOLS, vec![])
+        );
+        // the hook did say to clear: the status is what held it back
+        assert_eq!(*asked.lock().unwrap(), ["/scoped/upgrade"]);
     }
 
     #[tokio::test]

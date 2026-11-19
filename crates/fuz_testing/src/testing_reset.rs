@@ -66,6 +66,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::credentials::signed_session_cookie_value;
 use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
 use fuz_auth::account_queries::query_create_account;
 use fuz_auth::actor_queries::{
@@ -75,7 +76,6 @@ use fuz_auth::api_token::generate_api_token;
 use fuz_auth::api_token_queries::query_create_api_token;
 use fuz_auth::keyring::Keyring;
 use fuz_auth::password_hasher::PasswordHasher;
-use fuz_auth::session_cookie::sign_session_cookie;
 use fuz_auth::session_queries::create_capped_session;
 use fuz_auth::token_scope::TokenScopeDocument;
 use fuz_auth::{ROLE_ADMIN, ROLE_KEEPER, SharedDaemonTokenState};
@@ -501,20 +501,10 @@ where
         .await
         .map_err(|e| internal_error_with_source("create_capped_session", &e))?
         .into_token_for_new_account();
-    let signed_cookie = sign_session_cookie(keyring, &session_token, cookie_name);
-    // `sign_session_cookie` returns the full `Set-Cookie` header value;
-    // strip the `name=` prefix and trailing attributes so the response
-    // carries just the signed VALUE (TS callers thread the value into
-    // their own cookie jar). Format: `<cookie_name>=<value>; Path=...`.
-    let prefix = format!("{cookie_name}=");
-    let after_prefix = signed_cookie
-        .strip_prefix(&prefix)
-        .unwrap_or(&signed_cookie);
-    let cookie_value = after_prefix
-        .split(';')
-        .next()
-        .unwrap_or(after_prefix)
-        .to_owned();
+    // the response carries just the signed value (TS callers thread it into
+    // their own cookie jar under the cookie's name)
+    let cookie_value = signed_session_cookie_value(keyring, &session_token, cookie_name)
+        .map_err(|e| internal_error_with_source("session cookie", &e))?;
 
     let json = json!({
         "account": {"id": account.id, "username": account.username.clone()},

@@ -507,12 +507,14 @@ async fn a_spec_without_the_marker_still_dispatches_over_http() {
 async fn a_failed_credential_checkout_answers_the_503_not_an_anonymous_call() {
     use tower::ServiceExt as _;
     let state = dead_pool_rpc_state(ActionRegistry::compile(PROTOCOL_ACTION_SPECS()).unwrap());
-    let set_cookie = fuz_auth::sign_session_cookie(
-        &fuz_testing::testing_keyring(),
-        &fuz_auth::generate_session_token(),
+    let cookie = format!(
+        "{}={}",
         fuz_auth::SESSION_COOKIE_NAME,
+        fuz_auth::create_session_cookie_value(
+            &fuz_testing::testing_keyring(),
+            &fuz_auth::generate_session_token(),
+        )
     );
-    let cookie = set_cookie.split(';').next().unwrap().to_owned();
     let envelope = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "peer/ping"});
     let request = axum::http::Request::post("/rpc")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
@@ -603,12 +605,14 @@ async fn a_failed_credential_checkout_refuses_the_ws_upgrade_with_the_503() {
         connection_registry: Arc::new(fuz_realtime::ConnectionRegistry::new()),
         required_roles: Vec::new(),
     });
-    let set_cookie = fuz_auth::sign_session_cookie(
-        &fuz_testing::testing_keyring(),
-        &fuz_auth::generate_session_token(),
+    let cookie = format!(
+        "{}={}",
         fuz_auth::SESSION_COOKIE_NAME,
+        fuz_auth::create_session_cookie_value(
+            &fuz_testing::testing_keyring(),
+            &fuz_auth::generate_session_token(),
+        )
     );
-    let cookie = set_cookie.split(';').next().unwrap().to_owned();
     let request = axum::http::Request::get("/ws")
         .header(axum::http::header::COOKIE, cookie)
         .header("connection", "upgrade")

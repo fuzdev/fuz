@@ -106,6 +106,7 @@ pub mod acting;
 pub mod auth_gate;
 pub mod bearer_auth;
 mod credential_deadline;
+pub mod credential_headers;
 pub mod request_context;
 pub mod resolve;
 
@@ -225,7 +226,7 @@ pub use auth_cleanup::{
     cleanup_expired_role_grant_offers, cleanup_expired_sessions, run_auth_cleanup,
     spawn_auth_cleanup,
 };
-pub use auth_gate::{AuthGate, OriginChecked};
+pub use auth_gate::{AUTH_MIDDLEWARE_PATH, AuthGate, OriginChecked, auth_middleware_applies};
 pub use bearer_auth::is_browser_context;
 pub use bootstrap::{
     BOOTSTRAP_TOKEN_LENGTH_MAX, BOOTSTRAP_TOKEN_MIN_BYTES, BootstrapInput, BootstrapOptions,
@@ -237,10 +238,13 @@ pub use bootstrap_token_store::{BootstrapTokenStore, FileBootstrapTokenStore};
 pub use connection_closer::{
     ConnectionCloseTarget, ConnectionCloser, NoopConnectionCloser, queue_connection_close,
 };
+pub use credential_headers::{
+    read_bearer_token, read_daemon_token, read_session_cookie_value, trim_optional_whitespace,
+};
 pub use credential_type::{CredentialGate, CredentialType};
 pub use daemon_token::{
-    DAEMON_TOKEN_HEADER, DaemonTokenKeeperResolved, DaemonTokenState, SharedDaemonTokenState,
-    resolve_keeper_into, validate_daemon_token,
+    DAEMON_TOKEN_HEADER, DAEMON_TOKEN_LEN, DaemonTokenKeeperResolved, DaemonTokenState,
+    SharedDaemonTokenState, is_daemon_token_shaped, resolve_keeper_into, validate_daemon_token,
 };
 pub use error::{BootstrapError, BootstrapErrorKind, SignupError, SignupErrorKind};
 pub use hash::{SESSION_ID_LENGTH, SessionHash, hash_session_token, is_valid_session_id};
@@ -310,8 +314,10 @@ pub use self_service_role_action_specs::{
     validate_self_service_eligible_roles,
 };
 pub use session_cookie::{
-    SESSION_AGE_MAX, SESSION_COOKIE_NAME, SessionCookie, clear_session_cookie,
-    generate_session_token, parse_session_from_cookies, sign_session_cookie,
+    SESSION_AGE_MAX, SESSION_COOKIE_ATTRIBUTES, SESSION_COOKIE_NAME, SessionCookie,
+    SessionCookieError, SessionCookieRead, create_session_cookie_value,
+    format_session_clear_cookie, format_session_set_cookie, generate_session_token, is_cookie_name,
+    is_cookie_value, parse_session_from_cookies, sign_session_cookie,
 };
 pub use session_queries::{
     ADMIN_SESSION_LIST_LIMIT, AdminSession, CappedSession, DEFAULT_MAX_SESSIONS,

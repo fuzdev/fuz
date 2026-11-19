@@ -267,13 +267,17 @@ impl AppBackend {
     }
 
     /// The `compose_stack` options: the allowlist and the var it was read
-    /// from, the trusted proxies, and the host gate unless the server clears
-    /// it ([`BrowserGateSpec::host_gate`]).
+    /// from, the trusted proxies, the host gate unless the server clears
+    /// it ([`BrowserGateSpec::host_gate`]), and the gate's cookie-clear hook
+    /// ([`fuz_auth::AuthGate::cookie_clear_hook`]), so a server composed on
+    /// these options clears an invalid session cookie under the auth scope
+    /// with nothing mounted by hand.
     #[must_use]
     pub fn stack_options(&self) -> StackOptions {
         StackOptions {
             host_gate: self.host_gate,
             allowed_origins_var: self.allowed_origins_var,
+            cookie_clear: Some(self.auth_gate().cookie_clear_hook()),
             ..StackOptions::new(
                 self.allowed_origins.clone(),
                 Arc::clone(&self.trusted_proxies),
@@ -386,6 +390,7 @@ fn check_migration_chain(namespaces: &[MigrationNamespace]) -> Result<(), Startu
 /// # Errors
 ///
 /// [`StartupError::Config`] for a wildcard allowlist entry without the opt-in,
+/// a session cookie name that is not an RFC 6265 `cookie-name`,
 /// an absent `DATABASE_URL`, bad cookie keys, or a migration chain that
 /// doesn't start with auth or that gives a consumer namespace a reserved spine
 /// name;
@@ -468,7 +473,8 @@ fn register_audit_listeners(backend: &AppBackend) {
 ///
 /// # Errors
 ///
-/// [`StartupError::Config`] for an absent `DATABASE_URL`, bad cookie keys, or
+/// [`StartupError::Config`] for a session cookie name that is not an RFC 6265
+/// `cookie-name`, an absent `DATABASE_URL`, bad cookie keys, or
 /// an out-of-range [`AuditSseSpec::keep_alive`];
 /// [`StartupError::Database`] for an unparseable URL.
 pub fn build_app_backend(
@@ -485,6 +491,14 @@ pub fn build_app_backend(
         audit_inflight_tracking,
     } = options;
     let rate_limiters = *rate_limiters;
+    // a name the `Cookie` grammar cannot carry would be written as a header
+    // that reads back differently, or not at all
+    if !fuz_auth::is_cookie_name(spec.session_cookie_name) {
+        return Err(StartupError::Config(format!(
+            "session cookie name {:?} is not an RFC 6265 cookie-name",
+            spec.session_cookie_name
+        )));
+    }
     let audit_sse = spec.audit_sse.map(build_audit_sse).transpose()?;
     let database_url = env
         .database_url
@@ -726,6 +740,69 @@ mod tests {
             )
             .expect("the core builds without the database");
             assert_eq!(backend.stack_options().host_gate, host_gate);
+        }
+    }
+
+    /// The options a server composes its stack on carry the gate's cookie-clear
+    /// hook, so an invalid session cookie is cleared under the auth scope with
+    /// nothing mounted by hand.
+    #[test]
+    fn the_backend_stack_options_carry_the_cookie_clear_hook() {
+        let env = wildcard_env("http://localhost", None);
+        let spec = AppBackendSpec {
+            session_cookie_name: "spine_test_session",
+            migration_namespaces: &[],
+            expected_schema_json: None,
+            audit_sse: None,
+            browser_gates: BrowserGateSpec::DEFAULT,
+        };
+        let backend = build_app_backend(
+            &env,
+            &spec,
+            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+        )
+        .expect("the core builds without the database");
+        let hook = backend
+            .stack_options()
+            .cookie_clear
+            .expect("the cookie-clear hook");
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_static("spine_test_session=bogus"),
+        );
+        assert_eq!(
+            hook.clear_for("/api/rpc", &headers)
+                .as_ref()
+                .map(axum::http::HeaderValue::as_bytes),
+            Some(&b"spine_test_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"[..])
+        );
+        assert_eq!(hook.clear_for("/health", &headers), None);
+    }
+
+    /// A session cookie name the `Cookie` grammar cannot carry refuses the
+    /// boot, before the pool or the keyring is built.
+    #[test]
+    fn a_session_cookie_name_that_is_no_cookie_name_refuses_the_boot() {
+        let env = wildcard_env("http://localhost", None);
+        for session_cookie_name in ["", "has space", "a=b", "semi;colon"] {
+            let spec = AppBackendSpec {
+                session_cookie_name,
+                migration_namespaces: &[],
+                expected_schema_json: None,
+                audit_sse: None,
+                browser_gates: BrowserGateSpec::DEFAULT,
+            };
+            let error = build_app_backend(
+                &env,
+                &spec,
+                &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            )
+            .expect_err("the name is refused");
+            assert!(
+                matches!(&error, StartupError::Config(message) if message.contains("cookie-name")),
+                "{session_cookie_name:?}: {error:?}"
+            );
         }
     }
 

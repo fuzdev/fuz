@@ -18,22 +18,73 @@ use uuid::Uuid;
 use crate::actor_queries::{ResolveActingActorResult, resolve_acting_actor};
 use crate::actor_schema::ActorRow;
 use crate::keyring::Keyring;
-use crate::session_cookie::sign_session_cookie;
+use crate::session_cookie::{SessionCookieError, format_session_clear_cookie, sign_session_cookie};
+
+/// A `HeaderMap` carrying one `Set-Cookie` line, or the logged `500` to
+/// answer with when the cookie cannot be written.
+///
+/// A cookie the grammar cannot carry is a server fault — a cookie name that is
+/// no `cookie-name`, which the boot refuses, or a token outside the
+/// `cookie-octet`s, which the spine never mints — so the request fails loudly
+/// rather than succeed without its cookie.
+#[expect(
+    clippy::result_large_err,
+    reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
+)]
+fn set_cookie_header(
+    context: &str,
+    cookie: Result<String, SessionCookieError>,
+) -> Result<HeaderMap, Response> {
+    let cookie = cookie.map_err(|e| fuz_http::internal_error_response_with_source(context, &e))?;
+    // cookie-octets and the fixed attributes are visible ASCII, which every
+    // `HeaderValue` holds
+    let value = axum::http::HeaderValue::try_from(cookie)
+        .map_err(|e| fuz_http::internal_error_response_with_source(context, &e))?;
+    let mut headers = HeaderMap::new();
+    headers.insert(axum::http::header::SET_COOKIE, value);
+    Ok(headers)
+}
 
 /// Build a fresh `HeaderMap` carrying the signed session cookie.
 ///
 /// Signs `{session_token, expiry}` under `cookie_name` via the keyring
-/// and inserts it as a `Set-Cookie` header. A parse failure on the signed
-/// value yields an empty map (the cookie is dropped rather than emitted
-/// malformed) — matching the prior inline behavior.
-#[must_use]
-pub fn session_cookie_header(keyring: &Keyring, token: &str, cookie_name: &str) -> HeaderMap {
-    let cookie = sign_session_cookie(keyring, token, cookie_name);
-    let mut headers = HeaderMap::new();
-    if let Ok(val) = cookie.parse() {
-        headers.insert(axum::http::header::SET_COOKIE, val);
-    }
-    headers
+/// ([`sign_session_cookie`]) and inserts it as a `Set-Cookie` header.
+///
+/// # Errors
+///
+/// The `500 internal_error` response, its cause logged, when the cookie
+/// cannot be written ([`SessionCookieError`]).
+#[expect(
+    clippy::result_large_err,
+    reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
+)]
+pub fn session_cookie_header(
+    keyring: &Keyring,
+    token: &str,
+    cookie_name: &str,
+) -> Result<HeaderMap, Response> {
+    set_cookie_header(
+        "session cookie could not be written",
+        sign_session_cookie(keyring, token, cookie_name),
+    )
+}
+
+/// Build a fresh `HeaderMap` carrying the `Set-Cookie` that clears the
+/// session cookie ([`format_session_clear_cookie`]).
+///
+/// # Errors
+///
+/// The `500 internal_error` response, its cause logged, when `cookie_name` is
+/// not an RFC 6265 `cookie-name`.
+#[expect(
+    clippy::result_large_err,
+    reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
+)]
+pub fn clear_session_cookie_header(cookie_name: &str) -> Result<HeaderMap, Response> {
+    set_cookie_header(
+        "session cookie could not be cleared",
+        format_session_clear_cookie(cookie_name),
+    )
 }
 
 /// Resolve the request's acting actor, or return the denial its TS twin emits.

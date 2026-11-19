@@ -86,6 +86,24 @@ pub type SharedDaemonTokenState = Arc<RwLock<DaemonTokenState>>;
 /// HTTP header name carrying the daemon token.
 pub const DAEMON_TOKEN_HEADER: &str = "x-daemon-token";
 
+/// Length of a daemon token: 32 random bytes in unpadded base64url.
+pub const DAEMON_TOKEN_LEN: usize = 43;
+
+/// Whether `raw` has the shape of a daemon token — exactly
+/// [`DAEMON_TOKEN_LEN`] base64url characters.
+///
+/// The daemon leg's precheck, ahead of the constant-time compare, so an
+/// off-form value is discarded without one. A `true` says nothing about
+/// whether the token is the current one. Twin of `fuz_app`'s
+/// `is_daemon_token_shaped`.
+#[must_use]
+pub fn is_daemon_token_shaped(raw: &str) -> bool {
+    raw.len() == DAEMON_TOKEN_LEN
+        && raw
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Validate a provided token against the current and previous tokens
 /// using constant-time comparison.
 ///
@@ -178,6 +196,25 @@ mod tests {
         assert!(!rendered.contains(CURRENT_SECRET), "{rendered}");
         assert!(!rendered.contains(PREVIOUS_SECRET), "{rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
+    }
+
+    #[test]
+    fn shaped_is_forty_three_base64url_characters() {
+        assert_eq!(DAEMON_TOKEN_LEN, 43);
+        let token = "aZ09_-".repeat(7) + "b";
+        assert!(is_daemon_token_shaped(&token));
+        for off_form in [
+            &token[1..],
+            &format!("{token}a"),
+            &format!("{}=", &token[1..]),
+            &format!("{}+", &token[1..]),
+            &format!("{} ", &token[1..]),
+            &format!("{},", &token[1..]),
+            &format!("{}\u{e9}", &token[2..]),
+            "",
+        ] {
+            assert!(!is_daemon_token_shaped(off_form), "{off_form:?}");
+        }
     }
 
     #[test]

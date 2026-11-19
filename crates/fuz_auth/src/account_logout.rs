@@ -16,8 +16,8 @@ use crate::audit_event_type::AuditEventType;
 use crate::auth_gate::OriginChecked;
 use crate::connection_closer::ConnectionCloseTarget;
 use crate::credential_type::CredentialGate;
+use crate::route_helpers::clear_session_cookie_header;
 use crate::route_response::credential_type_required_response;
-use crate::session_cookie::clear_session_cookie;
 use crate::session_queries::query_session_revoke_by_hash_unscoped;
 use fuz_http::ClientIp;
 
@@ -109,10 +109,7 @@ async fn logout_inner(
         )
         .await;
 
-    let mut response_headers = HeaderMap::new();
-    if let Ok(val) = clear_session_cookie(state.gate.session_cookie_name).parse() {
-        response_headers.insert(axum::http::header::SET_COOKIE, val);
-    }
+    let response_headers = clear_session_cookie_header(state.gate.session_cookie_name)?;
 
     tracing::info!(username = %resolved.account.username, "logout successful");
 

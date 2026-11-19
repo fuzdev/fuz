@@ -52,8 +52,8 @@ use crate::password::{
     PASSWORD_LENGTH_MAX, PASSWORD_LENGTH_MIN, PASSWORD_PROVIDED_LENGTH_MIN, password_length,
 };
 use crate::rate_limiter::{RESERVATION_WAIT_MAX, reserve_optional};
+use crate::route_helpers::clear_session_cookie_header;
 use crate::route_response::{credential_type_required_response, rate_limit_exceeded};
-use crate::session_cookie::clear_session_cookie;
 use crate::session_queries::query_session_revoke_all_for_account;
 use fuz_http::ClientIp;
 
@@ -318,10 +318,7 @@ async fn password_inner(
         )
         .await;
 
-    let mut response_headers = HeaderMap::new();
-    if let Ok(val) = clear_session_cookie(state.gate.session_cookie_name).parse() {
-        response_headers.insert(axum::http::header::SET_COOKIE, val);
-    }
+    let response_headers = clear_session_cookie_header(state.gate.session_cookie_name)?;
 
     tracing::info!(username = %resolved.account.username, "password changed");
 

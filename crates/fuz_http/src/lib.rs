@@ -109,11 +109,13 @@ pub mod server_env;
 pub mod tracing_layer;
 
 // === the composition root: route groups behind the gates, in one order ===
+pub mod cookie_clear;
 pub mod stack;
 
 // -- Public API re-exports ---------------------------------------------------
 
 pub use body_limit::DEFAULT_BODY_LIMIT_BYTES;
+pub use cookie_clear::CookieClearHook;
 pub use host::{
     FORBIDDEN_HOST_REASON, HOST_REFUSAL_WARN_INTERVAL, HostGate, forbidden_host_response,
     format_host_refusal_warning, host_layer, is_loopback_host,

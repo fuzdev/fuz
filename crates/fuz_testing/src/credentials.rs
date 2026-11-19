@@ -17,13 +17,13 @@
 //!
 //! ### The cookie mint returns a *request* header value
 //!
-//! [`sign_session_cookie`] builds a **`Set-Cookie`** value — `name=value`
-//! followed by `; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=…`. A
-//! request `Cookie` header is only the `name=value` pair, so
-//! [`mint_session_cookie`] strips the attributes and every caller can hand the
-//! result straight to a `Cookie` header. The three copies each re-derived
-//! that, two by splitting on `;` and one by stripping the name prefix and
-//! re-adding it.
+//! `fuz_auth::sign_session_cookie` builds a **`Set-Cookie`** value —
+//! `name=value` followed by `; Path=/; HttpOnly; Secure; SameSite=Strict;
+//! Max-Age=…`. A request `Cookie` header is only the `name=value` pair, so
+//! [`mint_session_cookie`] signs the value alone
+//! (`fuz_auth::create_session_cookie_value`, checked through the production
+//! formatter) and every caller can hand the result straight to a `Cookie`
+//! header.
 //!
 //! ### The daemon-token state is built as a literal, and must be
 //!
@@ -58,8 +58,9 @@ use fuz_auth::api_token_queries::query_create_api_token;
 use fuz_auth::keyring::MIN_KEY_LENGTH;
 use fuz_auth::{
     AuthGate, CredentialType, DAEMON_TOKEN_HEADER, DaemonTokenState, GeneratedApiToken, Keyring,
-    ResolvedAuth, SESSION_COOKIE_NAME, SharedDaemonTokenState, TokenScopeDocument,
-    generate_api_token, generate_session_token, hash_session_token, sign_session_cookie,
+    ResolvedAuth, SESSION_AGE_MAX, SESSION_COOKIE_NAME, SessionCookieError, SharedDaemonTokenState,
+    TokenScopeDocument, create_session_cookie_value, format_session_set_cookie, generate_api_token,
+    generate_session_token, hash_session_token,
 };
 use fuz_db::Pool;
 use parking_lot::RwLock;
@@ -140,13 +141,28 @@ pub async fn mint_session_cookie(
         )
         .await
         .expect("insert auth_session");
-    let set_cookie = sign_session_cookie(keyring, &token, cookie_name);
-    // Drop the `; Path=/; …` attributes — a request header is `name=value`.
-    set_cookie
-        .split(';')
-        .next()
-        .expect("split always yields one element")
-        .to_owned()
+    // a request header is `name=value`, with none of a `Set-Cookie`'s attributes
+    let value = signed_session_cookie_value(keyring, &token, cookie_name)
+        .expect("a session cookie the grammar can carry");
+    format!("{cookie_name}={value}")
+}
+
+/// Sign `session_token` into the cookie value a request carries after
+/// `<cookie_name>=`, refused as the production minter refuses it: the value is
+/// run through [`fuz_auth::format_session_set_cookie`], so a name or a token
+/// the `Cookie` grammar cannot carry is an error here too.
+///
+/// # Errors
+///
+/// [`SessionCookieError`] when the name or the signed value cannot be written.
+pub(crate) fn signed_session_cookie_value(
+    keyring: &Keyring,
+    session_token: &str,
+    cookie_name: &str,
+) -> Result<String, SessionCookieError> {
+    let value = create_session_cookie_value(keyring, session_token);
+    format_session_set_cookie(cookie_name, &value, SESSION_AGE_MAX)?;
+    Ok(value)
 }
 
 /// Mint an `api_token` row for `account_id` under `scope` and return the
@@ -197,10 +213,10 @@ pub fn narrowed_scope(names: &[&str]) -> TokenScopeDocument {
     TokenScopeDocument::methods(methods)
 }
 
-/// The daemon token every fixture sends. A fixed literal — validation is a
-/// constant-time compare against the state below, so the value carries no
-/// requirement beyond both halves agreeing on it.
-pub const TESTING_DAEMON_TOKEN: &str = "daemon-token-fixture";
+/// The daemon token every fixture sends. A fixed literal in the token's shape
+/// — 43 base64url characters, which the daemon leg requires ahead of its
+/// constant-time compare against the state below.
+pub const TESTING_DAEMON_TOKEN: &str = "daemon-token-fixture-AAAAAAAAAAAAAAAAAAAAAA";
 
 /// Daemon-token state holding `current_token`, optionally bound to a keeper
 /// account.

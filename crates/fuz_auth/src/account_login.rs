@@ -28,8 +28,8 @@ use crate::connection_closer::ConnectionCloseTarget;
 use crate::password::PASSWORD_LENGTH_MAX;
 use crate::primitive_schemas::USERNAME_PROVIDED_LENGTH_MAX;
 use crate::rate_limiter::{RESERVATION_WAIT_MAX, reserve_optional};
+use crate::route_helpers::session_cookie_header;
 use crate::route_response::rate_limit_exceeded;
-use crate::session_cookie::sign_session_cookie;
 use crate::session_queries::create_capped_session;
 use crate::timing::{compute_fail_deadline, wait_for_deadline};
 use fuz_http::ClientIp;
@@ -312,15 +312,11 @@ async fn login_inner(
             .close_connections(&ConnectionCloseTarget::Session(evicted_hash.clone()));
     }
 
-    let cookie = sign_session_cookie(
+    let response_headers = session_cookie_header(
         &state.gate.keyring,
         &session.token,
         state.gate.session_cookie_name,
-    );
-    let mut response_headers = HeaderMap::new();
-    if let Ok(val) = cookie.parse() {
-        response_headers.insert(axum::http::header::SET_COOKIE, val);
-    }
+    )?;
 
     tracing::info!(username = %account.username, "login successful");
 

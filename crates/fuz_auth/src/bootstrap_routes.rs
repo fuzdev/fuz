@@ -70,11 +70,14 @@ async fn bootstrap_route(
 
     match bootstrap_handler(&state.options, client_ip_str, input).await {
         Ok(success) => {
-            let response_headers = session_cookie_header(
+            let response_headers = match session_cookie_header(
                 &state.gate.keyring,
                 &success.session_token,
                 state.gate.session_cookie_name,
-            );
+            ) {
+                Ok(headers) => headers,
+                Err(response) => return response,
+            };
             // Wire shape matches fuz_app's TS `BootstrapOutput`:
             // `{ok, account: {id, username}, actor: {id}}`. Cross-process
             // integration tests read account.id + actor.id from this

@@ -31,18 +31,19 @@ use crate::actor_queries::{
     query_active_actor_holds_any_global_role, query_active_actors_by_account,
     query_role_grant_find_active_for_actor,
 };
-use crate::api_token::{hash_api_token, is_api_token_shaped};
+use crate::api_token::hash_api_token;
 use crate::api_token_queries::{
     query_api_token_live_account, query_validate_api_token, spawn_api_token_touch,
 };
 use crate::bearer_auth::is_browser_context;
 use crate::credential_deadline::credential_deadline_after;
+use crate::credential_headers::{read_bearer_token, read_daemon_token};
 use crate::credential_type::CredentialType;
-use crate::daemon_token::{DAEMON_TOKEN_HEADER, SharedDaemonTokenState, validate_daemon_token};
+use crate::daemon_token::{SharedDaemonTokenState, validate_daemon_token};
 use crate::hash::hash_session_token;
 use crate::keyring::Keyring;
 use crate::request_context::RequestActorContext;
-use crate::session_cookie::parse_session_from_cookies;
+use crate::session_cookie::{SessionCookieRead, parse_session_from_cookies};
 use crate::session_queries::query_session_get_valid;
 use crate::token_scope::TokenScope;
 use std::time::Instant;
@@ -351,14 +352,11 @@ async fn resolve_cookie_from_headers(
         CredentialReadFault::new(CredentialType::Session, CredentialFaultKind::Unavailable);
     const FAULT: CredentialReadFault =
         CredentialReadFault::new(CredentialType::Session, CredentialFaultKind::Read);
-    let Some(cookie_header) = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|value| value.to_str().ok())
+    // an absent cookie and an invalid one both resolve nothing here; the
+    // invalid one is cleared by the stack (`AuthGate::cookie_clear_hook`)
+    let SessionCookieRead::Valid(cookie) =
+        parse_session_from_cookies(headers, keyring, cookie_name)
     else {
-        return Ok(None);
-    };
-
-    let Some(cookie) = parse_session_from_cookies(cookie_header, keyring, cookie_name) else {
         return Ok(None);
     };
     let session_hash = hash_session_token(&cookie.token).as_str().to_owned();
@@ -409,11 +407,12 @@ async fn resolve_cookie_from_headers(
 /// Resolve `Authorization: Bearer <token>` header.
 ///
 /// Mirrors `fuz_app`'s `bearer_auth.ts`:
-/// - Case-insensitive "Bearer " prefix (RFC 7235 §2.1)
+/// - Reads the token with [`read_bearer_token`] — one `Authorization` line,
+///   the scheme in any case (RFC 7235 §2.1), one space, a shaped token; a
+///   header sent twice or a value that is no token reads nothing, before any
+///   pool checkout or query
 /// - Discards the token on a request with a browser-context header
 ///   ([`is_browser_context`] has what that does and doesn't prove)
-/// - Refuses a value that is not [`is_api_token_shaped`] before any pool
-///   checkout or query
 /// - Hashes token with blake3 and looks up in `api_token`
 async fn resolve_bearer_from_headers(
     headers: &axum::http::HeaderMap,
@@ -424,25 +423,12 @@ async fn resolve_bearer_from_headers(
         CredentialReadFault::new(CredentialType::ApiToken, CredentialFaultKind::Unavailable);
     const FAULT: CredentialReadFault =
         CredentialReadFault::new(CredentialType::ApiToken, CredentialFaultKind::Read);
-    let Some(auth_header) = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-    else {
+    let Some(raw_token) = read_bearer_token(headers) else {
         return Ok(None);
     };
 
-    if auth_header.len() < 7 || !auth_header[..7].eq_ignore_ascii_case("bearer ") {
-        return Ok(None);
-    }
-
     if is_browser_context(headers) {
         tracing::debug!("bearer auth rejected: browser context (Origin/Referer present)");
-        return Ok(None);
-    }
-
-    let raw_token = &auth_header[7..];
-    if !is_api_token_shaped(raw_token) {
-        tracing::debug!("bearer auth soft-fail: malformed token");
         return Ok(None);
     }
 
@@ -495,8 +481,10 @@ async fn resolve_bearer_from_headers(
     }))
 }
 
-/// Resolve `X-Daemon-Token` header. Sync lock — no `.await` inside the
-/// critical section.
+/// Resolve `X-Daemon-Token` header, read with [`read_daemon_token`]: one line
+/// holding a shaped token, so a header sent twice or an off-form value is
+/// discarded ahead of the constant-time compare. Sync lock — no `.await`
+/// inside the critical section.
 async fn resolve_daemon_token_from_headers(
     headers: &axum::http::HeaderMap,
     daemon_state: &SharedDaemonTokenState,
@@ -508,16 +496,9 @@ async fn resolve_daemon_token_from_headers(
     );
     const FAULT: CredentialReadFault =
         CredentialReadFault::new(CredentialType::DaemonToken, CredentialFaultKind::Read);
-    let Some(token_value) = headers
-        .get(DAEMON_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok())
-    else {
+    let Some(token_value) = read_daemon_token(headers) else {
         return Ok(None);
     };
-
-    if token_value.is_empty() {
-        return Ok(None);
-    }
 
     if is_browser_context(headers) {
         tracing::debug!("daemon token auth rejected: browser context (Origin/Referer present)");

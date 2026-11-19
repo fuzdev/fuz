@@ -41,10 +41,10 @@
 
 use std::sync::Arc;
 
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use axum::response::Response;
 use deadpool_postgres::Pool;
-use fuz_http::AllowedOrigins;
+use fuz_http::{AllowedOrigins, CookieClearHook};
 
 use crate::daemon_token::SharedDaemonTokenState;
 use crate::keyring::Keyring;
@@ -53,6 +53,45 @@ use crate::resolve::{
     CredentialReadFault, PublicContextFault, ResolvedAuth, build_public_request_context,
     resolve_auth_from_headers,
 };
+use crate::session_cookie::{
+    SessionCookieRead, format_session_clear_cookie, parse_session_from_cookies,
+};
+
+/// The auth scope: the paths under which the spine reads and mints
+/// credentials.
+///
+/// `fuz_app`'s `AUTH_MIDDLEWARE_PATH`, where its session, bearer, and
+/// daemon-token middleware mount. Every spine route that reads a credential is
+/// written under it (the account routes, the RPC and WebSocket endpoints, the
+/// audit stream, the fact reads), and it is where an invalid session cookie is
+/// cleared ([`AuthGate::cookie_clear_hook`]).
+///
+/// The pattern is the TS twin's: a path prefix and `/*`.
+/// [`auth_middleware_applies`] reads it.
+pub const AUTH_MIDDLEWARE_PATH: &str = "/api/*";
+
+/// Whether `path` is under the auth scope ([`AUTH_MIDDLEWARE_PATH`]).
+///
+/// Under it: the bare prefix (`/api`) or anything below it (`/api/`,
+/// `/api/x`). A path that only starts with the prefix's letters (`/apix`) is
+/// outside, and the match is case-sensitive — what the TS twin's router
+/// matches `/api/*` against.
+///
+/// `path` is a request's `Uri::path`, as the router reads it: raw — not
+/// percent-decoded, dot segments kept. The TS twin's clear follows its own
+/// router's reading instead (percent-decoded, dot segments resolved), so the
+/// two differ on spellings a browser never sends: `/%61pi/x` and `/./api/x`
+/// are cleared there and not here, `/api/../health` here and not there. Left
+/// unconverged on purpose — each spine clears exactly where its own router
+/// puts the auth scope.
+#[must_use]
+pub fn auth_middleware_applies(path: &str) -> bool {
+    let prefix = AUTH_MIDDLEWARE_PATH
+        .strip_suffix("/*")
+        .unwrap_or(AUTH_MIDDLEWARE_PATH);
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
 
 /// Proof that [`AuthGate::check_origin`] admitted a request's headers — what
 /// every credential read takes in place of the headers.
@@ -120,14 +159,67 @@ impl std::fmt::Debug for AuthGate {
 impl AuthGate {
     /// The [`fuz_http::StackOptions`] for this gate's server, reading the
     /// gate's own allowlist — so the stack's `origin_layer` and the gate's
-    /// in-handler check cannot drift apart. Request tracing on, the host gate
-    /// off ([`fuz_http::StackOptions::new`]); set the flags on the result.
+    /// in-handler check cannot drift apart — and carrying the gate's
+    /// [`cookie_clear_hook`](Self::cookie_clear_hook). Request tracing and the
+    /// host gate on ([`fuz_http::StackOptions::new`]); set the flags on the
+    /// result.
     #[must_use]
     pub fn stack_options(
         &self,
         trusted_proxies: Arc<Vec<fuz_http::ParsedProxy>>,
     ) -> fuz_http::StackOptions {
-        fuz_http::StackOptions::new(self.allowed_origins.clone(), trusted_proxies)
+        fuz_http::StackOptions {
+            cookie_clear: Some(self.cookie_clear_hook()),
+            ..fuz_http::StackOptions::new(self.allowed_origins.clone(), trusted_proxies)
+        }
+    }
+
+    /// The stack's cookie-clear hook for this gate's session cookie
+    /// ([`fuz_http::StackOptions::cookie_clear`]): a request under the auth
+    /// scope ([`auth_middleware_applies`]) whose session cookie is present
+    /// and invalid ([`SessionCookieRead::Invalid`]) gets the clearing
+    /// `Set-Cookie` ([`format_session_clear_cookie`]) on its response.
+    ///
+    /// "Invalid" is what the cookie alone shows — unreadable, a bad MAC, a
+    /// signed expiry that has passed, an empty identity, an empty value. A
+    /// request with no session cookie clears nothing, and neither does a
+    /// validly signed one whose `auth_session` row is gone. The clear does not
+    /// depend on which credential authenticates the request: an invalid
+    /// cookie beside a winning daemon token or bearer is still cleared, as on
+    /// the TS twin.
+    ///
+    /// The stack mounts the hook inside the origin check and writes its
+    /// answer on every response but an accepted upgrade, ahead of the
+    /// handler's own `Set-Cookie` ([`fuz_http::cookie_clear`]).
+    ///
+    /// A cookie name that is not an RFC 6265 `cookie-name` has no clearing
+    /// string; the hook then clears nothing and says so at `error`. The
+    /// server toolkit refuses such a name at boot.
+    #[must_use]
+    pub fn cookie_clear_hook(&self) -> CookieClearHook {
+        let keyring = Arc::clone(&self.keyring);
+        let cookie_name = self.session_cookie_name;
+        let clear = format_session_clear_cookie(cookie_name)
+            .ok()
+            .and_then(|clear| HeaderValue::try_from(clear).ok());
+        if clear.is_none() {
+            tracing::error!(
+                cookie_name,
+                "the session cookie name is not an RFC 6265 cookie-name; an invalid session \
+                 cookie will not be cleared"
+            );
+        }
+        CookieClearHook::new(move |path, headers| {
+            let clear = clear.as_ref()?;
+            if !auth_middleware_applies(path) {
+                return None;
+            }
+            matches!(
+                parse_session_from_cookies(headers, &keyring, cookie_name),
+                SessionCookieRead::Invalid
+            )
+            .then(|| clear.clone())
+        })
     }
 
     /// Refuse a request from a foreign origin: `Ok` when it carries no
@@ -240,9 +332,104 @@ impl AuthGate {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderValue, header};
+    use axum::http::header;
 
     use super::*;
+
+    /// The boundary of the auth scope, as the TS twin's router matches
+    /// `/api/*` — and the raw path's own reading where the twin's differs:
+    /// dot segments are kept and nothing is percent-decoded.
+    #[test]
+    fn the_auth_scope_is_the_prefix_and_everything_below_it() {
+        for inside in [
+            "/api",
+            "/api/",
+            "/api/x",
+            "/api/account/login",
+            "/api//x",
+            "/api/../health",
+        ] {
+            assert!(auth_middleware_applies(inside), "{inside}");
+        }
+        for outside in [
+            "/", "", "/apix", "/api-x", "/API/x", "/Api", "//api/x", "/x/api/x", "/health",
+            "/%61pi/x", "/./api/x", "/api%2Fx", "api/x",
+        ] {
+            assert!(!auth_middleware_applies(outside), "{outside}");
+        }
+    }
+
+    /// A gate over a pool that connects to nothing: the hook reads headers
+    /// only.
+    fn hook_gate() -> AuthGate {
+        let mut config = deadpool_postgres::Config::new();
+        config.url = Some("postgres://localhost:1/unreachable".to_owned());
+        AuthGate {
+            pool: config
+                .create_pool(
+                    Some(deadpool_postgres::Runtime::Tokio1),
+                    tokio_postgres::NoTls,
+                )
+                .expect("a lazy pool"),
+            keyring: Arc::new(
+                Keyring::new(&"k".repeat(crate::keyring::MIN_KEY_LENGTH)).expect("a keyring"),
+            ),
+            daemon_token_state: None,
+            session_cookie_name: "fuz_session",
+            allowed_origins: AllowedOrigins::parse("https://app.example").expect("an allowlist"),
+        }
+    }
+
+    fn cookie(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, value.parse().expect("a header value"));
+        headers
+    }
+
+    #[test]
+    fn the_hook_clears_an_invalid_session_cookie_under_the_auth_scope() {
+        let gate = hook_gate();
+        let hook = gate.cookie_clear_hook();
+        let clear = HeaderValue::from_static(
+            "fuz_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0",
+        );
+        let signed =
+            crate::sign_session_cookie(&gate.keyring, "token", "fuz_session").expect("a cookie");
+        let valid = signed.split(';').next().expect("name=value").to_owned();
+
+        // present and invalid: cleared, on every path under the scope
+        for invalid in ["fuz_session=bogus", "fuz_session=", "a=1; fuz_session=x.y"] {
+            for path in ["/api", "/api/", "/api/rpc", "/api/unrouted"] {
+                assert_eq!(hook.clear_for(path, &cookie(invalid)), Some(clear.clone()));
+            }
+            // and nowhere else
+            for path in ["/", "/health", "/apix", "/API/rpc"] {
+                assert_eq!(hook.clear_for(path, &cookie(invalid)), None, "{path}");
+            }
+        }
+        // absent, and valid (whatever its session row): nothing
+        assert_eq!(hook.clear_for("/api/rpc", &HeaderMap::new()), None);
+        assert_eq!(hook.clear_for("/api/rpc", &cookie("other=1")), None);
+        assert_eq!(hook.clear_for("/api/rpc", &cookie(&valid)), None);
+        // the same hook rides the gate's stack options
+        assert!(
+            gate.stack_options(Arc::new(Vec::new()))
+                .cookie_clear
+                .is_some()
+        );
+    }
+
+    /// A name with no clearing string clears nothing rather than writing a
+    /// header that reads back differently.
+    #[test]
+    fn a_cookie_name_the_grammar_cannot_carry_clears_nothing() {
+        let gate = AuthGate {
+            session_cookie_name: "bad name",
+            ..hook_gate()
+        };
+        let hook = gate.cookie_clear_hook();
+        assert_eq!(hook.clear_for("/api/rpc", &cookie("bad name=bogus")), None);
+    }
 
     #[test]
     fn the_witness_debug_masks_the_headers() {

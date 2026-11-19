@@ -431,6 +431,15 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   write-progress and header-read deadlines the TS twin lacks.
 - A server with an `AuthGate` builds its options with `AuthGate::stack_options`,
   so both origin checks read one allowlist.
+- **The stack clears an invalid session cookie.** `StackOptions::cookie_clear`
+  is an opaque `CookieClearHook` — request path and headers in, an optional
+  clearing `Set-Cookie` out — since `fuz_http` can't name a keyring;
+  `AuthGate::stack_options` and `AppBackend::stack_options` set it. Its layer sits inside the origin check in
+  every checked group, the fallback included, so a refusal by the host or
+  origin gate carries no clear. It leaves a `101` alone and puts the clear
+  ahead of any `Set-Cookie` the handler wrote, so a login carrying a stale
+  cookie keeps its new session. A group carved out of the origin check has no
+  clear layer, and neither does a stack built from a bare `StackOptions::new`.
 - **Action params** — `params` holds:
   - the hand-decode helpers a handler reads `params` with (field parsers,
     `reject_unknown_keys` / `reject_null_keys`, `serialize_result`);
@@ -479,6 +488,28 @@ passwords, rate limiting, the REST routes (`/status`, `/login`, `/logout`,
 The rules a change must keep:
 
 - The non-cookie credential legs (daemon token, bearer) refuse browser callers.
+- **One strict reader per credential header** (`credential_headers`, twin of
+  fuz_app's `auth/credential_headers.ts`), over every line of the header: a
+  value reads exactly or it is not that credential — nothing is decoded,
+  unquoted, or repaired. `Cookie` lines read as their `; ` join (bytes, so a
+  non-ASCII sibling cookie hides nothing): split on `;`, each pair stripped of
+  SP and HTAB only, the first pair beginning `<name>=` wins, its value
+  verbatim. `Authorization` and `X-Daemon-Token` must be one line of the exact
+  shape; sent twice, the header is discarded and the walk goes on without it.
+  The daemon token's shape (`is_daemon_token_shaped`) is checked before the
+  constant-time compare.
+- **A session cookie that is present and does not verify is cleared**
+  (`SessionCookieRead::Invalid` — malformed, a bad MAC, its signed expiry
+  passed, an empty value), by the stack layer `AuthGate::cookie_clear_hook`
+  feeds, under the auth scope only: `AUTH_MIDDLEWARE_PATH` (`/api/*`, twin of
+  fuz_app's; `auth_middleware_applies` is its matcher). Whichever credential
+  authenticates the request, the clear is sent. A cookie that verifies but
+  names no live session row is not cleared — the cookie alone doesn't show it.
+- A session cookie is written by `format_session_set_cookie` /
+  `format_session_clear_cookie` alone, in one fixed string
+  (`Path=/; HttpOnly; Secure; SameSite=Strict`), the value raw. A name or
+  value outside RFC 6265 is a `SessionCookieError`: the route answers 500
+  instead of dropping the header, and a bad cookie name refuses the boot.
 - Every `AuthSpec` names a `CredentialGate`; gate order is credential → scope
   → role. A scope-narrowed token is RPC-only, and the surfaces that answer
   anonymous callers (`fuz_fact_serving`'s cell-scoped read, `/status`) answer it
@@ -517,7 +548,8 @@ mints works on both:
   Unix seconds as ASCII digits and the signature an HMAC-SHA256 in padded
   standard base64. Keys come from `SECRET_FUZ_COOKIE_KEYS`, split on `__`,
   each at least 32 UTF-16 code units; the first signs and every key verifies
-  (`Keyring`'s rustdoc covers rotation).
+  (`Keyring`'s rustdoc covers rotation). On the wire it is the raw value in
+  `Set-Cookie` and `Cookie`, never percent-encoded, on both spines.
 - **Password**: an Argon2id PHC string (m=19456, t=2, p=1).
 
 The bootstrap token is an operator-written file, not a minted credential: the
@@ -698,6 +730,17 @@ not a `fuz_auth` feature, so unification can't route it into production.
   producer, and the daemon-token-gated `_testing_*` specs. A consumer's
   `testing_*` binary mounts `_testing_*` specs only together with their TS
   twins, since the cross-backend action-manifest diff is exact.
+- `_testing_credential_read` (`testing_credential_read`) reads a list of raw
+  header lines as the credential legs would, for fuz_app's credential
+  conformance suite — at most `TESTING_CREDENTIAL_READ_LINES_MAX` lines of
+  `TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX` characters, since `HeaderMap`
+  panics past its own entry limit; every refusal of `lines` carries
+  `invalid_header_line`. `credential_conformance.json` beside it is a
+  byte-identical copy of fuz_app's table, embedded with `include_str!` and run
+  by the module's unit test; fuz_app's cross-backend parity project fails when
+  the two copies differ, so a row is edited in both. `TESTING_DAEMON_TOKEN`,
+  like any daemon token a test presents, is 43 base64url characters — the
+  daemon leg discards any other shape before its compare.
 - The shared `#[ignore]` Postgres harness (./testing.md § Postgres suites),
   including `TestingTableLock` for driving races deterministically, and
   `assert_expected_schema_fixture`, a server's `/ready` fixture drift guard.

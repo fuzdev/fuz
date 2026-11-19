@@ -36,7 +36,9 @@ use std::sync::Arc;
 use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
 use fuz_auth::hash::hash_session_token;
 use fuz_auth::keyring::Keyring;
-use fuz_auth::session_cookie::{generate_session_token, sign_session_cookie};
+use fuz_auth::session_cookie::generate_session_token;
+
+use crate::credentials::signed_session_cookie_value;
 use fuz_http::{
     InputShape, JsonrpcError, SAFE_INTEGER_MAX, internal_error_with_source, invalid_input_params,
 };
@@ -129,19 +131,10 @@ pub fn create_testing_mint_session_action_spec(
                 .await
                 .map_err(|e| internal_error_with_source("INSERT auth_session", &e))?;
 
-            // `sign_session_cookie` returns the full `Set-Cookie` header value;
-            // strip the `name=` prefix + trailing attributes so the response
-            // carries just the signed VALUE (TS callers thread it into a jar).
-            let signed_cookie = sign_session_cookie(&keyring, &session_token, cookie_name);
-            let prefix = format!("{cookie_name}=");
-            let after_prefix = signed_cookie
-                .strip_prefix(&prefix)
-                .unwrap_or(&signed_cookie);
-            let cookie_value = after_prefix
-                .split(';')
-                .next()
-                .unwrap_or(after_prefix)
-                .to_owned();
+            // the response carries just the signed value (TS callers thread it
+            // into a jar under the cookie's name)
+            let cookie_value = signed_session_cookie_value(&keyring, &session_token, cookie_name)
+                .map_err(|e| internal_error_with_source("session cookie", &e))?;
 
             Ok(json!({ "session_cookie": cookie_value }))
         })

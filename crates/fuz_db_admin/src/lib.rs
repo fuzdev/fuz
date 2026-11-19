@@ -1148,7 +1148,8 @@ mod origin_gate_tests {
             &fuz_testing::testing_keyring(),
             &fuz_auth::generate_session_token(),
             fuz_auth::SESSION_COOKIE_NAME,
-        );
+        )
+        .unwrap();
         let mut headers = headers(None);
         headers.insert(
             axum::http::header::COOKIE,

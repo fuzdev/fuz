@@ -44,8 +44,8 @@ use axum::http::header::{AUTHORIZATION, COOKIE, ORIGIN, REFERER};
 use fuz_auth::daemon_token::DAEMON_TOKEN_HEADER;
 use fuz_auth::{
     API_TOKEN_PREFIX, AuthGate, CREDENTIAL_READ_FAULT_BODY, CredentialFaultKind,
-    CredentialReadFault, CredentialType, SharedDaemonTokenState, generate_api_token,
-    generate_session_token, sign_session_cookie,
+    CredentialReadFault, CredentialType, SharedDaemonTokenState, create_session_cookie_value,
+    generate_api_token, generate_session_token,
 };
 use fuz_db::{Pool, create_pool};
 use uuid::Uuid;
@@ -153,12 +153,10 @@ fn gate(pool: &Pool, daemon: Option<&SharedDaemonTokenState>) -> AuthGate {
 /// A request `Cookie` value carrying a validly signed (unknown) session — the
 /// cookie leg verifies it and then dials the pool to look the session up.
 fn signed_cookie() -> String {
-    let set_cookie = sign_session_cookie(
-        &fuz_testing::testing_keyring(),
-        &generate_session_token(),
-        "fuz_session",
-    );
-    set_cookie.split(';').next().unwrap().to_owned()
+    format!(
+        "fuz_session={}",
+        create_session_cookie_value(&fuz_testing::testing_keyring(), &generate_session_token())
+    )
 }
 
 #[tokio::test]
@@ -266,10 +264,13 @@ async fn malformed_bearer_is_refused_without_a_pool_checkout() {
 #[tokio::test]
 async fn a_leg_whose_checkout_fails_ends_the_walk_with_the_503() {
     let keeper = Uuid::new_v4();
-    let state = daemon_state("the-real-token", Some(keeper));
+    let state = daemon_state(fuz_testing::TESTING_DAEMON_TOKEN, Some(keeper));
     let daemon = || {
         let mut headers = HeaderMap::new();
-        headers.insert(DAEMON_TOKEN_HEADER, "the-real-token".parse().unwrap());
+        headers.insert(
+            DAEMON_TOKEN_HEADER,
+            fuz_testing::TESTING_DAEMON_TOKEN.parse().unwrap(),
+        );
         headers
     };
     let cookie = || {
@@ -392,19 +393,118 @@ async fn unparseable_cookie_leg_falls_through_to_none() {
 async fn invalid_daemon_token_is_rejected() {
     // Daemon-token leg runs first; an invalid token fails constant-time
     // validation and the walk falls through (no pool access).
-    let state = daemon_state("the-real-token", Some(Uuid::new_v4()));
+    let state = daemon_state(fuz_testing::TESTING_DAEMON_TOKEN, Some(Uuid::new_v4()));
     let mut headers = HeaderMap::new();
-    headers.insert(DAEMON_TOKEN_HEADER, "wrong-token".parse().unwrap());
+    // shaped like a token, so the refusal is the compare's
+    let wrong = "w".repeat(fuz_auth::DAEMON_TOKEN_LEN);
+    headers.insert(DAEMON_TOKEN_HEADER, wrong.parse().unwrap());
     assert!(!resolve(&headers, Some(&state)).await);
+}
+
+/// The shape precheck sits ahead of the compare: a value that equals the
+/// state's token and is no daemon token in shape is still discarded.
+#[tokio::test]
+async fn an_off_form_daemon_token_is_discarded_even_when_it_matches() {
+    for off_form in ["short", "has space in it and is forty-three chars!!!", ""] {
+        let state = daemon_state(off_form, Some(Uuid::new_v4()));
+        let (pool, accepted) = counting_pool().await;
+        let mut headers = HeaderMap::new();
+        headers.insert(DAEMON_TOKEN_HEADER, off_form.parse().unwrap());
+        assert!(!resolve_with_pool(&headers, Some(&state), &pool).await);
+        assert_eq!(accepted.load(Ordering::SeqCst), 0, "{off_form:?}");
+    }
+}
+
+/// A credential header sent as two lines is discarded whatever the lines
+/// hold: the leg reads nothing, so the pool is never dialed. The single-line
+/// controls dial, so the count is a live probe.
+#[tokio::test]
+async fn a_repeated_credential_header_is_discarded() {
+    let keeper = Uuid::new_v4();
+    let state = daemon_state(fuz_testing::TESTING_DAEMON_TOKEN, Some(keeper));
+    let token = fuz_testing::TESTING_DAEMON_TOKEN;
+    let bearer = well_formed_bearer();
+    let repeats: [(&str, [&str; 2]); 7] = [
+        (DAEMON_TOKEN_HEADER, [token, token]),
+        (DAEMON_TOKEN_HEADER, [token, "garbage"]),
+        (DAEMON_TOKEN_HEADER, ["garbage", token]),
+        (DAEMON_TOKEN_HEADER, [token, ""]),
+        ("authorization", [&bearer, &bearer]),
+        ("authorization", [&bearer, "Bearer garbage"]),
+        ("authorization", ["Basic Zm9vOmJhcg==", &bearer]),
+    ];
+    for (name, lines) in repeats {
+        let (pool, accepted) = counting_pool().await;
+        let mut headers = HeaderMap::new();
+        for line in lines {
+            headers.append(name, line.parse().unwrap());
+        }
+        assert!(
+            !resolve_with_pool(&headers, Some(&state), &pool).await,
+            "{name}: {lines:?}"
+        );
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "{name}: {lines:?} must be discarded before the pool dials"
+        );
+    }
+    for (name, line) in [(DAEMON_TOKEN_HEADER, token), ("authorization", &bearer)] {
+        let (pool, accepted) = counting_pool().await;
+        let mut headers = HeaderMap::new();
+        headers.insert(name, line.parse().unwrap());
+        fault_with_pool(&headers, Some(&state), &pool).await;
+        assert!(
+            accepted.load(Ordering::SeqCst) > 0,
+            "{name}: one line dials"
+        );
+    }
+}
+
+/// Every `Cookie` line is read, as bytes: a session cookie on a second line,
+/// or beside a cookie holding a byte outside ASCII, still reaches the
+/// session lookup.
+#[tokio::test]
+async fn the_cookie_leg_reads_every_line_and_every_byte() {
+    let cookie = signed_cookie();
+    let sibling = [b"other=caf\xe9; ", cookie.as_bytes()].concat();
+    let cases: [Vec<Vec<u8>>; 3] = [
+        vec![b"other=1".to_vec(), cookie.clone().into_bytes()],
+        vec![sibling],
+        vec![cookie.clone().into_bytes(), b"fuz_session=bogus".to_vec()],
+    ];
+    for lines in cases {
+        let (pool, accepted) = counting_pool().await;
+        let mut headers = HeaderMap::new();
+        for line in &lines {
+            headers.append(COOKIE, axum::http::HeaderValue::from_bytes(line).unwrap());
+        }
+        let fault = fault_with_pool(&headers, None, &pool).await;
+        assert_eq!(fault.leg(), CredentialType::Session);
+        assert!(
+            accepted.load(Ordering::SeqCst) > 0,
+            "the session lookup ran"
+        );
+    }
+    // a bogus first pair is not skipped for the valid one on the next line
+    let (pool, accepted) = counting_pool().await;
+    let mut headers = HeaderMap::new();
+    headers.append(COOKIE, "fuz_session=bogus".parse().unwrap());
+    headers.append(COOKIE, cookie.parse().unwrap());
+    assert!(!resolve_with_pool(&headers, None, &pool).await);
+    assert_eq!(accepted.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn valid_daemon_token_without_bound_keeper_is_none() {
     // A valid token but no keeper account resolved yet (pre-bootstrap) →
     // `None`, short-circuiting at `keeper_account_id?` before any pool access.
-    let state = daemon_state("the-real-token", None);
+    let state = daemon_state(fuz_testing::TESTING_DAEMON_TOKEN, None);
     let mut headers = HeaderMap::new();
-    headers.insert(DAEMON_TOKEN_HEADER, "the-real-token".parse().unwrap());
+    headers.insert(
+        DAEMON_TOKEN_HEADER,
+        fuz_testing::TESTING_DAEMON_TOKEN.parse().unwrap(),
+    );
     assert!(!resolve(&headers, Some(&state)).await);
 }
 

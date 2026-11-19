@@ -39,6 +39,7 @@ pub mod schema_fixture;
 pub mod seed;
 pub mod table_lock;
 pub mod testing_action_manifest;
+pub mod testing_credential_read;
 pub mod testing_drain;
 pub mod testing_flood_notifications;
 pub mod testing_migration_tracker;
@@ -70,6 +71,11 @@ pub use seed::{
 };
 pub use table_lock::TestingTableLock;
 pub use testing_action_manifest::create_testing_action_manifest_action_spec;
+pub use testing_credential_read::{
+    ERROR_TESTING_CREDENTIAL_READ_LINE, TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX,
+    TESTING_CREDENTIAL_READ_LINES_MAX, create_testing_credential_read_action_spec,
+    run_testing_credential_read,
+};
 pub use testing_drain::create_testing_drain_effects_action_spec;
 pub use testing_flood_notifications::{
     TESTING_FLOOD_NOTIFICATION_METHOD, create_testing_flood_notifications_action_spec,
@@ -109,8 +115,8 @@ mod auth_gate_tests {
 
     use super::{
         TESTING_ACTION_AUTH, TestingArgon2idHasher, TestingResetOptions,
-        create_testing_action_manifest_action_spec, create_testing_drain_effects_action_spec,
-        create_testing_flood_notifications_action_spec,
+        create_testing_action_manifest_action_spec, create_testing_credential_read_action_spec,
+        create_testing_drain_effects_action_spec, create_testing_flood_notifications_action_spec,
         create_testing_migration_tracker_action_spec, create_testing_mint_session_action_spec,
         create_testing_origin_check_action_spec, create_testing_put_fact_action_spec,
         create_testing_reset_action_spec, create_testing_room_evict_action_spec,
@@ -161,6 +167,7 @@ mod auth_gate_tests {
             create_testing_migration_tracker_action_spec(),
             create_testing_flood_notifications_action_spec(),
             create_testing_origin_check_action_spec(),
+            create_testing_credential_read_action_spec(test_keyring(), "fuz_session"),
             create_testing_shorten_credential_expiry_action_spec(),
             create_testing_room_evict_action_spec(Arc::new(fuz_realtime::RoomRegistry::new(
                 Arc::new(fuz_realtime::ConnectionRegistry::new()),
@@ -186,7 +193,7 @@ mod auth_gate_tests {
     #[test]
     fn every_testing_spec_carries_the_daemon_token_gate() {
         let specs = all_testing_specs();
-        assert_eq!(specs.len(), 11, "every _testing_* spec must be covered");
+        assert_eq!(specs.len(), 12, "every _testing_* spec must be covered");
         for spec in &specs {
             assert!(
                 spec.method.starts_with("_testing_"),

@@ -784,6 +784,14 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // for one `{patterns, origin}` pair, so the TS twin's conformance table runs
     // row by row against this spine's grammar and matcher.
     specs.push(fuz_testing::create_testing_origin_check_action_spec());
+    // `_testing_credential_read` — read the session cookie, the bearer token
+    // and the daemon token out of a list of header lines, so the TS twin's
+    // credential conformance table runs row by row against this spine's
+    // header grammar.
+    specs.push(fuz_testing::create_testing_credential_read_action_spec(
+        Arc::clone(&backend.keyring),
+        fuz_auth::SESSION_COOKIE_NAME,
+    ));
     // `_testing_shorten_credential_expiry` — pull an account's session and
     // token expiries in to seconds from now, so the cross-backend
     // credential-deadline cases watch a WebSocket or audit stream end at its
