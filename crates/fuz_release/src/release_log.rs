@@ -1435,6 +1435,7 @@ impl ReleaseLogError {
                 CacheProblem::File(
                     SecureFileError::NotFound(_)
                     | SecureFileError::InsecurePermissions(_, _)
+                    | SecureFileError::MultipleLinks(_, _)
                     | SecureFileError::FileTooLarge(_, _, _)
                     | SecureFileError::Io(_, _),
                 )

@@ -91,6 +91,7 @@ impl KeyFileError {
                 SecureFileError::Symlink(_)
                 | SecureFileError::FileTooLarge(..)
                 | SecureFileError::NotRegularFile(_)
+                | SecureFileError::MultipleLinks(..)
                 | SecureFileError::Io(..) => None,
             },
             Self::Parse(e) => e.hint(),

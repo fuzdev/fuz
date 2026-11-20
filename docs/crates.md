@@ -96,7 +96,7 @@ the escaping of text the program didn't write (`text::escape_untrusted`,
 `$HOME` lookup; and the no-follow vocabulary the stores classify entries with
 (`fs::probe_real_dir`, `secure_file::open_nofollow_regular`, …). `secure_file::burn_secure_file` is the burn
 of a one-shot secret: unlink the entry, never following or recursing, a missing one counted as burned
-(`BurnOutcome`), then fsync the parent so the unlink survives a crash. `fs::sweep_stale_staging_dirs` is the
+(`BurnOutcome`), then fsync the parent so the unlink survives a crash. `secure_file::load_secure_file_with` is the secure read under `SecureReadOptions`: `require_single_link` refuses a file with more than one hard link (`SecureFileError::MultipleLinks`), which a burn would leave readable under its other name; `load_secure_file` reads with the defaults and refuses no link count. `fs::sweep_stale_staging_dirs` is the
 age-gated sweep of crash-leaked staging dirs.
 
 ### `fuz_home`
@@ -566,7 +566,11 @@ Bootstrap, the same on both spines:
   is a required burn, the last step inside the bootstrap transaction: the
   lock, the account and grants, the session (`create_capped_session`), the
   signed cookie, then the burn (`fuz_sys::secure_file::burn_secure_file` —
-  unlink the entry, a missing one counted as burned, fsync the parent). A
+  unlink the entry, a missing one counted as burned, fsync the parent). The
+  token's read asks for a single hard link, at boot (`is_bootstrap_available`)
+  and on a request (`FileBootstrapTokenStore::read_token`) alike, so a token
+  file with a second link is refused as unreadable — no other secure read
+  asks, and a signing key hard-linked by a snapshot tool still loads. A
   failed burn rolls everything back and answers 500 `token_file_undeletable`
   with the attempt charged and audited and the window left open; a commit
   that fails after the burn logs that the token is gone. No session or cookie

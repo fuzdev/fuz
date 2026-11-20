@@ -100,6 +100,11 @@ fn map_meta_read_error(e: SecureFileError) -> ArtifactError {
             path,
             std::io::Error::other(format!("unexpected mode {mode:o}")),
         ),
+        // nor the link count
+        SecureFileError::MultipleLinks(path, links) => ArtifactError::MetadataReadFailed(
+            path,
+            std::io::Error::other(format!("unexpected link count {links}")),
+        ),
     }
 }
 

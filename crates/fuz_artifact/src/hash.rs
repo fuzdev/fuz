@@ -37,9 +37,12 @@ pub fn hash_binary(path: &Path) -> Result<ContentHash, ArtifactError> {
             ArtifactError::Io(std::io::Error::from(std::io::ErrorKind::NotFound))
         }
         SecureFileError::Io(_, source) => ArtifactError::Io(source),
-        // Not produced by the open (no mode or size check); kept total rather
-        // than folded into a wildcard so a new variant has to be classified here.
-        e @ (SecureFileError::InsecurePermissions(..) | SecureFileError::FileTooLarge(..)) => {
+        // Not produced by the open (no mode, link or size check); kept total
+        // rather than folded into a wildcard so a new variant has to be
+        // classified here.
+        e @ (SecureFileError::InsecurePermissions(..)
+        | SecureFileError::MultipleLinks(..)
+        | SecureFileError::FileTooLarge(..)) => {
             ArtifactError::Io(std::io::Error::other(e.to_string()))
         }
     })?;
@@ -100,11 +103,12 @@ fn open_source_binary(path: &Path, name: &str) -> Result<(fs::File, fs::Metadata
         SecureFileError::Symlink(_) => invalid("symlink not allowed".to_string()),
         SecureFileError::NotRegularFile(_) => invalid("not a regular file".to_string()),
         SecureFileError::Io(_, source) => invalid(format!("cannot open: {source}")),
-        // Not produced by the open (no mode or size check); kept total rather
-        // than folded into a wildcard so a new variant has to be classified here.
-        e @ (SecureFileError::InsecurePermissions(..) | SecureFileError::FileTooLarge(..)) => {
-            invalid(e.to_string())
-        }
+        // Not produced by the open (no mode, link or size check); kept total
+        // rather than folded into a wildcard so a new variant has to be
+        // classified here.
+        e @ (SecureFileError::InsecurePermissions(..)
+        | SecureFileError::MultipleLinks(..)
+        | SecureFileError::FileTooLarge(..)) => invalid(e.to_string()),
     })
 }
 

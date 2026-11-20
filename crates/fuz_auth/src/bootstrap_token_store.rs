@@ -8,11 +8,13 @@
 //!
 //! The token this file holds is the highest-value credential in the system —
 //! presenting it mints the keeper account — so [`FileBootstrapTokenStore`]
-//! reads it through [`fuz_sys::secure_file::load_secure_file`] rather than a
-//! bare read: `O_NOFOLLOW` (symlink rejection with no TOCTOU window), a
+//! reads it through [`fuz_sys::secure_file::load_secure_file_with`] rather
+//! than a bare read: `O_NOFOLLOW` (symlink rejection with no TOCTOU window), a
 //! regular-file check and permission check on the *descriptor* (a FIFO or
 //! device node is refused without waiting on it; any group/other access is
-//! refused), and a size cap. The deploy recipe already publishes it `0600`
+//! refused), a size cap, and — asked of this read alone — a link count of 1
+//! (`require_single_link`), since the burn is an unlink and a second hard
+//! link would keep the token readable under the other name. The deploy recipe already publishes it `0600`
 //! owned by the service user, so the check ratifies the shape zap produces; a
 //! hand-placed `0644` file fails loud at boot instead of being read. It burns
 //! it through [`fuz_sys::secure_file::burn_secure_file`]: unlink the entry,
@@ -50,6 +52,15 @@ pub trait BootstrapTokenStore: Send + Sync {
     fn burn_token(&self) -> BoxFuture<'_, std::io::Result<BurnOutcome>>;
 }
 
+/// The secure read's strictness for the bootstrap token: a link count of 1,
+/// beside the default checks, so the burn's unlink leaves no other name the
+/// token can still be read under. Twin of `fuz_app`'s
+/// `BOOTSTRAP_TOKEN_READ_OPTIONS`.
+const BOOTSTRAP_TOKEN_READ_OPTIONS: fuz_sys::secure_file::SecureReadOptions =
+    fuz_sys::secure_file::SecureReadOptions {
+        require_single_link: true,
+    };
+
 /// Read a bootstrap token file with the secure-file checks applied.
 ///
 /// Shared by [`FileBootstrapTokenStore::read_token`] and
@@ -69,11 +80,13 @@ pub trait BootstrapTokenStore: Send + Sync {
 /// # Errors
 ///
 /// Returns an `io::Error` carrying the underlying
-/// [`fuz_sys::secure_file::SecureFileError`]'s message — not found, symlink,
-/// not a regular file, group/other-accessible mode, or over the size cap.
+/// [`fuz_sys::secure_file::SecureFileError`] — not found, symlink, not a
+/// regular file, group/other-accessible mode, a link count other than 1, or
+/// over the size cap.
 pub(crate) async fn read_bootstrap_token_file(path: PathBuf) -> std::io::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || {
-        fuz_sys::secure_file::load_secure_file(&path).map_err(std::io::Error::other)
+        fuz_sys::secure_file::load_secure_file_with(&path, BOOTSTRAP_TOKEN_READ_OPTIONS)
+            .map_err(std::io::Error::other)
     })
     .await
     .map_err(std::io::Error::other)?
@@ -187,6 +200,39 @@ mod tests {
         let store = FileBootstrapTokenStore::new(link);
 
         assert!(store.read_token().await.is_err(), "symlink must be refused");
+    }
+
+    /// A second hard link would outlive the burn's unlink, the token readable
+    /// under the other name — so the store's read refuses it with the
+    /// link-count kind, and reads the same file once the other name is gone.
+    #[tokio::test]
+    async fn rejects_a_token_with_a_second_hard_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_token(dir.path(), b"secret-token-value\n", 0o600);
+        let other = dir.path().join("token_other_name");
+        std::fs::hard_link(&path, &other).expect("hard link");
+        let store = FileBootstrapTokenStore::new(path.clone());
+
+        let err = store.read_token().await.expect_err("two links are refused");
+        let kind = err
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<fuz_sys::secure_file::SecureFileError>());
+        assert!(
+            matches!(
+                kind,
+                Some(fuz_sys::secure_file::SecureFileError::MultipleLinks(_, 2))
+            ),
+            "{err:?}"
+        );
+        // a plain secure read of the same file passes: the strictness is the
+        // store's alone
+        assert!(fuz_sys::secure_file::load_secure_file(&path).is_ok());
+
+        std::fs::remove_file(&other).unwrap();
+        assert_eq!(
+            store.read_token().await.expect("one link reads"),
+            b"secret-token-value\n"
+        );
     }
 
     #[tokio::test]

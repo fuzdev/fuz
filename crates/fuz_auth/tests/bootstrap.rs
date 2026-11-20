@@ -52,9 +52,9 @@ use fuz_auth::error::BootstrapErrorKind;
 use fuz_auth::keyring::MIN_KEY_LENGTH;
 use fuz_auth::{
     Argon2idHasher, AuditEmitter, BOOTSTRAP_TOKEN_LENGTH_MAX, BootstrapError, BootstrapInput,
-    BootstrapKeeperResolved, BootstrapOptions, BootstrapTokenStore, Keyring, PasswordHasher,
-    ROLE_ADMIN, ROLE_KEEPER, RateLimiter, RateLimiterOptions, SESSION_COOKIE_NAME,
-    bootstrap_handler, hash_session_token, is_bootstrap_available,
+    BootstrapKeeperResolved, BootstrapOptions, BootstrapTokenStore, FileBootstrapTokenStore,
+    Keyring, PasswordHasher, ROLE_ADMIN, ROLE_KEEPER, RateLimiter, RateLimiterOptions,
+    SESSION_COOKIE_NAME, bootstrap_handler, hash_session_token, is_bootstrap_available,
 };
 use fuz_db::Pool;
 use fuz_sys::secure_file::BurnOutcome;
@@ -1826,4 +1826,70 @@ async fn a_panic_on_the_write_task_is_the_task_error() {
     assert_eq!(account_count(&pool).await, 0, "the bootstrap rolled back");
     assert!(!lock_bootstrapped(&pool).await);
     assert!(limiter_allows(&limiter), "a fault is not charged");
+}
+
+/// A token file with a second hard link is refused on both read sites: the
+/// burn's unlink would leave the token readable under the other name. At boot
+/// the window reads unavailable with a warning naming the link count; on a
+/// request it answers as an unreadable token does — `token_file_missing`, the
+/// window closed, its one audit row, nothing created, the file left as it was.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_token_file_with_a_second_hard_link_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let pool = fresh_db_pool().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secret_bootstrap_token");
+    std::fs::write(&path, format!("{TOKEN}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        is_bootstrap_available(&pool, Some(&path)).await.unwrap(),
+        "control: one link is available"
+    );
+    let other = dir.path().join("token_other_name");
+    std::fs::hard_link(&path, &other).unwrap();
+
+    {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        assert!(!is_bootstrap_available(&pool, Some(&path)).await.unwrap());
+        let warnings = capture.lines("WARN");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("2 hard links"), "{warnings:?}");
+    }
+
+    let available = Arc::new(AtomicBool::new(true));
+    let store: Arc<dyn BootstrapTokenStore> = Arc::new(FileBootstrapTokenStore::new(path.clone()));
+    let options = build_options(pool.clone(), Some(store), Arc::clone(&available), None);
+    let err = bootstrap_handler(&options, None, input(TOKEN, "admin", "valid-password-123"))
+        .await
+        .expect_err("two links ⇒ token_file_missing");
+    assert!(
+        matches!(
+            err,
+            BootstrapError::Classified {
+                kind: BootstrapErrorKind::TokenFileMissing
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(
+        !available.load(Ordering::SeqCst),
+        "the refusal closes the window"
+    );
+    options.audit.drain_inflight().await;
+    assert_eq!(
+        latest_bootstrap_failure_error(&pool).await,
+        "token_file_missing"
+    );
+    assert_eq!(account_count(&pool).await, 0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!("{TOKEN}\n"),
+        "the refused token is not burned"
+    );
+
+    // the other name removed, the file is available again
+    std::fs::remove_file(&other).unwrap();
+    assert!(is_bootstrap_available(&pool, Some(&path)).await.unwrap());
 }

@@ -6,7 +6,7 @@
 //! streams a file it must not reach through a link.
 
 use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
@@ -52,6 +52,12 @@ pub enum SecureFileError {
     #[error("not a regular file: {0}")]
     NotRegularFile(PathBuf),
 
+    /// The file's link count is not 1, refused by a read that asks for
+    /// [`SecureReadOptions::require_single_link`]: with another hard link,
+    /// unlinking `path` leaves the bytes readable under the other name.
+    #[error("file has {1} hard links: {0} (expected 1)")]
+    MultipleLinks(PathBuf, u64),
+
     /// I/O error
     #[error("I/O error on {0}: {1}")]
     Io(PathBuf, #[source] std::io::Error),
@@ -82,6 +88,35 @@ pub enum SecureFileError {
 /// - File exceeds 4KB size limit
 /// - I/O error occurs
 pub fn load_secure_file(path: &Path) -> Result<Vec<u8>, SecureFileError> {
+    load_secure_file_with(path, SecureReadOptions::default())
+}
+
+/// The strictness a [`load_secure_file_with`] read adds to the default
+/// checks. Default: none, the checks [`load_secure_file`] makes. Twin of
+/// `fuz_app`'s `SecureReadOptions`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SecureReadOptions {
+    /// Refuse a file whose link count is not 1
+    /// ([`SecureFileError::MultipleLinks`]), read from the same descriptor
+    /// `fstat` as the other checks. For a one-shot secret its reader burns by
+    /// unlinking it (the bootstrap token): with a second hard link the unlink
+    /// leaves the inode, and the secret, readable under the other name. Off by
+    /// default because a long-lived secret has no such burn, and a snapshot
+    /// tool that hard-links a key file must not stop the reader.
+    pub require_single_link: bool,
+}
+
+/// [`load_secure_file`] with the added strictness of `options`.
+///
+/// # Errors
+///
+/// What [`load_secure_file`] returns, and
+/// [`SecureFileError::MultipleLinks`] when `options.require_single_link` is
+/// set and the file's link count is not 1.
+pub fn load_secure_file_with(
+    path: &Path,
+    options: SecureReadOptions,
+) -> Result<Vec<u8>, SecureFileError> {
     let (file, fd_meta) = open_nofollow_regular(path)?;
 
     // Check permissions on the open file descriptor (not the path)
@@ -91,6 +126,13 @@ pub fn load_secure_file(path: &Path) -> Result<Vec<u8>, SecureFileError> {
         return Err(SecureFileError::InsecurePermissions(
             path.to_path_buf(),
             mode,
+        ));
+    }
+
+    if options.require_single_link && fd_meta.nlink() != 1 {
+        return Err(SecureFileError::MultipleLinks(
+            path.to_path_buf(),
+            fd_meta.nlink(),
         ));
     }
 
@@ -519,6 +561,53 @@ mod tests {
             result,
             Err(SecureFileError::FileTooLarge(_, _, _))
         ));
+    }
+
+    /// An owner-only file with a second hard link, beside the dir that holds
+    /// both names.
+    fn write_two_link_file(dir: &TempDir) -> (PathBuf, PathBuf) {
+        let file = dir.path().join("token");
+        let other = dir.path().join("token_other_name");
+        std::fs::write(&file, b"secret data").expect("write file");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("set perms");
+        std::fs::hard_link(&file, &other).expect("hard link");
+        (file, other)
+    }
+
+    /// The default read keeps today's behavior: a second hard link is no
+    /// refusal, so a snapshot tool linking a key file can't stop its reader.
+    #[test]
+    fn secure_load_reads_a_multiply_linked_file_by_default() {
+        let dir = TempDir::new().expect("create temp dir");
+        let (file, _other) = write_two_link_file(&dir);
+        assert_eq!(load_secure_file(&file).expect("plain read"), b"secret data");
+        assert_eq!(
+            load_secure_file_with(&file, SecureReadOptions::default()).expect("default options"),
+            b"secret data"
+        );
+    }
+
+    #[test]
+    fn secure_load_with_require_single_link_refuses_a_second_link() {
+        let dir = TempDir::new().expect("create temp dir");
+        let (file, other) = write_two_link_file(&dir);
+        let options = SecureReadOptions {
+            require_single_link: true,
+        };
+        let result = load_secure_file_with(&file, options);
+        assert!(
+            matches!(&result, Err(SecureFileError::MultipleLinks(path, 2)) if *path == file),
+            "{result:?}"
+        );
+        let message = result.expect_err("refused").to_string();
+        assert!(message.contains("2 hard links"), "{message}");
+
+        // the extra name removed, the same file reads
+        std::fs::remove_file(&other).expect("remove the other name");
+        assert_eq!(
+            load_secure_file_with(&file, options).expect("one link reads"),
+            b"secret data"
+        );
     }
 
     #[test]
