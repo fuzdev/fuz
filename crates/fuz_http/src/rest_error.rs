@@ -43,6 +43,18 @@ pub const INVALID_JSON_BODY_REASON: &str = "invalid_json_body";
 /// input schema. Mirrors `fuz_app`'s `ERROR_INVALID_REQUEST_BODY`.
 pub const INVALID_REQUEST_BODY_REASON: &str = "invalid_request_body";
 
+/// Canonical reason for a request whose method its path doesn't serve.
+/// Mirrors `fuz_app`'s `ERROR_METHOD_NOT_ALLOWED`.
+pub const METHOD_NOT_ALLOWED_REASON: &str = "method_not_allowed";
+
+/// Canonical reason for a path under the auth scope that no route serves.
+/// Mirrors `fuz_app`'s `ERROR_ROUTE_NOT_FOUND`.
+///
+/// Distinct from a handler's own
+/// `not_found`, so a client — or a test asking whether a route is mounted —
+/// can tell a missing route from a missing row.
+pub const ROUTE_NOT_FOUND_REASON: &str = "route_not_found";
+
 /// Canonical reason for an unexpected server-side failure. Mirrors the
 /// `{error: 'internal_error'}` body `fuz_app`'s route-spec error mapper
 /// (`http/route_spec.ts`) returns for a generic caught `Error`.
@@ -149,6 +161,36 @@ pub fn invalid_route_params_response() -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(serde_json::json!({ "error": INVALID_ROUTE_PARAMS_REASON })),
+    )
+        .into_response()
+}
+
+/// Build the canonical `405` method-not-allowed body.
+///
+/// Flat `{"error": "method_not_allowed"}`, the body of `fuz_app`'s
+/// unmatched-route handler for a method its path doesn't serve. It carries no
+/// `Allow` of its own: [`crate::compose_stack`] installs it as every routed
+/// path's method fallback, and axum's method router adds the `Allow` header
+/// listing that path's methods.
+#[must_use]
+pub fn method_not_allowed_response() -> Response {
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        Json(serde_json::json!({ "error": METHOD_NOT_ALLOWED_REASON })),
+    )
+        .into_response()
+}
+
+/// Build the canonical `404` route-not-found response.
+///
+/// Flat `{"error": "route_not_found"}` — what a path under the auth scope
+/// that no route serves answers on both spines, JSON like every other
+/// refusal there.
+#[must_use]
+pub fn route_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": ROUTE_NOT_FOUND_REASON })),
     )
         .into_response()
 }

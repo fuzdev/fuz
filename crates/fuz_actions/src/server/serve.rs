@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use fuz_auth::ConnectionCloser;
@@ -75,23 +75,44 @@ pub fn probe_router(server_name: &'static str) -> Router {
     )
 }
 
-/// The `404` every unrouted path answers.
+/// The body of the `404` an unrouted path outside the auth scope answers —
+/// `fuz_app`'s `NOT_FOUND_TEXT`, byte for byte, so the two spines answer one
+/// plain-text `404`.
+pub const NOT_FOUND_TEXT: &str = "404 Not Found";
+
+/// The `404` of a path outside the auth scope that nothing serves:
+/// [`NOT_FOUND_TEXT`] as `text/plain`.
 #[must_use]
 pub fn not_found_response() -> Response {
-    (StatusCode::NOT_FOUND, "not found\n").into_response()
+    (StatusCode::NOT_FOUND, NOT_FOUND_TEXT).into_response()
 }
 
-async fn not_found() -> Response {
-    not_found_response()
+/// The `404` of a path no route serves, by where the raw path is.
+///
+/// Under the auth scope ([`fuz_auth::auth_middleware_applies`]) the JSON
+/// [`fuz_http::route_not_found_response`], like every other refusal there,
+/// and [`not_found_response`] elsewhere. Twin of `fuz_app`'s unmatched-route
+/// handler, which decides by the same scope over the same raw path.
+#[must_use]
+pub fn unmatched_route_response(path: &str) -> Response {
+    if fuz_auth::auth_middleware_applies(path) {
+        fuz_http::route_not_found_response()
+    } else {
+        not_found_response()
+    }
 }
 
-/// The fallback group: [`not_found_response`] for every unrouted path, behind
+async fn unmatched_route(uri: Uri) -> Response {
+    unmatched_route_response(uri.path())
+}
+
+/// The fallback group: [`unmatched_route_response`] for every unrouted path, behind
 /// the 1 MiB cap and the origin check, like the routed groups.
 #[must_use]
 pub fn fallback_group() -> RouteGroup {
     RouteGroup::new(
         "fallback",
-        Router::new().fallback(not_found),
+        Router::new().fallback(unmatched_route),
         BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
     )
 }
@@ -323,8 +344,37 @@ mod tests {
         );
         assert_eq!(
             send("GET", "/nope", &[]).await,
-            (StatusCode::NOT_FOUND, "not found\n".to_owned())
+            (StatusCode::NOT_FOUND, NOT_FOUND_TEXT.to_owned())
         );
+    }
+
+    /// An unrouted path's 404 is JSON under the auth scope, read on the raw
+    /// path, and the one plain text elsewhere.
+    #[tokio::test]
+    async fn an_unrouted_path_answers_by_its_place_in_the_auth_scope() {
+        for path in [
+            "/api",
+            "/api/",
+            "/api/nope",
+            "/api//x",
+            "/api/%2e%2e/health",
+        ] {
+            assert_eq!(
+                send("GET", path, &[]).await,
+                (
+                    StatusCode::NOT_FOUND,
+                    r#"{"error":"route_not_found"}"#.to_owned()
+                ),
+                "{path}"
+            );
+        }
+        for path in ["/apix", "/API/x", "/%61pi/x", "//api/x", "/api%2Fx"] {
+            assert_eq!(
+                send("GET", path, &[]).await,
+                (StatusCode::NOT_FOUND, NOT_FOUND_TEXT.to_owned()),
+                "{path}"
+            );
+        }
     }
 
     #[tokio::test]

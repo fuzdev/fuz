@@ -21,7 +21,8 @@
 //!   actor → role 403, then the upgrade itself (404 for a request that asks
 //!   for no upgrade, axum's own refusal for a malformed one) — matches the
 //!   TS twin's middleware chain ahead of its upgrade helper. Any method but
-//!   `GET` (and the `HEAD` axum serves through it) is a 404. The acting-actor phase runs on every
+//!   `GET` (and the `HEAD` axum serves through it) is the stack's `405`
+//!   (`Allow: GET,HEAD`, [`fuz_http::compose_stack`]). The acting-actor phase runs on every
 //!   endpoint, gated or not: the `?acting=` query selector (first
 //!   occurrence; a malformed value reads as omitted, as the twin's
 //!   `parse_acting` reads it, but a query holding an escape that doesn't
@@ -120,7 +121,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
-use axum::extract::{Extension, RawQuery, State};
+use axum::extract::{Extension, OriginalUri, RawQuery, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -298,7 +299,8 @@ struct WsHandlerState {
 /// Build an `axum::Router` exposing `GET /ws` (consumer remounts).
 ///
 /// Only `GET` is routed (axum serves `HEAD` through it); any other method on
-/// the path is a 404, as on the twin, whose guards ride its `GET` route.
+/// the path is the `405` every routed path answers through
+/// [`fuz_http::compose_stack`], as on the twin.
 ///
 /// Mount path is the consumer's choice — typically `/api/ws` to match
 /// `fuz_app`'s convention. The body cap, origin check, client-IP resolution,
@@ -352,10 +354,7 @@ pub fn register_action_ws_with_options(state: WsRouteState, options: ActionWsOpt
         Arc::clone(&pending),
     ));
     Router::new()
-        .route(
-            "/ws",
-            get(ws_handler).fallback(|| async { crate::server::not_found_response() }),
-        )
+        .route("/ws", get(ws_handler))
         .with_state(WsHandlerState {
             route: state,
             pending,
@@ -508,10 +507,11 @@ fn asks_for_websocket(headers: &HeaderMap) -> bool {
 /// The gates run before the upgrade is looked at, as the twin's middleware
 /// runs ahead of its upgrade helper: a refused caller hears its 403 / 401 /
 /// 400 whether or not it asked to upgrade, and one the gates admit that did
-/// not ask is a 404. Any other method on the path is a 404 too.
+/// not ask is the path's unrouted `404` ([`crate::server::unmatched_route_response`]).
 async fn ws_handler(
     State(state): State<WsHandlerState>,
     RawQuery(query): RawQuery,
+    OriginalUri(uri): OriginalUri,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
@@ -624,12 +624,15 @@ async fn ws_handler(
 
     // Only now the upgrade itself, past every gate: a request that is no
     // WebSocket upgrade at all (no `Upgrade: websocket`) is the path's 404 —
-    // what the twin's upgrade helper answers by passing on to the not-found
-    // handler — and one that asks to upgrade but is malformed (a missing key,
-    // a wrong version) is axum's own refusal.
+    // what the twin's upgrade helper answers by passing on to its unmatched-
+    // route handler, by the path's place in the auth scope — and one that asks
+    // to upgrade but is malformed (a missing key, a wrong version) is axum's
+    // own refusal.
     let ws = match ws {
         Ok(ws) => ws,
-        Err(_) if !asks_for_websocket(&headers) => return crate::server::not_found_response(),
+        Err(_) if !asks_for_websocket(&headers) => {
+            return crate::server::unmatched_route_response(uri.path());
+        }
         Err(rejection) => return rejection.into_response(),
     };
     // Held from before the handshake answers until the upgraded future ends,

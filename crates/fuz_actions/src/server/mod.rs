@@ -46,7 +46,8 @@ pub use backend::{
 };
 pub use route_states::{AuthRestRoutes, compile_action_registry};
 pub use serve::{
-    ServeOptions, SpineRunOptions, UpkeepOptions, UpkeepTask, boot_only, boot_only_router,
-    fallback_group, not_found_response, probe_router, serve_until_shutdown, spawn_upkeep,
+    NOT_FOUND_TEXT, ServeOptions, SpineRunOptions, UpkeepOptions, UpkeepTask, boot_only,
+    boot_only_router, fallback_group, not_found_response, probe_router, serve_until_shutdown,
+    spawn_upkeep, unmatched_route_response,
 };
 pub use startup_error::{REQUIRED_TRANSACTION_ISOLATION, StartupError};

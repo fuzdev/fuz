@@ -426,6 +426,17 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   mounts every gate; none is mounted by hand. It returns a `GatedRouter`, the
   only thing `serve_with_shutdown` serves, and logs how client IPs resolve
   (trusted proxies or the TCP peer), so no server repeats it.
+- **A request no route answers gets one answer, the TS twin's.** Every
+  group's routed paths answer a method they don't serve with `405
+  {"error":"method_not_allowed"}` and `Allow`, behind the group's gates and
+  ahead of authentication; the composed router keeps `Allow` only on a `405`
+  (axum would put it on a gate's `403` or `413` too). So route each path in
+  one group: two groups' method routers for one path don't merge, and
+  `compose_stack` panics at boot. `fuz_actions`' `fallback_group` answers an
+  unmatched path through `unmatched_route_response`: `404
+  {"error":"route_not_found"}` under the auth scope, the plain-text
+  `404 Not Found` elsewhere, decided on the raw path. A server with its own
+  fallback hands an unmatched `/api/` path to that function.
 - **One strict reader per gate header** (`request_headers`, twin of
   fuz_app's `http/request_headers.ts`), over every line of the header:
   `read_origin`, `read_host` and `read_content_type` each answer a

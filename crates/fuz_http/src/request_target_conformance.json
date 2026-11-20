@@ -877,7 +877,9 @@
 			"method": "GET",
 			"target": "{account_status_path}?acting=%FF",
 			"as": "keeper_session",
-			"requires": "account_status",
+			"requires": [
+				"account_status"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_query_params"
@@ -888,7 +890,9 @@
 			"method": "GET",
 			"target": "{account_status_path}?junk=%FF",
 			"as": "keeper_session",
-			"requires": "account_status",
+			"requires": [
+				"account_status"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_query_params"
@@ -899,7 +903,9 @@
 			"method": "GET",
 			"target": "{account_status_path}?acting=%FF",
 			"as": "none",
-			"requires": "account_status",
+			"requires": [
+				"account_status"
+			],
 			"expect": {
 				"status": 401,
 				"error": "authentication_required"
@@ -910,7 +916,9 @@
 			"method": "GET",
 			"target": "{account_status_path}?acting=%C3%A9",
 			"as": "keeper_session",
-			"requires": "account_status",
+			"requires": [
+				"account_status"
+			],
 			"expect": {
 				"status": 200
 			}
@@ -921,7 +929,9 @@
 			"target": "{ws_path}?acting=%FF",
 			"as": "keeper_session",
 			"upgrade": true,
-			"requires": "ws",
+			"requires": [
+				"ws"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_query_params"
@@ -933,7 +943,9 @@
 			"target": "{ws_path}?junk=%G0",
 			"as": "keeper_session",
 			"upgrade": true,
-			"requires": "ws",
+			"requires": [
+				"ws"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_query_params"
@@ -945,7 +957,9 @@
 			"target": "{ws_path}?acting=%FF",
 			"as": "none",
 			"upgrade": true,
-			"requires": "ws",
+			"requires": [
+				"ws"
+			],
 			"expect": {
 				"status": 401,
 				"error": "authentication_required"
@@ -957,7 +971,9 @@
 			"target": "{ws_path}?acting=%C3%A9",
 			"as": "keeper_session",
 			"upgrade": true,
-			"requires": "ws",
+			"requires": [
+				"ws"
+			],
 			"expect": {
 				"status": 101
 			}
@@ -967,7 +983,9 @@
 			"method": "GET",
 			"target": "/api/facts/%FF",
 			"as": "keeper_session",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -978,7 +996,9 @@
 			"method": "GET",
 			"target": "/api/facts/%G0",
 			"as": "keeper_session",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -989,7 +1009,9 @@
 			"method": "GET",
 			"target": "/api/facts/%FF",
 			"as": "none",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -1000,7 +1022,9 @@
 			"method": "GET",
 			"target": "/api/facts/blake3%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"as": "keeper_session",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 404
 			}
@@ -1010,7 +1034,9 @@
 			"method": "GET",
 			"target": "/api/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?acting=%FF",
 			"as": "keeper_session",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_query_params"
@@ -1021,7 +1047,9 @@
 			"method": "GET",
 			"target": "/api/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?junk=%C3",
 			"as": "keeper_session",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_query_params"
@@ -1032,7 +1060,9 @@
 			"method": "GET",
 			"target": "/api/facts/%FF?acting=%FF",
 			"as": "keeper_session",
-			"requires": "fact_serving_admin_hash",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -1043,7 +1073,9 @@
 			"method": "GET",
 			"target": "/api/cells/%FF/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"as": "none",
-			"requires": "fact_serving",
+			"requires": [
+				"fact_serving"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -1054,7 +1086,9 @@
 			"method": "GET",
 			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/%C3%A9%FF",
 			"as": "none",
-			"requires": "fact_serving",
+			"requires": [
+				"fact_serving"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -1065,7 +1099,9 @@
 			"method": "GET",
 			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/%",
 			"as": "none",
-			"requires": "fact_serving",
+			"requires": [
+				"fact_serving"
+			],
 			"expect": {
 				"status": 400,
 				"error": "invalid_route_params"
@@ -1076,7 +1112,9 @@
 			"method": "GET",
 			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"as": "none",
-			"requires": "fact_serving",
+			"requires": [
+				"fact_serving"
+			],
 			"expect": {
 				"status": 404
 			}
@@ -1098,10 +1136,2630 @@
 			"method": "GET",
 			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?junk=%FF",
 			"as": "none",
-			"requires": "fact_serving",
+			"requires": [
+				"fact_serving"
+			],
 			"expect": {
 				"status": 404
 			}
+		},
+		{
+			"name": "routing: rpc × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × HEAD with a foreign Origin → 403",
+			"method": "HEAD",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"media": "json",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × POST with a foreign Origin → 403",
+			"method": "POST",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × PUT as none → 405",
+			"method": "PUT",
+			"target": "{rpc_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × PUT as keeper_session → 405",
+			"method": "PUT",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × PUT with a foreign Origin → 403",
+			"method": "PUT",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × PATCH as none → 405",
+			"method": "PATCH",
+			"target": "{rpc_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × PATCH as keeper_session → 405",
+			"method": "PATCH",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × PATCH with a foreign Origin → 403",
+			"method": "PATCH",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × DELETE as none → 405",
+			"method": "DELETE",
+			"target": "{rpc_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × DELETE as keeper_session → 405",
+			"method": "DELETE",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × DELETE with a foreign Origin → 403",
+			"method": "DELETE",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × OPTIONS as none → 405",
+			"method": "OPTIONS",
+			"target": "{rpc_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × OPTIONS as keeper_session → 405",
+			"method": "OPTIONS",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: rpc × OPTIONS with a foreign Origin → 403",
+			"method": "OPTIONS",
+			"target": "{rpc_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × PUT with an invalid session cookie → 405",
+			"method": "PUT",
+			"target": "{rpc_path}",
+			"as": "invalid_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"POST",
+					"HEAD"
+				],
+				"clears_session": true
+			}
+		},
+		{
+			"name": "routing: rpc × PUT with a foreign Host → 403",
+			"method": "PUT",
+			"target": "{rpc_path}",
+			"as": "none",
+			"host": "foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_host",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: rpc × PUT declaring a body over the cap → 413",
+			"method": "PUT",
+			"target": "{rpc_path}",
+			"as": "none",
+			"headers": [
+				"content-length: 100000000"
+			],
+			"expect": {
+				"status": 413,
+				"error": "payload_too_large",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × HEAD with a foreign Origin → 403",
+			"method": "HEAD",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"media": "json",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × POST as none → 405",
+			"method": "POST",
+			"target": "{account_status_path}",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × POST as keeper_session → 405",
+			"method": "POST",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × POST with a foreign Origin → 403",
+			"method": "POST",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PUT as none → 405",
+			"method": "PUT",
+			"target": "{account_status_path}",
+			"as": "none",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PUT as keeper_session → 405",
+			"method": "PUT",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PUT with a foreign Origin → 403",
+			"method": "PUT",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PATCH as none → 405",
+			"method": "PATCH",
+			"target": "{account_status_path}",
+			"as": "none",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PATCH as keeper_session → 405",
+			"method": "PATCH",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PATCH with a foreign Origin → 403",
+			"method": "PATCH",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × DELETE as none → 405",
+			"method": "DELETE",
+			"target": "{account_status_path}",
+			"as": "none",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × DELETE as keeper_session → 405",
+			"method": "DELETE",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × DELETE with a foreign Origin → 403",
+			"method": "DELETE",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × OPTIONS as none → 405",
+			"method": "OPTIONS",
+			"target": "{account_status_path}",
+			"as": "none",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × OPTIONS as keeper_session → 405",
+			"method": "OPTIONS",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × OPTIONS with a foreign Origin → 403",
+			"method": "OPTIONS",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: account status (GET only) × PUT with an invalid session cookie → 405",
+			"method": "PUT",
+			"target": "{account_status_path}",
+			"as": "invalid_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				],
+				"clears_session": true
+			}
+		},
+		{
+			"name": "routing: login (POST only) × GET as none → 405",
+			"method": "GET",
+			"target": "{account_login_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × GET as keeper_session → 405",
+			"method": "GET",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × HEAD as none → 405",
+			"method": "HEAD",
+			"target": "{account_login_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"allow": [
+					"POST"
+				],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: login (POST only) × HEAD as keeper_session → 405",
+			"method": "HEAD",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"allow": [
+					"POST"
+				],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: login (POST only) × HEAD with a foreign Origin → 403",
+			"method": "HEAD",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"media": "json",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × POST with a foreign Origin → 403",
+			"method": "POST",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PUT as none → 405",
+			"method": "PUT",
+			"target": "{account_login_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PUT as keeper_session → 405",
+			"method": "PUT",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PUT with a foreign Origin → 403",
+			"method": "PUT",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PATCH as none → 405",
+			"method": "PATCH",
+			"target": "{account_login_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PATCH as keeper_session → 405",
+			"method": "PATCH",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PATCH with a foreign Origin → 403",
+			"method": "PATCH",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × DELETE as none → 405",
+			"method": "DELETE",
+			"target": "{account_login_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × DELETE as keeper_session → 405",
+			"method": "DELETE",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × DELETE with a foreign Origin → 403",
+			"method": "DELETE",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × OPTIONS as none → 405",
+			"method": "OPTIONS",
+			"target": "{account_login_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × OPTIONS as keeper_session → 405",
+			"method": "OPTIONS",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				]
+			}
+		},
+		{
+			"name": "routing: login (POST only) × OPTIONS with a foreign Origin → 403",
+			"method": "OPTIONS",
+			"target": "{account_login_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: login (POST only) × PUT with an invalid session cookie → 405",
+			"method": "PUT",
+			"target": "{account_login_path}",
+			"as": "invalid_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"POST"
+				],
+				"clears_session": true
+			}
+		},
+		{
+			"name": "routing: ws path × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × HEAD with a foreign Origin → 403",
+			"method": "HEAD",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"media": "json",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × POST as none → 405",
+			"method": "POST",
+			"target": "{ws_path}",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × POST as keeper_session → 405",
+			"method": "POST",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × POST with a foreign Origin → 403",
+			"method": "POST",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × PUT as none → 405",
+			"method": "PUT",
+			"target": "{ws_path}",
+			"as": "none",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × PUT as keeper_session → 405",
+			"method": "PUT",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × PUT with a foreign Origin → 403",
+			"method": "PUT",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × PATCH as none → 405",
+			"method": "PATCH",
+			"target": "{ws_path}",
+			"as": "none",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × PATCH as keeper_session → 405",
+			"method": "PATCH",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × PATCH with a foreign Origin → 403",
+			"method": "PATCH",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × DELETE as none → 405",
+			"method": "DELETE",
+			"target": "{ws_path}",
+			"as": "none",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × DELETE as keeper_session → 405",
+			"method": "DELETE",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × DELETE with a foreign Origin → 403",
+			"method": "DELETE",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × OPTIONS as none → 405",
+			"method": "OPTIONS",
+			"target": "{ws_path}",
+			"as": "none",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × OPTIONS as keeper_session → 405",
+			"method": "OPTIONS",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: ws path × OPTIONS with a foreign Origin → 403",
+			"method": "OPTIONS",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × PUT with an invalid session cookie → 405",
+			"method": "PUT",
+			"target": "{ws_path}",
+			"as": "invalid_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				],
+				"clears_session": true
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × HEAD with a foreign Origin → 403",
+			"method": "HEAD",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"media": "json",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × POST as none → 405",
+			"method": "POST",
+			"target": "{sse_path}",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × POST as keeper_session → 405",
+			"method": "POST",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × POST with a foreign Origin → 403",
+			"method": "POST",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PUT as none → 405",
+			"method": "PUT",
+			"target": "{sse_path}",
+			"as": "none",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PUT as keeper_session → 405",
+			"method": "PUT",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PUT with a foreign Origin → 403",
+			"method": "PUT",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PATCH as none → 405",
+			"method": "PATCH",
+			"target": "{sse_path}",
+			"as": "none",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PATCH as keeper_session → 405",
+			"method": "PATCH",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PATCH with a foreign Origin → 403",
+			"method": "PATCH",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × DELETE as none → 405",
+			"method": "DELETE",
+			"target": "{sse_path}",
+			"as": "none",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × DELETE as keeper_session → 405",
+			"method": "DELETE",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × DELETE with a foreign Origin → 403",
+			"method": "DELETE",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × OPTIONS as none → 405",
+			"method": "OPTIONS",
+			"target": "{sse_path}",
+			"as": "none",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × OPTIONS as keeper_session → 405",
+			"method": "OPTIONS",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × OPTIONS with a foreign Origin → 403",
+			"method": "OPTIONS",
+			"target": "{sse_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: audit stream (SSE) × PUT with an invalid session cookie → 405",
+			"method": "PUT",
+			"target": "{sse_path}",
+			"as": "invalid_session",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				],
+				"clears_session": true
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × HEAD with a foreign Origin → 403",
+			"method": "HEAD",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"media": "json",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × POST as none → 405",
+			"method": "POST",
+			"target": "{health_path}",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × POST as keeper_session → 405",
+			"method": "POST",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × POST with a foreign Origin → 403",
+			"method": "POST",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PUT as none → 405",
+			"method": "PUT",
+			"target": "{health_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PUT as keeper_session → 405",
+			"method": "PUT",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PUT with a foreign Origin → 403",
+			"method": "PUT",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PATCH as none → 405",
+			"method": "PATCH",
+			"target": "{health_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PATCH as keeper_session → 405",
+			"method": "PATCH",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PATCH with a foreign Origin → 403",
+			"method": "PATCH",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × DELETE as none → 405",
+			"method": "DELETE",
+			"target": "{health_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × DELETE as keeper_session → 405",
+			"method": "DELETE",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × DELETE with a foreign Origin → 403",
+			"method": "DELETE",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × OPTIONS as none → 405",
+			"method": "OPTIONS",
+			"target": "{health_path}",
+			"as": "none",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × OPTIONS as keeper_session → 405",
+			"method": "OPTIONS",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × OPTIONS with a foreign Origin → 403",
+			"method": "OPTIONS",
+			"target": "{health_path}",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: health (outside /api) × PUT with an invalid session cookie → 405",
+			"method": "PUT",
+			"target": "{health_path}",
+			"as": "invalid_session",
+			"expect": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				],
+				"clears_session": false
+			}
+		},
+		{
+			"name": "routing: account status × HEAD as keeper_session → 200",
+			"method": "HEAD",
+			"target": "{account_status_path}",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 200,
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: account status × HEAD as none → 401",
+			"method": "HEAD",
+			"target": "{account_status_path}",
+			"as": "none",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 401,
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: health × HEAD → 200",
+			"method": "HEAD",
+			"target": "{health_path}",
+			"as": "none",
+			"expect": {
+				"status": 200,
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: audit stream × HEAD as none → 401",
+			"method": "HEAD",
+			"target": "{sse_path}",
+			"as": "none",
+			"requires": [
+				"sse"
+			],
+			"expect": {
+				"status": 401,
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: ws path × GET without upgrade as none → 401",
+			"method": "GET",
+			"target": "{ws_path}",
+			"as": "none",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 401,
+				"error": "authentication_required"
+			}
+		},
+		{
+			"name": "routing: ws path × GET without upgrade, admitted by the gates → 404",
+			"method": "GET",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: ws path × HEAD without upgrade, admitted by the gates → 404",
+			"method": "HEAD",
+			"target": "{ws_path}",
+			"as": "keeper_session",
+			"requires": [
+				"ws"
+			],
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × GET as none → 404",
+			"method": "GET",
+			"target": "/api/no_such_route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × HEAD as none → 404",
+			"method": "HEAD",
+			"target": "/api/no_such_route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × POST as none → 404",
+			"method": "POST",
+			"target": "/api/no_such_route",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × PUT as none → 404",
+			"method": "PUT",
+			"target": "/api/no_such_route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × OPTIONS as none → 404",
+			"method": "OPTIONS",
+			"target": "/api/no_such_route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × GET as keeper_session → 404",
+			"method": "GET",
+			"target": "/api/no_such_route",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "/api/no_such_route",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the bare /api × GET as none → 404",
+			"method": "GET",
+			"target": "/api",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the bare /api × HEAD as none → 404",
+			"method": "HEAD",
+			"target": "/api",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: the bare /api × POST as none → 404",
+			"method": "POST",
+			"target": "/api",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the bare /api × PUT as none → 404",
+			"method": "PUT",
+			"target": "/api",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the bare /api × OPTIONS as none → 404",
+			"method": "OPTIONS",
+			"target": "/api",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the bare /api × GET as keeper_session → 404",
+			"method": "GET",
+			"target": "/api",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the bare /api × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "/api",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: /api/ × GET as none → 404",
+			"method": "GET",
+			"target": "/api/",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: /api/ × HEAD as none → 404",
+			"method": "HEAD",
+			"target": "/api/",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: /api/ × POST as none → 404",
+			"method": "POST",
+			"target": "/api/",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: /api/ × PUT as none → 404",
+			"method": "PUT",
+			"target": "/api/",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: /api/ × OPTIONS as none → 404",
+			"method": "OPTIONS",
+			"target": "/api/",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: /api/ × GET as keeper_session → 404",
+			"method": "GET",
+			"target": "/api/",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: /api/ × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "/api/",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × GET as none → 404",
+			"method": "GET",
+			"target": "/api/no/such/route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × HEAD as none → 404",
+			"method": "HEAD",
+			"target": "/api/no/such/route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "json"
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × POST as none → 404",
+			"method": "POST",
+			"target": "/api/no/such/route",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × PUT as none → 404",
+			"method": "PUT",
+			"target": "/api/no/such/route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × OPTIONS as none → 404",
+			"method": "OPTIONS",
+			"target": "/api/no/such/route",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × GET as keeper_session → 404",
+			"method": "GET",
+			"target": "/api/no/such/route",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a deep unmatched path under /api × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "/api/no/such/route",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × GET as none → 404",
+			"method": "GET",
+			"target": "/no_such_path",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × HEAD as none → 404",
+			"method": "HEAD",
+			"target": "/no_such_path",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "text"
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × POST as none → 404",
+			"method": "POST",
+			"target": "/no_such_path",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × PUT as none → 404",
+			"method": "PUT",
+			"target": "/no_such_path",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × OPTIONS as none → 404",
+			"method": "OPTIONS",
+			"target": "/no_such_path",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × GET as keeper_session → 404",
+			"method": "GET",
+			"target": "/no_such_path",
+			"as": "keeper_session",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "/no_such_path",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × GET as none → 404",
+			"method": "GET",
+			"target": "/apix",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × HEAD as none → 404",
+			"method": "HEAD",
+			"target": "/apix",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"allow": [],
+				"media": "text"
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × POST as none → 404",
+			"method": "POST",
+			"target": "/apix",
+			"as": "none",
+			"headers": [
+				"content-type: application/json"
+			],
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × PUT as none → 404",
+			"method": "PUT",
+			"target": "/apix",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × OPTIONS as none → 404",
+			"method": "OPTIONS",
+			"target": "/apix",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × GET as keeper_session → 404",
+			"method": "GET",
+			"target": "/apix",
+			"as": "keeper_session",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: the prefix letters without the slash × GET with a foreign Origin → 403",
+			"method": "GET",
+			"target": "/apix",
+			"as": "keeper_session",
+			"origin": "http://foreign.invalid",
+			"expect": {
+				"status": 403,
+				"error": "forbidden_origin",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an unmatched path under /api × GET with an invalid session cookie → 404, cleared",
+			"method": "GET",
+			"target": "/api/no_such_route",
+			"as": "invalid_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": [],
+				"clears_session": true
+			}
+		},
+		{
+			"name": "routing: an unmatched path outside /api × GET with an invalid session cookie → 404, not cleared",
+			"method": "GET",
+			"target": "/no_such_path",
+			"as": "invalid_session",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": [],
+				"clears_session": false
+			}
+		},
+		{
+			"name": "routing: a trailing slash of a routed path × GET → 404",
+			"method": "GET",
+			"target": "{account_status_path}/",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a doubled slash inside of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/api//account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a doubled leading slash of a routed path × GET → 404",
+			"method": "GET",
+			"target": "//api/account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status",
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a case variant of the prefix of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/API/account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status",
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: a case variant below the prefix of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/api/Account/status",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an encoded letter in the prefix of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/%61pi/account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status",
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an encoded letter below the prefix of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/api/%61ccount/status",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an encoded slash after the prefix of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/api%2Faccount/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status",
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an encoded letter in a fact route literal of a routed path × GET → 404",
+			"method": "GET",
+			"target": "/api/%66acts/%FF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an encoded letter in the prefix of the rpc path × PUT → 404, not 405",
+			"method": "PUT",
+			"target": "/%61pi/rpc",
+			"as": "none",
+			"requires": [
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: an encoded letter below the prefix of the rpc path × PUT → 404, not 405",
+			"method": "PUT",
+			"target": "/api/%72pc",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			}
+		},
+		{
+			"name": "routing: dot segments: a `..` segment out of /api × GET",
+			"method": "GET",
+			"target": "/api/../health",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: an encoded `..` segment out of /api × GET",
+			"method": "GET",
+			"target": "/api/%2e%2e/health",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: an encoded `..` segment, upper case out of /api × GET",
+			"method": "GET",
+			"target": "/api/%2E%2E/health",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: a half-encoded `..` segment out of /api × GET",
+			"method": "GET",
+			"target": "/api/.%2e/health",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: a `..` segment out of /api × PUT",
+			"method": "PUT",
+			"target": "/api/../health",
+			"as": "none",
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 405,
+				"error": "method_not_allowed",
+				"allow": [
+					"GET",
+					"HEAD"
+				]
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: a `.` segment before /api × GET",
+			"method": "GET",
+			"target": "/./api/account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status",
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: a `.` segment under /api × GET",
+			"method": "GET",
+			"target": "/api/./account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status"
+			],
+			"expect": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: a `..` segment into /api × GET",
+			"method": "GET",
+			"target": "/x/../api/account/status",
+			"as": "keeper_session",
+			"requires": [
+				"account_status",
+				"spine_fallback"
+			],
+			"expect": {
+				"status": 404,
+				"text": "404 Not Found",
+				"allow": []
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 200
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: an encoded `..` as the bare fact hash",
+			"method": "GET",
+			"target": "/api/facts/%2e%2e",
+			"as": "keeper_session",
+			"requires": [
+				"fact_serving_admin_hash"
+			],
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 404,
+				"error": "route_not_found",
+				"allow": []
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
+		},
+		{
+			"name": "routing: dot segments: an encoded `..` as the cell id of a cell fact",
+			"method": "GET",
+			"target": "/api/cells/%2e%2e/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"as": "none",
+			"requires": [
+				"fact_serving"
+			],
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			},
+			"expect_where_dot_segments_resolved": {
+				"status": 401,
+				"error": "authentication_required"
+			},
+			"note": "each runtime as it reads dot segments (`runtime_resolves_dot_segments`)"
 		}
 	]
 }

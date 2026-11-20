@@ -178,12 +178,13 @@ pub use request_target::{PercentDecodeError, RouteParams, read_path_segment, rea
 pub use rest_error::{
     AUTHENTICATION_REQUIRED_REASON, INSUFFICIENT_PERMISSIONS_REASON, INTERNAL_ERROR_REASON,
     INVALID_JSON_BODY_REASON, INVALID_QUERY_PARAMS_REASON, INVALID_REQUEST_BODY_REASON,
-    INVALID_ROUTE_PARAMS_REASON, PAYLOAD_TOO_LARGE_REASON, SERVICE_UNAVAILABLE_REASON,
-    authentication_required_response, db_unavailable_response, db_unavailable_response_with_source,
+    INVALID_ROUTE_PARAMS_REASON, METHOD_NOT_ALLOWED_REASON, PAYLOAD_TOO_LARGE_REASON,
+    ROUTE_NOT_FOUND_REASON, SERVICE_UNAVAILABLE_REASON, authentication_required_response,
+    db_unavailable_response, db_unavailable_response_with_source,
     insufficient_permissions_response, internal_error_response,
     internal_error_response_with_source, invalid_json_body_response, invalid_query_params_response,
-    invalid_request_body_response, invalid_route_params_response, payload_too_large_response,
-    rest_error_response,
+    invalid_request_body_response, invalid_route_params_response, method_not_allowed_response,
+    payload_too_large_response, rest_error_response, route_not_found_response,
 };
 pub use server_env::{
     ALLOWED_ORIGINS_VAR, BaseServerEnv, DB_AUDIT_CHECKOUT_TIMEOUT_VAR, DB_CHECKOUT_TIMEOUT_MAX_MS,

@@ -543,23 +543,37 @@ async fn a_failed_credential_checkout_answers_the_503_not_an_anonymous_call() {
     assert_eq!(&bytes[..], br#"{"error":"service_unavailable"}"#);
 }
 
-/// **The WS path serves `GET` alone, gates first.** Any other method is a 404
-/// whoever asks; a `GET` — or a `HEAD`, which axum serves through it — runs
-/// the gates before the upgrade is looked at, so an anonymous one is the 401
-/// with or without upgrade headers, never the extractor's 400 / 426. The twin
-/// answers the same: its guards ride its `GET` route ahead of the upgrade
-/// helper.
+/// **The WS path serves `GET` alone, gates first.** Composed through the
+/// stack, any other method is the `405` `method_not_allowed` with
+/// `Allow: GET,HEAD`, whoever asks; a `GET` — or a `HEAD`, which axum serves
+/// through it — runs the gates before the upgrade is looked at, so an
+/// anonymous one is the 401 with or without upgrade headers, never the
+/// extractor's 400 / 426. The twin answers the same: its guards ride its
+/// `GET` route ahead of the upgrade helper, and its unmatched-route handler
+/// answers the 405.
 #[tokio::test]
 async fn the_ws_path_serves_get_alone_and_gates_before_the_upgrade() {
     use tower::ServiceExt as _;
 
     let dispatch = dead_pool_rpc_state(ActionRegistry::compile(PROTOCOL_ACTION_SPECS()).unwrap());
-    let router = fuz_actions::register_action_ws(fuz_actions::WsRouteState {
-        dispatch,
-        connection_registry: Arc::new(fuz_realtime::ConnectionRegistry::new()),
-        required_roles: Vec::new(),
-    });
-    let status = |method: &'static str, upgrade: bool| {
+    let router = fuz_http::compose_stack(
+        [fuz_http::RouteGroup::new(
+            "ws",
+            fuz_actions::register_action_ws(fuz_actions::WsRouteState {
+                dispatch,
+                connection_registry: Arc::new(fuz_realtime::ConnectionRegistry::new()),
+                required_roles: Vec::new(),
+            }),
+            fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES),
+        )],
+        fuz_actions::server::fallback_group(),
+        &fuz_http::StackOptions::new(
+            fuz_http::AllowedOrigins::parse(fuz_testing::TESTING_ALLOWED_ORIGIN).unwrap(),
+            Arc::new(Vec::new()),
+        ),
+    )
+    .into_router_for_testing();
+    let answer = |method: &'static str, upgrade: bool| {
         let router = router.clone();
         async move {
             let mut request = axum::http::Request::builder().method(method).uri("/ws");
@@ -570,17 +584,33 @@ async fn the_ws_path_serves_get_alone_and_gates_before_the_upgrade() {
                     .header("sec-websocket-version", "13")
                     .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
             }
-            router
-                .oneshot(request.body(axum::body::Body::empty()).unwrap())
+            let mut request = request.body(axum::body::Body::empty()).unwrap();
+            request.extensions_mut().insert(axum::extract::ConnectInfo(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 40000)),
+            ));
+            let response = router.oneshot(request).await.unwrap();
+            let status = response.status().as_u16();
+            let allow = response
+                .headers()
+                .get(axum::http::header::ALLOW)
+                .map(|v| v.to_str().unwrap().to_owned());
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
-                .unwrap()
-                .status()
-                .as_u16()
+                .unwrap();
+            (status, allow, String::from_utf8_lossy(&body).into_owned())
         }
     };
-    for method in ["POST", "PUT", "DELETE", "PATCH"] {
-        assert_eq!(status(method, true).await, 404, "{method}");
-        assert_eq!(status(method, false).await, 404, "{method}");
+    let status = |method: &'static str, upgrade: bool| {
+        let answer = &answer;
+        async move { answer(method, upgrade).await.0 }
+    };
+    for method in ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"] {
+        for upgrade in [true, false] {
+            let (status, allow, body) = answer(method, upgrade).await;
+            assert_eq!(status, 405, "{method}");
+            assert_eq!(allow.as_deref(), Some("GET,HEAD"), "{method}");
+            assert_eq!(body, r#"{"error":"method_not_allowed"}"#, "{method}");
+        }
     }
     assert_eq!(
         status("GET", true).await,

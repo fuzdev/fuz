@@ -78,12 +78,15 @@ pub const AUTH_MIDDLEWARE_PATH: &str = "/api/*";
 /// matches `/api/*` against.
 ///
 /// `path` is a request's `Uri::path`, as the router reads it: raw — not
-/// percent-decoded, dot segments kept. The TS twin's clear follows its own
-/// router's reading instead (percent-decoded, dot segments resolved), so the
-/// two differ on spellings a browser never sends: `/%61pi/x` and `/./api/x`
-/// are cleared there and not here, `/api/../health` here and not there. Left
-/// unconverged on purpose — each spine clears exactly where its own router
-/// puts the auth scope.
+/// percent-decoded, dot segments kept. The TS twin routes and scopes on the
+/// raw path too, so `/%61pi/x` is outside the scope on both. Dot segments are
+/// the one difference, and it is the runtime's, not the twin's: Node and Bun
+/// resolve them before its app sees the request, so `/./api/x` is inside the
+/// scope there and outside here, `/api/../health` here and not there — each
+/// spine reads the scope exactly where its own router puts it.
+///
+/// It also decides which unrouted path answers the JSON `route_not_found`
+/// (`fuz_actions::server::unmatched_route_response`).
 #[must_use]
 pub fn auth_middleware_applies(path: &str) -> bool {
     let prefix = AUTH_MIDDLEWARE_PATH

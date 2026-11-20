@@ -14,6 +14,7 @@
 //! ```text
 //! request_tracing_layer (optional, the whole router)
 //!   → catch_panic (the whole router)
+//!   → `Allow` kept only on a `405` (the whole router)
 //!   → per group: body cap → host_layer (on by default) → origin_layer
 //!       → cookie_clear_layer (optional, with the origin check)
 //!       → simple_request_layer (optional, per group) → client_ip_middleware
@@ -63,6 +64,25 @@
 //! CLI clients and server-to-server callers are unaffected by the default;
 //! what it refuses is a browser page from a foreign origin, on any path.
 //!
+//! ## A method a path doesn't serve answers 405
+//!
+//! Every group's routed paths answer a method they don't serve with
+//! [`method_not_allowed_response`] (`405 {"error":"method_not_allowed"}`) and
+//! axum's `Allow` header listing the path's methods (`HEAD` wherever `GET`
+//! is), installed as the group's method fallback before its layers, so the
+//! answer passes the group's gates — the body cap, the host gate, the origin
+//! check and the cookie clear — like any other. It comes ahead of
+//! authentication, which runs in the handlers. A route with a method fallback
+//! of its own keeps it. The TS twin answers the same from its unmatched-route
+//! handler.
+//!
+//! axum writes the path's `Allow` on whatever that layered fallback answers,
+//! so a gate's refusal of an unserved method (the origin check's or the host
+//! gate's `403`, the cap's `413`) would carry it too. The composed router
+//! drops `Allow` from every answer but a `405`, as on the TS twin, where only
+//! the `405` is built with one; a `405` keeps its `Allow`, a handler's own
+//! included.
+//!
 //! ## The fallback is gated
 //!
 //! The fallback is a [`RouteGroup`] like the others, with its own cap and
@@ -83,7 +103,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::middleware::{from_fn, from_fn_with_state};
+use axum::http::{StatusCode, header};
+use axum::middleware::{from_fn, from_fn_with_state, map_response};
 use axum::response::Response;
 use tower_http::catch_panic::CatchPanicLayer;
 
@@ -93,7 +114,7 @@ use crate::host::{HostGate, host_layer};
 use crate::ip_resolve::client_ip_middleware;
 use crate::origin::{AllowedOrigins, origin_layer};
 use crate::parsed_proxy::ParsedProxy;
-use crate::rest_error::internal_error_response;
+use crate::rest_error::{internal_error_response, method_not_allowed_response};
 use crate::server_env::ALLOWED_ORIGINS_VAR;
 use crate::simple_request::simple_request_layer;
 use crate::tracing_layer::request_tracing_layer;
@@ -339,11 +360,10 @@ impl GatedRouter {
 /// resolve: from `X-Forwarded-For` behind the trusted proxies, or the TCP peer
 /// when there are none.
 ///
-/// **One path, one group.** Route each path in exactly one group. axum merges
-/// a path routed in two groups by method into one method router, so a method
-/// neither group routes answers that router's `405` outside the gates of the
-/// group a request would otherwise reach — a path split across a checked and
-/// a carved-out group leaks a `405` past the origin check.
+/// **One path, one group.** Route each path in exactly one group: each group's
+/// method router carries the `405` fallback (module doc § A method a path
+/// doesn't serve answers 405), and axum refuses to merge two method routers
+/// that both carry one.
 ///
 /// # Panics
 ///
@@ -357,8 +377,9 @@ impl GatedRouter {
 ///   "Cannot merge two `Router`s that both have a fallback") — the stack
 ///   mounts the fallback group first, so a group's own fallback cannot be
 ///   silently replaced by it; put that fallback in the fallback group;
-/// - when two groups route the same path and method (axum's overlapping-route
-///   panic).
+/// - when two groups route the same path, by any methods (axum's
+///   "Cannot merge two `MethodRouter`s that both have a fallback", or its
+///   overlapping-route panic for the same method).
 ///
 /// A fallback nested under a path prefix (`Router::nest`) is part of its
 /// group and passes that group's gates; only a top-level one is refused.
@@ -388,6 +409,11 @@ pub fn compose_stack(
         Router::new().fallback_service(gate_group(fallback, options)),
         |router, group| router.merge(gate_group(group, options)),
     );
+    // outside every method router, which writes `Allow` after its own layers
+    // have run (module doc § A method a path doesn't serve answers 405)
+    let router = Router::new()
+        .fallback_service(router)
+        .layer(map_response(keep_allow_on_the_405_only));
     let router = router.layer(CatchPanicLayer::custom(
         |panic: Box<dyn Any + Send + 'static>| panic_response(&*panic),
     ));
@@ -426,6 +452,19 @@ fn panic_response(panic: &(dyn Any + Send)) -> Response {
     internal_error_response()
 }
 
+async fn method_not_allowed() -> Response {
+    method_not_allowed_response()
+}
+
+/// Drop `Allow` from any answer but a `405`
+/// (module doc § A method a path doesn't serve answers 405).
+async fn keep_allow_on_the_405_only(mut response: Response) -> Response {
+    if response.status() != StatusCode::METHOD_NOT_ALLOWED {
+        response.headers_mut().remove(header::ALLOW);
+    }
+    response
+}
+
 /// One group's router behind its gates, innermost layer first.
 fn gate_group(group: RouteGroup, options: &StackOptions) -> Router {
     let RouteGroup {
@@ -436,10 +475,13 @@ fn gate_group(group: RouteGroup, options: &StackOptions) -> Router {
         refuse_simple_requests,
     } = group;
 
-    let mut router = router.layer(from_fn_with_state(
-        Arc::clone(&options.trusted_proxies),
-        client_ip_middleware,
-    ));
+    // before every layer, so the 405 passes the group's gates like a route
+    let mut router = router
+        .method_not_allowed_fallback(method_not_allowed)
+        .layer(from_fn_with_state(
+            Arc::clone(&options.trusted_proxies),
+            client_ip_middleware,
+        ));
     if refuse_simple_requests {
         router = router.layer(from_fn(simple_request_layer));
     }
@@ -1169,6 +1211,174 @@ mod tests {
         assert_eq!(
             status(router, post_req("/api/x", 1, &[])).await,
             StatusCode::NOT_FOUND
+        );
+    }
+
+    /// A request with no body, from the loopback peer.
+    fn bare_req(method: &str, path: &str, headers: &[(&str, &str)]) -> Request<Body> {
+        let mut builder = Request::builder().method(method).uri(path);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        let mut req = builder.body(Body::empty()).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4000))));
+        req
+    }
+
+    /// The status, the `Allow` methods as a sorted set, and the body.
+    async fn send_allow(app: GatedRouter, req: Request<Body>) -> (StatusCode, Vec<String>, String) {
+        let response = app.into_router_for_testing().oneshot(req).await.unwrap();
+        let status = response.status();
+        let mut allow: Vec<String> = response
+            .headers()
+            .get(header::ALLOW)
+            .map(|v| {
+                v.to_str()
+                    .unwrap()
+                    .split(',')
+                    .map(|m| m.trim().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        allow.sort();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, allow, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    const METHOD_NOT_ALLOWED_BODY: &str = r#"{"error":"method_not_allowed"}"#;
+
+    #[tokio::test]
+    async fn a_method_a_routed_path_does_not_serve_is_the_json_405_with_allow() {
+        let options = base_options();
+        for (method, path, allow) in [
+            ("GET", "/small", vec!["POST"]),
+            ("PUT", "/small", vec!["POST"]),
+            ("OPTIONS", "/small", vec!["POST"]),
+            ("POST", "/ip", vec!["GET", "HEAD"]),
+            ("DELETE", "/ip", vec!["GET", "HEAD"]),
+            // every group, the carved-out and handler-owned ones included
+            ("GET", "/owned", vec!["POST"]),
+            ("GET", "/carved", vec!["POST"]),
+            ("GET", "/json_only", vec!["POST"]),
+        ] {
+            let (status, got_allow, body) =
+                send_allow(app(&options), bare_req(method, path, &[])).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{method} {path}");
+            assert_eq!(got_allow, allow, "{method} {path}");
+            assert_eq!(body, METHOD_NOT_ALLOWED_BODY, "{method} {path}");
+        }
+        // `HEAD` is served wherever `GET` is, and is the 405 where it isn't
+        assert_eq!(
+            status(app(&options), bare_req("HEAD", "/ip", &[])).await,
+            StatusCode::OK
+        );
+        let (status_head, allow_head, body_head) =
+            send_allow(app(&options), bare_req("HEAD", "/small", &[])).await;
+        assert_eq!(status_head, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(allow_head, vec!["POST"]);
+        // the body is the server's to drop on a HEAD; in-process it is still there
+        assert!(body_head.is_empty() || body_head == METHOD_NOT_ALLOWED_BODY);
+    }
+
+    #[tokio::test]
+    async fn the_405_is_behind_the_origin_check_and_carries_the_cookie_clear() {
+        let options = base_options();
+        // a foreign Origin is refused before the method is looked at
+        let (status_foreign, allow_foreign, _) = send_allow(
+            app(&options),
+            bare_req("PUT", "/small", &[("origin", FOREIGN)]),
+        )
+        .await;
+        assert_eq!(status_foreign, StatusCode::FORBIDDEN);
+        // the gates' refusals carry no `Allow`, as on the TS twin: the host
+        // gate's 403 and the cap's 413 as well as the origin check's
+        assert!(allow_foreign.is_empty());
+        for (req, refused) in [
+            (
+                bare_req("PUT", "/small", &[("host", "evil.example")]),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                bare_req("PUT", "/small", &[("content-length", "100000000")]),
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let (status, allow, _) = send_allow(app(&options), req).await;
+            assert_eq!(status, refused);
+            assert!(allow.is_empty(), "{status}");
+        }
+        // the clear rides the 405 under the hook's scope
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (status_clear, cookies) = set_cookies(
+            cookie_clear_app(&asked),
+            bare_req("PUT", "/scoped/ok", &[DEAD_COOKIE]),
+        )
+        .await;
+        assert_eq!(status_clear, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(cookies, vec![CLEAR.to_owned()]);
+    }
+
+    /// A handler's own `405` keeps the `Allow` it wrote, and a handler's
+    /// answer at any other status loses one.
+    #[tokio::test]
+    async fn a_handlers_own_allow_survives_only_on_a_405() {
+        use axum::response::IntoResponse;
+
+        async fn own_405() -> Response {
+            (
+                StatusCode::METHOD_NOT_ALLOWED,
+                [(header::ALLOW, "GET, HEAD")],
+            )
+                .into_response()
+        }
+        async fn ok_with_allow() -> Response {
+            ([(header::ALLOW, "GET")], "ok").into_response()
+        }
+        let options = base_options();
+        let app = || {
+            compose_stack(
+                [RouteGroup::new(
+                    "own",
+                    Router::new().route("/ok_with_allow", get(ok_with_allow)),
+                    BodyCap::Bytes(SMALL_CAP),
+                )],
+                RouteGroup::new(
+                    "fallback",
+                    Router::new().fallback(own_405),
+                    BodyCap::Bytes(SMALL_CAP),
+                ),
+                &options,
+            )
+        };
+        let (status, allow, _) = send_allow(app(), bare_req("PUT", "/anything", &[])).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(allow, vec!["GET", "HEAD"]);
+        let (status, allow, _) = send_allow(app(), bare_req("GET", "/ok_with_allow", &[])).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(allow.is_empty());
+    }
+
+    /// The 405 fallback is installed on each group, so two groups routing one
+    /// path refuse to compose.
+    #[test]
+    #[should_panic(expected = "fallback")]
+    fn a_path_routed_in_two_groups_is_refused_at_composition() {
+        let _ = compose_stack(
+            [
+                RouteGroup::new(
+                    "a",
+                    Router::new().route("/split", get(ok)),
+                    BodyCap::Bytes(SMALL_CAP),
+                ),
+                RouteGroup::new(
+                    "b",
+                    Router::new().route("/split", post(ok)),
+                    BodyCap::Bytes(SMALL_CAP),
+                ),
+            ],
+            fallback(),
+            &base_options(),
         );
     }
 }

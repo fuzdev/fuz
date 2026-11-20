@@ -885,20 +885,16 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // One group, the whole surface under the 1 MiB default cap and the origin
     // check — `/health` and `/ready` included, as on the TS spine, which checks
     // origin on every path: a probe sends no `Origin`, so the check costs it
-    // nothing, and a foreign page gets the same 403 everywhere. axum's empty
-    // 404 is the fallback, behind the same gates. No carve-outs: nothing here
-    // refuses browser callers on its own.
+    // nothing, and a foreign page gets the same 403 everywhere. The spine's
+    // fallback group answers every unrouted path, behind the same gates. No
+    // carve-outs: nothing here refuses browser callers on its own.
     let router = fuz_http::compose_stack(
         [fuz_http::RouteGroup::new(
             "spine",
             app_routes,
             fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES),
         )],
-        fuz_http::RouteGroup::new(
-            "fallback",
-            Router::new(),
-            fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES),
-        ),
+        fuz_actions::server::fallback_group(),
         &backend.stack_options(),
     );
 
