@@ -44,6 +44,9 @@ tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"
 tempfile.workspace = true
 # `ServiceExt::oneshot`, to drive the REST routers in the route-level suites.
 tower = { workspace = true, features = ["util"] }
+# Dev-only: a `fmt` subscriber over a buffer, to pin the bootstrap boot
+# report's and write phase's log levels.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

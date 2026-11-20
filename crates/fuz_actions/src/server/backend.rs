@@ -423,14 +423,17 @@ pub async fn create_app_backend(
         fuz_auth::resolve_keeper_into(state, &backend.pool).await;
     }
 
-    let bootstrap_available = fuz_auth::is_bootstrap_available(
-        &backend.pool,
-        backend
-            .bootstrap_token_path
-            .as_deref()
-            .and_then(|p| p.to_str()),
-    )
-    .await;
+    // a failed lock read fails the boot, as the TS twin's does, rather than
+    // closing bootstrap silently for the life of the process
+    let bootstrap_available =
+        fuz_auth::is_bootstrap_available(&backend.pool, backend.bootstrap_token_path.as_deref())
+            .await
+            .inspect_err(|e| {
+                tracing::error!(
+                    error = %fuz_sys::cli::format_error_chain(e),
+                    "bootstrap availability: reading bootstrap_lock failed"
+                );
+            })?;
     backend
         .bootstrap_available
         .store(bootstrap_available, Ordering::SeqCst);
@@ -1151,6 +1154,55 @@ mod tests {
                 .login_ip_rate_limiter
                 .is_none()
         );
+    }
+
+    /// The bootstrap route gets a per-IP limiter of its own, built through
+    /// the backend's mode: one under `Enforced`, none under
+    /// `DisabledForTesting` — the testing binaries' posture.
+    #[test]
+    fn the_bootstrap_route_gets_its_limiter_through_the_mode() {
+        let env = BaseServerEnv::from_vars(
+            &|k| match k {
+                "DATABASE_URL" => Some("postgres://localhost:1/spine_unused".to_owned()),
+                "SECRET_FUZ_COOKIE_KEYS" => Some("0123456789abcdef0123456789abcdef".to_owned()),
+                "FUZ_ALLOWED_ORIGINS" => Some("http://localhost".to_owned()),
+                _ => None,
+            },
+            fuz_http::ServerEnvOptions {
+                trusted_proxies_var: "FUZ_TEST_TRUSTED_PROXIES",
+            },
+        )
+        .expect("the env reads");
+        let spec = AppBackendSpec {
+            session_cookie_name: "spine_test_session",
+            migration_namespaces: &[],
+            expected_schema_json: None,
+            audit_sse: None,
+            browser_gates: BrowserGateSpec::DEFAULT,
+        };
+        let limiter_of = |rate_limiters| {
+            let backend = build_app_backend(
+                &env,
+                &spec,
+                &SpineBackendOptions {
+                    rate_limiters,
+                    ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
+                },
+            )
+            .expect("the core builds without the database");
+            backend
+                .bootstrap_route_state(backend.auth_gate())
+                .options
+                .bootstrap_ip_rate_limiter
+                .clone()
+        };
+        let limiter = limiter_of(RateLimiterMode::Enforced).expect("enforced");
+        for _ in 0..fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT.max_attempts {
+            assert!(limiter.check("k").is_allowed());
+            limiter.record("k");
+        }
+        assert!(!limiter.check("k").is_allowed(), "the login IP bound");
+        assert!(limiter_of(RateLimiterMode::DisabledForTesting).is_none());
     }
 
     #[test]

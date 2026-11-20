@@ -94,7 +94,9 @@ The one home for values crates must agree on: the size ceilings in `limits`;
 the escaping of text the program didn't write (`text::escape_untrusted`,
 `quoted`, `truncate`, `escape_message`; § Error rendering); `home_dir`, the one
 `$HOME` lookup; and the no-follow vocabulary the stores classify entries with
-(`fs::probe_real_dir`, `secure_file::open_nofollow_regular`, …). `fs::sweep_stale_staging_dirs` is the
+(`fs::probe_real_dir`, `secure_file::open_nofollow_regular`, …). `secure_file::burn_secure_file` is the burn
+of a one-shot secret: unlink the entry, never following or recursing, a missing one counted as burned
+(`BurnOutcome`), then fsync the parent so the unlink survives a crash. `fs::sweep_stale_staging_dirs` is the
 age-gated sweep of crash-leaked staging dirs.
 
 ### `fuz_home`
@@ -557,6 +559,29 @@ expected value is the file's bytes minus one optional trailing LF, compared in
 constant time against the submitted token — no other trimming. A value under
 `BOOTSTRAP_TOKEN_MIN_BYTES` (32) reads as an unreadable file, at boot and at
 request time, with an error log.
+
+Bootstrap, the same on both spines:
+
+- **The token is burned before the commit.** `BootstrapTokenStore::burn_token`
+  is a required burn, the last step inside the bootstrap transaction: the
+  lock, the account and grants, the session (`create_capped_session`), the
+  signed cookie, then the burn (`fuz_sys::secure_file::burn_secure_file` —
+  unlink the entry, a missing one counted as burned, fsync the parent). A
+  failed burn rolls everything back and answers 500 `token_file_undeletable`
+  with the attempt charged and audited and the window left open; a commit
+  that fails after the burn logs that the token is gone. No session or cookie
+  exists for a bootstrap that didn't commit.
+- **The write runs on a task of its own**, which the handler awaits, so a client that disconnects can't split the burn from the commit (the process exiting between the two still can, as on the twin).
+- **A per-IP limiter** (`BootstrapOptions::bootstrap_ip_rate_limiter`, on
+  under `Enforced`, off under `DisabledForTesting`): a refusal is charged, a
+  success and the lock race loser are not, and an exhausted budget answers
+  429 `rate_limit_exceeded` with `retry_after` and `Retry-After`. The race
+  loser closes its window and writes no audit row.
+- **`is_bootstrap_available` is the boot report.** It reads the lock first: a
+  token file still present on a bootstrapped database warns, naming the path
+  (it would reopen bootstrap on an empty database); an unreadable file on an
+  open window warns with the reason; a missing lock row reads as unavailable
+  with an error. A lock read that fails is an `Err`, and the boot stops on it.
 
 Revocation: § Spine cross-crate rules.
 

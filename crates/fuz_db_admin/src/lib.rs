@@ -119,10 +119,10 @@ fn is_browsable(name: &str, browsable: &[&str]) -> bool {
 ///   (`fuz_auth::register_revocation_guard`) on [`fuz_auth::AuditEmitter`] closes live
 ///   connections by listening to audit events, so a raw row delete here is
 ///   invisible to them.
-/// - `bootstrap_lock` — deleting the singleton leaves
-///   [`fuz_auth::is_bootstrap_available`] advertising an open bootstrap
-///   window on the next boot that `bootstrap_handler`'s atomic flip then
-///   always refuses.
+/// - `bootstrap_lock` — deleting the singleton closes bootstrap for good:
+///   [`fuz_auth::is_bootstrap_available`] reads a missing row as unavailable
+///   (logged as an error), so a database that has not bootstrapped never can
+///   until the row is restored.
 /// - `app_settings` — deleting the singleton breaks every settings read.
 /// - `schema_version` — the migration tracker. Already refused by the
 ///   single-column-primary-key rule (its key is `(namespace, name)`), but

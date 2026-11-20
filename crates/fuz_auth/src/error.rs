@@ -60,6 +60,15 @@ pub enum BootstrapError {
     /// found the transaction aborted and rolled it back.
     #[error("commit error: {0}")]
     Commit(#[source] fuz_db::DbError),
+
+    /// The session cookie could not be written, so the bootstrap rolled back
+    /// before its token was burned.
+    #[error("session cookie error")]
+    SessionCookie(#[source] crate::session_cookie::SessionCookieError),
+
+    /// The task the write phase runs on panicked or was cancelled.
+    #[error("bootstrap write task failed")]
+    Task(#[source] tokio::task::JoinError),
 }
 
 /// Bootstrap failure discriminants — match the wire-format strings
@@ -70,6 +79,16 @@ pub enum BootstrapErrorKind {
     TokenFileMissing,
     InvalidToken,
     InvalidInput,
+    /// The token matched and the account was written, but the token file
+    /// couldn't be burned, so the bootstrap rolled back and nothing was
+    /// created. Maps to HTTP 500; the window stays open, so the operator fixes
+    /// the directory's permissions and retries the same token.
+    TokenFileUndeletable,
+    /// The per-IP bucket is exhausted. Maps to HTTP 429; the wrapper attaches
+    /// `retry_after`.
+    RateLimitExceeded {
+        retry_after: u64,
+    },
 }
 
 impl std::fmt::Display for BootstrapErrorKind {
@@ -87,6 +106,8 @@ impl BootstrapErrorKind {
             Self::InvalidToken => "invalid_token",
             // the twin's route-schema refusal, `ERROR_INVALID_REQUEST_BODY`
             Self::InvalidInput => fuz_http::INVALID_REQUEST_BODY_REASON,
+            Self::TokenFileUndeletable => "token_file_undeletable",
+            Self::RateLimitExceeded { .. } => "rate_limit_exceeded",
         }
     }
 }

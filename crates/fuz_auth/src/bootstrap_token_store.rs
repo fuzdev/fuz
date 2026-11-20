@@ -1,9 +1,10 @@
 //! Narrow filesystem seam for bootstrap token I/O.
 //!
-//! Bootstrap reads a one-shot token file on each request and deletes
-//! it post-commit. The trait scopes to exactly those two operations so
-//! unit tests can swap in an in-memory implementation without reaching
-//! for a general filesystem abstraction.
+//! Bootstrap reads a one-shot token file on each request and burns it inside
+//! the transaction the token authorized, just before the commit. The trait
+//! scopes to exactly those two operations so unit tests can swap in an
+//! in-memory implementation without reaching for a general filesystem
+//! abstraction.
 //!
 //! The token this file holds is the highest-value credential in the system —
 //! presenting it mints the keeper account — so [`FileBootstrapTokenStore`]
@@ -13,11 +14,14 @@
 //! device node is refused without waiting on it; any group/other access is
 //! refused), and a size cap. The deploy recipe already publishes it `0600`
 //! owned by the service user, so the check ratifies the shape zap produces; a
-//! hand-placed `0644` file fails loud at boot instead of being read.
+//! hand-placed `0644` file fails loud at boot instead of being read. It burns
+//! it through [`fuz_sys::secure_file::burn_secure_file`]: unlink the entry,
+//! then fsync the directory, so a crash after the commit can't bring it back.
 
 use std::path::PathBuf;
 
 use futures::future::BoxFuture;
+use fuz_sys::secure_file::BurnOutcome;
 
 /// Two-operation seam for the one-shot bootstrap token file.
 ///
@@ -30,13 +34,20 @@ use futures::future::BoxFuture;
 /// [`crate::BootstrapOptions`] stays non-generic. Async via
 /// [`BoxFuture`], the dyn-trait convention — RPITIT
 /// doesn't yet support `dyn`.
+///
+/// Twin of `fuz_app`'s `BootstrapTokenStore`, which also carries the token's
+/// `path` for its log lines: the TS boot check reads through the store, while
+/// [`crate::is_bootstrap_available`] takes the path itself.
 pub trait BootstrapTokenStore: Send + Sync {
     /// Read the raw token bytes.
     fn read_token(&self) -> BoxFuture<'_, std::io::Result<Vec<u8>>>;
 
-    /// Best-effort delete after successful bootstrap. The handler logs
-    /// (but does not fail) if delete returns an error.
-    fn delete_token(&self) -> BoxFuture<'_, std::io::Result<()>>;
+    /// Burn the token so it can never be presented again. Required, not
+    /// best-effort: [`crate::bootstrap_handler`] calls it last inside the
+    /// bootstrap transaction, and an `Err` rolls the bootstrap back
+    /// (`token_file_undeletable`). [`BurnOutcome::AlreadyGone`] — nothing was
+    /// there — is a burn: the token can't be presented either way.
+    fn burn_token(&self) -> BoxFuture<'_, std::io::Result<BurnOutcome>>;
 }
 
 /// Read a bootstrap token file with the secure-file checks applied.
@@ -51,6 +62,10 @@ pub trait BootstrapTokenStore: Send + Sync {
 /// helpers are sync (`std::fs`) because they need descriptor-level `fstat` and
 /// `O_NOFOLLOW`, which `tokio::fs` doesn't expose.
 ///
+/// Logs nothing: whether a refusal is worth a warning depends on the caller
+/// (a bootstrapped server with no token file is the steady state), so each
+/// caller logs at its own level.
+///
 /// # Errors
 ///
 /// Returns an `io::Error` carrying the underlying
@@ -58,13 +73,7 @@ pub trait BootstrapTokenStore: Send + Sync {
 /// not a regular file, group/other-accessible mode, or over the size cap.
 pub(crate) async fn read_bootstrap_token_file(path: PathBuf) -> std::io::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || {
-        fuz_sys::secure_file::load_secure_file(&path).map_err(|e| {
-            tracing::warn!(
-                error = %fuz_sys::cli::format_error_chain(&e),
-                "bootstrap token file rejected"
-            );
-            std::io::Error::other(e)
-        })
+        fuz_sys::secure_file::load_secure_file(&path).map_err(std::io::Error::other)
     })
     .await
     .map_err(std::io::Error::other)?
@@ -104,8 +113,15 @@ impl BootstrapTokenStore for FileBootstrapTokenStore {
         Box::pin(read_bootstrap_token_file(self.path.clone()))
     }
 
-    fn delete_token(&self) -> BoxFuture<'_, std::io::Result<()>> {
-        Box::pin(async move { tokio::fs::remove_file(&self.path).await })
+    fn burn_token(&self) -> BoxFuture<'_, std::io::Result<BurnOutcome>> {
+        let path = self.path.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                fuz_sys::secure_file::burn_secure_file(&path).map_err(std::io::Error::other)
+            })
+            .await
+            .map_err(std::io::Error::other)?
+        })
     }
 }
 
@@ -182,13 +198,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_removes_the_token() {
+    async fn burn_removes_the_token() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_token(dir.path(), b"secret-token-value\n", 0o600);
         let store = FileBootstrapTokenStore::new(path.clone());
 
-        store.delete_token().await.expect("delete succeeds");
+        let outcome = store.burn_token().await.expect("burn succeeds");
 
+        assert_eq!(outcome, BurnOutcome::Burned);
         assert!(!path.exists(), "one-shot token is gone after bootstrap");
+    }
+
+    #[tokio::test]
+    async fn burn_of_a_missing_token_is_already_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileBootstrapTokenStore::new(dir.path().join("absent"));
+
+        let outcome = store.burn_token().await.expect("a missing token is burned");
+
+        assert_eq!(outcome, BurnOutcome::AlreadyGone);
+    }
+
+    /// A directory the server can't write refuses the burn and keeps the
+    /// token — what rolls a bootstrap back. As root the unlink succeeds and
+    /// this fails: run the suite as an unprivileged user.
+    #[tokio::test]
+    async fn burn_fails_in_a_directory_the_server_cannot_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("bootstrap");
+        std::fs::create_dir(&sub).unwrap();
+        let path = write_token(&sub, b"secret-token-value\n", 0o600);
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let store = FileBootstrapTokenStore::new(path.clone());
+
+        let result = store.burn_token().await;
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            result.is_err(),
+            "the burn is refused (as root it would succeed)"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"secret-token-value\n");
     }
 }

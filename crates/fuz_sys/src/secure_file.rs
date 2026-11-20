@@ -108,6 +108,58 @@ pub fn load_secure_file(path: &Path) -> Result<Vec<u8>, SecureFileError> {
     read_bounded(&file, path, MAX_SECURE_FILE_SIZE)
 }
 
+/// What [`burn_secure_file`] found at the path. Both mean the postcondition
+/// holds — no entry at the path, durably — so a caller that only needs the
+/// secret gone treats them alike and logs the second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BurnOutcome {
+    /// The entry was there and is now unlinked.
+    Burned,
+    /// Nothing was at the path (`ENOENT`), so there was nothing to unlink.
+    AlreadyGone,
+}
+
+/// Remove a one-shot secret's directory entry, durably.
+///
+/// The burn a consumed credential file (the bootstrap token) gets before the
+/// transaction it authorized commits, so the secret can never be presented
+/// again.
+///
+/// - `unlink(2)` of the entry at `path`: a symlink there is removed itself,
+///   never followed (following would delete a file the operator never named),
+///   and a directory is refused, never recursed into.
+/// - A missing entry (`ENOENT`) is [`BurnOutcome::AlreadyGone`], not an error:
+///   the postcondition the caller needs — no entry at `path` — holds.
+/// - Then the parent directory is fsynced, on both outcomes, so the removal
+///   survives a host crash. Without it a crash after the caller's commit can
+///   bring the entry back: a live secret beside the state it already created.
+///   A failed fsync is a failed burn.
+///
+/// Sync, like the rest of this module; an async caller runs it on a blocking
+/// thread. Twin of `fuz_app`'s `burn_secure_file_node`.
+///
+/// # Errors
+///
+/// [`SecureFileError::Io`] naming `path` when the unlink fails for any reason
+/// but `ENOENT` (`EACCES` from a directory the process can't write, `EISDIR`
+/// or `EPERM` for a directory at the path), or naming the parent when its
+/// fsync fails or `path` has no parent.
+pub fn burn_secure_file(path: &Path) -> Result<BurnOutcome, SecureFileError> {
+    let outcome = match std::fs::remove_file(path) {
+        Ok(()) => BurnOutcome::Burned,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BurnOutcome::AlreadyGone,
+        Err(e) => return Err(SecureFileError::Io(path.to_path_buf(), e)),
+    };
+    let parent = crate::fs::parent_dir(path).ok_or_else(|| {
+        SecureFileError::Io(
+            path.to_path_buf(),
+            std::io::Error::other("path has no parent directory"),
+        )
+    })?;
+    crate::fs::fsync_dir(parent).map_err(|e| SecureFileError::Io(parent.to_path_buf(), e))?;
+    Ok(outcome)
+}
+
 /// Read a file whose content authenticates itself, bounded and without
 /// following a symlink.
 ///
@@ -860,5 +912,126 @@ mod tests {
         assert!(load.is_err_and(|e| e.starts_with("not a regular file")));
         assert!(secure.is_err_and(|e| e.starts_with("not a regular file")));
         assert!(truncate.is_err_and(|e| e.starts_with("not a regular file")));
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+
+    #[test]
+    fn burn_unlinks_the_entry() {
+        let dir = TempDir::new().expect("create temp dir");
+        let path = dir.path().join("token");
+        std::fs::write(&path, b"secret").expect("write");
+        assert_eq!(burn_secure_file(&path).expect("burn"), BurnOutcome::Burned);
+        assert!(!path.exists(), "the entry is gone");
+    }
+
+    /// The postcondition is "no entry at the path", so a missing one is a
+    /// burn, not a failure.
+    #[test]
+    fn burn_reads_a_missing_entry_as_already_gone() {
+        let dir = TempDir::new().expect("create temp dir");
+        let path = dir.path().join("absent");
+        assert_eq!(
+            burn_secure_file(&path).expect("burn"),
+            BurnOutcome::AlreadyGone
+        );
+    }
+
+    /// A symlink at the path is the entry: it is removed and its target kept.
+    #[test]
+    fn burn_removes_a_symlink_not_its_target() {
+        let dir = TempDir::new().expect("create temp dir");
+        let target = dir.path().join("target");
+        std::fs::write(&target, b"unrelated").expect("write");
+        let link = dir.path().join("link");
+        symlink(&target, &link).expect("symlink");
+        assert_eq!(burn_secure_file(&link).expect("burn"), BurnOutcome::Burned);
+        assert!(link.symlink_metadata().is_err(), "the link is gone");
+        assert_eq!(std::fs::read(&target).expect("read"), b"unrelated");
+    }
+
+    /// A directory at the path is refused, never recursed into.
+    #[test]
+    fn burn_refuses_a_directory() {
+        let dir = TempDir::new().expect("create temp dir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        std::fs::write(sub.join("inner"), b"x").expect("write");
+        assert!(matches!(
+            burn_secure_file(&sub),
+            Err(SecureFileError::Io(..))
+        ));
+        assert!(sub.join("inner").exists(), "nothing inside was removed");
+    }
+
+    /// A directory the process can't write refuses the unlink, and the file
+    /// stays. As root the unlink succeeds and this fails: run the suite as an
+    /// unprivileged user.
+    #[test]
+    fn burn_fails_when_the_directory_is_not_writable() {
+        let dir = TempDir::new().expect("create temp dir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        let path = sub.join("token");
+        std::fs::write(&path, b"secret").expect("write");
+        set_mode(&sub, 0o500);
+        let result = burn_secure_file(&path);
+        set_mode(&sub, 0o700);
+        assert!(
+            matches!(result, Err(SecureFileError::Io(ref p, _)) if p == &path),
+            "the unlink is refused (as root it would succeed): {result:?}"
+        );
+        assert_eq!(std::fs::read(&path).expect("read"), b"secret");
+    }
+
+    /// The parent fsync is part of the burn: a directory that can be written
+    /// (`wx`) but not opened for reading lets the unlink through and refuses
+    /// the fsync, and the burn fails naming the directory.
+    #[test]
+    fn burn_fails_when_the_parent_cannot_be_fsynced() {
+        let dir = TempDir::new().expect("create temp dir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        let path = sub.join("token");
+        std::fs::write(&path, b"secret").expect("write");
+        set_mode(&sub, 0o300);
+        let result = burn_secure_file(&path);
+        set_mode(&sub, 0o700);
+        assert!(
+            matches!(result, Err(SecureFileError::Io(ref p, _)) if p == &sub),
+            "the parent fsync is refused (as root it would succeed): {result:?}"
+        );
+        assert!(!path.exists(), "the unlink ran before the fsync");
+    }
+
+    /// The parent fsync runs on the already-gone path too: a missing entry in
+    /// a directory that can be searched but not opened is a failed burn.
+    #[test]
+    fn burn_fsyncs_the_parent_when_the_entry_is_already_gone() {
+        let dir = TempDir::new().expect("create temp dir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        set_mode(&sub, 0o300);
+        let result = burn_secure_file(&sub.join("absent"));
+        set_mode(&sub, 0o700);
+        assert!(
+            matches!(result, Err(SecureFileError::Io(ref p, _)) if p == &sub),
+            "the fsync of the parent is refused (as root it would succeed): {result:?}"
+        );
+    }
+
+    /// A missing parent directory is a failed burn: the unlink finds nothing,
+    /// and the parent it would fsync isn't there.
+    #[test]
+    fn burn_fails_when_the_parent_directory_is_missing() {
+        let dir = TempDir::new().expect("create temp dir");
+        let parent = dir.path().join("gone");
+        let result = burn_secure_file(&parent.join("token"));
+        assert!(
+            matches!(result, Err(SecureFileError::Io(ref p, _)) if p == &parent),
+            "{result:?}"
+        );
     }
 }

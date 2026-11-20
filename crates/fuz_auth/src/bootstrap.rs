@@ -1,8 +1,10 @@
 //! Bootstrap — one-shot first-admin account creation.
 //!
 //! Mirrors `fuz_app`'s `bootstrap_account.ts` + `bootstrap_routes.ts`.
-//! Reads a one-shot token from disk, creates account + keeper + admin
-//! grants atomically, sets the session cookie, deletes the token file.
+//! Reads a one-shot token from disk, then in one transaction flips the lock,
+//! creates account + keeper + admin grants and the session, and burns the
+//! token file last, just before the commit — a failed burn rolls it all back,
+//! so a live token never outlives a successful bootstrap.
 //!
 //! ## `BootstrapOptions` callback
 //!
@@ -15,12 +17,13 @@
 //! [`crate::DaemonTokenKeeperResolved`]. Consumers without daemon-token
 //! state leave it `None`.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use deadpool_postgres::Pool;
 use fuz_db::commit_checked;
+use fuz_sys::secure_file::BurnOutcome;
 use serde::Deserialize;
 use serde_json::json;
 use subtle::ConstantTimeEq;
@@ -34,8 +37,11 @@ use crate::audit_event_type::AuditEventType;
 use crate::bootstrap_keeper_resolved::BootstrapKeeperResolved;
 use crate::bootstrap_token_store::{BootstrapTokenStore, read_bootstrap_token_file};
 use crate::error::{BootstrapError, BootstrapErrorKind};
-use crate::password_hasher::PasswordHasher;
+use crate::keyring::Keyring;
+use crate::password_hasher::{HashedPassword, PasswordHasher};
+use crate::rate_limiter::{RESERVATION_WAIT_MAX, RateLimiter, reserve_optional};
 use crate::role::{ROLE_ADMIN, ROLE_KEEPER};
+use crate::session_cookie::sign_session_cookie;
 use crate::session_queries::create_capped_session;
 
 // -- Input ----------------------------------------------------------------
@@ -125,14 +131,16 @@ fn bootstrap_token_from_file(bytes: Vec<u8>) -> Option<Vec<u8>> {
 
 /// Return value of [`bootstrap_handler`].
 ///
-/// Carries the raw session token and the created account/actor rows;
-/// the HTTP wrapper (`bootstrap_routes.rs`) builds the wire response
-/// shape and the `Set-Cookie` header from these. `Debug` redacts the
-/// session token.
+/// Carries the session — its raw token and its `Set-Cookie` line, signed
+/// inside the bootstrap transaction — and the created account/actor rows; the
+/// HTTP wrapper (`bootstrap_routes.rs`) builds the wire response from these.
+/// `Debug` redacts the token and the cookie.
 pub struct BootstrapSuccess {
-    /// Signed session cookie value (Set-Cookie header is built by the
-    /// HTTP wrapper).
+    /// The raw session token (its hash is the `auth_session` row's id).
     pub session_token: String,
+    /// The `Set-Cookie` line carrying the signed session cookie, written in
+    /// the transaction. Twin of `fuz_app`'s `session_cookie_value`.
+    pub set_cookie: String,
     pub account: AccountRow,
     pub actor: ActorRow,
 }
@@ -141,6 +149,7 @@ impl std::fmt::Debug for BootstrapSuccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BootstrapSuccess")
             .field("session_token", &"<redacted>")
+            .field("set_cookie", &"<redacted>")
             .field("account", &self.account)
             .field("actor", &self.actor)
             .finish()
@@ -151,15 +160,9 @@ impl std::fmt::Debug for BootstrapSuccess {
 
 /// Capabilities required by [`bootstrap_handler`].
 ///
-/// Carries no rate limiter, and deliberately so — `fuz_app`'s twin
-/// (`BootstrapRouteOptions.bootstrap_ip_rate_limiter`) does, which is the one
-/// place the two bootstrap surfaces diverge. The token is 32 bytes of CSPRNG
-/// compared in constant time, so guessing is not what a limiter would bound;
-/// what it would bound is unauthenticated `audit_log` writes, and every leg
-/// that could produce those unbounded closes its window instead (see
-/// [`bootstrap_handler`]). Bootstrap is also the one auth operation with no
-/// retry path — a 429 here refuses first-admin creation on a deployment that
-/// has no admin to appeal to.
+/// `Clone` (every field is a handle) so the handler can move a copy onto the
+/// task its write phase runs on.
+#[derive(Clone)]
 pub struct BootstrapOptions {
     /// `pool` for the bootstrap transaction.
     pub pool: Pool,
@@ -184,6 +187,28 @@ pub struct BootstrapOptions {
     /// Optional callback fired after the keeper account is created.
     /// Consumers wire daemon-token state here.
     pub on_keeper_resolved: Option<Arc<dyn BootstrapKeeperResolved>>,
+    /// Per-IP limiter on attempts inside the open window, keyed by the
+    /// address's rate-limit key (an IPv6 client's `/64`); `None` turns it off
+    /// (the testing binaries, as the twin's test spine). Its own instance, not
+    /// login's, so a fumbled token can't spend the operator's login budget.
+    /// The token is 32 bytes of CSPRNG compared in constant time, so guessing
+    /// is not what it bounds: the `invalid_token` leg writes an unauthenticated
+    /// `audit_log` row and leaves the window open (a wrong token must not lock
+    /// the operator out), so without a limiter that leg is an unbounded write
+    /// channel for as long as the window is open. A refused attempt, a wrong
+    /// token or an unreadable or undeletable token file, is charged (an
+    /// undeletable one only while its request is still waiting on the write
+    /// task); the lock-race loser and a success are not. Twin of `fuz_app`'s
+    /// `BootstrapRouteOptions.bootstrap_ip_rate_limiter`, at the same default
+    /// budget ([`crate::DEFAULT_LOGIN_IP_RATE_LIMIT`]). With no resolved
+    /// client IP the limiter is skipped, where the twin charges one shared
+    /// `'unknown'` bucket — the difference signup has too, and one only a
+    /// router mounted without the client-IP middleware can show.
+    pub bootstrap_ip_rate_limiter: Option<Arc<RateLimiter>>,
+    /// Signs the session cookie the bootstrap mints, inside its transaction.
+    pub keyring: Arc<Keyring>,
+    /// The session cookie's name (default [`crate::SESSION_COOKIE_NAME`]).
+    pub session_cookie_name: &'static str,
 }
 
 impl std::fmt::Debug for BootstrapOptions {
@@ -191,56 +216,101 @@ impl std::fmt::Debug for BootstrapOptions {
         f.debug_struct("BootstrapOptions")
             .field("has_token_store", &self.token_store.is_some())
             .field("has_keeper_callback", &self.on_keeper_resolved.is_some())
+            .field(
+                "has_ip_rate_limiter",
+                &self.bootstrap_ip_rate_limiter.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }
 
 // -- Handler --------------------------------------------------------------
 
-/// Resolve whether bootstrap is currently available: the bootstrap
-/// token file exists **and** the `bootstrap_lock` row isn't yet marked
-/// bootstrapped.
+/// Resolve whether bootstrap is currently available: a token path is
+/// configured, the `bootstrap_lock` row says not yet bootstrapped, and the
+/// token file passes the same read the request makes.
 ///
 /// Consumers call this once at startup to seed the shared
 /// `bootstrap_available` flag (returned on `/status` 401 + gating
 /// `/bootstrap`). `token_path: None` (no bootstrap token configured)
-/// resolves to `false`. Fail-closed: any I/O or DB error resolves to
-/// `false` so a transient failure can't accidentally re-open bootstrap.
-pub async fn is_bootstrap_available(pool: &Pool, token_path: Option<&str>) -> bool {
+/// resolves to `false` without touching the database. A token file that
+/// can't be read resolves to `false` (logged). A failed lock read is an
+/// error: the boot fails naming it, as the twin's boot throws, rather than
+/// closing bootstrap silently for the life of the process.
+///
+/// The lock is read first, so the report fits the state:
+///
+/// - a missing `bootstrap_lock` row is unavailable, logged as an `error` — the
+///   migration seeds it, and without it every bootstrap would be refused in
+///   its transaction while `/status` advertised an open window;
+/// - bootstrapped, no readable token file: `info`, the steady state;
+/// - bootstrapped with a readable token file: a `warn` naming it — it would
+///   reopen bootstrap on an empty database, so the operator should delete it;
+/// - not bootstrapped and the file unreadable: a `warn` with the reason (and
+///   the `error` [`BOOTSTRAP_TOKEN_MIN_BYTES`] logs for a short one).
+///
+/// Twin of `fuz_app`'s `check_bootstrap_status`, which logs the same states
+/// at the same levels.
+///
+/// # Errors
+///
+/// [`fuz_db::DbError`] when the pool checkout or the `bootstrap_lock` read
+/// fails.
+pub async fn is_bootstrap_available(
+    pool: &Pool,
+    token_path: Option<&Path>,
+) -> Result<bool, fuz_db::DbError> {
     let Some(path) = token_path else {
-        return false;
+        return Ok(false);
     };
+    let client = pool.get().await.map_err(fuz_db::DbError::PoolGet)?;
+    let row = client
+        .query_opt("SELECT bootstrapped FROM bootstrap_lock WHERE id = 1", &[])
+        .await?;
+    drop(client);
+    let Some(row) = row else {
+        tracing::error!(
+            "bootstrap unavailable: the bootstrap_lock row is missing — the auth migration seeds it; restore it to bootstrap"
+        );
+        return Ok(false);
+    };
+    let bootstrapped: bool = row.try_get(0)?;
     // Validate with the *same* secure read the handler will perform, not a
     // bare `metadata` existence probe: an availability check laxer than the
     // read it gates reports green at boot and then fails every bootstrap
-    // attempt. `read_bootstrap_token_file` logs the specific reason (symlink,
-    // group/other-accessible mode, oversize) before we fail closed here.
-    let Ok(bytes) = read_bootstrap_token_file(PathBuf::from(path)).await else {
-        tracing::info!("bootstrap unavailable: token file missing or not owner-only");
-        return false;
+    // attempt.
+    let read = read_bootstrap_token_file(path.to_path_buf()).await;
+    if bootstrapped {
+        if read.is_ok() {
+            tracing::warn!(
+                path = %path.display(),
+                "bootstrap token file present on a bootstrapped server — it would reopen bootstrap on an empty database; delete it"
+            );
+        } else {
+            tracing::info!("bootstrap unavailable: already bootstrapped");
+        }
+        return Ok(false);
+    }
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "bootstrap unavailable: token file unreadable"
+            );
+            return Ok(false);
+        }
     };
     if bootstrap_token_from_file(bytes).is_none() {
-        tracing::info!(path = %path, "bootstrap unavailable: token file under the minimum length");
-        return false;
+        tracing::warn!(
+            path = %path.display(),
+            "bootstrap unavailable: token file under the minimum length"
+        );
+        return Ok(false);
     }
-    let Ok(client) = pool.get().await else {
-        return false;
-    };
-    let Ok(row) = client
-        .query_opt("SELECT bootstrapped FROM bootstrap_lock WHERE id = 1", &[])
-        .await
-    else {
-        return false;
-    };
-    if let Some(row) = row {
-        let bootstrapped: bool = row.get(0);
-        if bootstrapped {
-            tracing::info!("bootstrap unavailable: already bootstrapped");
-            return false;
-        }
-    }
-    tracing::info!(path = %path, "bootstrap token available");
-    true
+    tracing::info!(path = %path.display(), "bootstrap token available");
+    Ok(true)
 }
 
 /// Run the bootstrap pipeline.
@@ -282,13 +352,14 @@ pub async fn bootstrap_handler(
     // request, forever, from anyone who can reach the host. Nothing is learned
     // from the rows either — they record that a closed door stayed closed.
     //
-    // The emits this handler does make (`token_file_missing`, `invalid_token`)
-    // fire only while the window is genuinely open, which is the short-lived
-    // interval where a failed attempt is forensically interesting — and
-    // `token_file_missing` closes the window on its way out, so it fires once
-    // rather than once per request. Don't add an emit to this check; a rate
-    // limiter is not the fix, since it would bound the channel without closing
-    // it.
+    // The emits this handler does make (`token_file_missing`, `invalid_token`,
+    // `token_file_undeletable`) fire only while the window is genuinely open,
+    // which is the short-lived interval where a failed attempt is forensically
+    // interesting. `token_file_missing` closes the window on its way out, so it
+    // fires once; `invalid_token` and `token_file_undeletable` leave it open (a
+    // wrong token or a fixable directory must not lock the operator out), so
+    // the per-IP limiter below is what bounds them. Don't add an emit to this
+    // check: a limiter would bound that channel without closing it.
     //
     // Both cases answer the twin's `403 already_bootstrapped`, which refuses a
     // missing token path and a closed window in one check, so an unconfigured
@@ -303,6 +374,32 @@ pub async fn bootstrap_handler(
         });
     };
 
+    // Reserved, not checked, before any token or DB work: the attempt counts
+    // against the per-IP cap until it settles, so a concurrent burst can't all
+    // pass before any of it records. A refusal records it; the lock-race loser,
+    // a success, and an unclassified failure release it (an early return drops
+    // the reservation, which releases). Keyed by the address's rate-limit key
+    // (an IPv6 client's `/64`); the audit rows keep the full address. Mirrors
+    // the twin's `bootstrap_routes.ts`.
+    let ip_key = client_ip
+        .as_deref()
+        .map(fuz_http::rate_limit_ip_key)
+        .unwrap_or_default();
+    let ip_reservation = reserve_optional(
+        options
+            .bootstrap_ip_rate_limiter
+            .as_deref()
+            .filter(|_| client_ip.is_some()),
+        &ip_key,
+        RESERVATION_WAIT_MAX,
+    )
+    .await
+    .map_err(|limited| BootstrapError::Classified {
+        kind: BootstrapErrorKind::RateLimitExceeded {
+            retry_after: limited.retry_after,
+        },
+    })?;
+
     // Read raw bytes — trim() is length-dependent (variable work)
     // and would undermine the ct_eq below. Bootstrap token files are
     // operator-written and may contain a trailing newline; we tolerate
@@ -311,21 +408,21 @@ pub async fn bootstrap_handler(
     // is rejected; operators must write the bytes exactly.
     // A token under the minimum length reads as unreadable, like a missing
     // file — it can never match (empty) or is guessable (short).
-    let Some(expected_token) = token_store
-        .read_token()
-        .await
-        .ok()
-        .and_then(bootstrap_token_from_file)
-    else {
+    let read = token_store.read_token().await.inspect_err(|e| {
+        tracing::warn!(
+            error = %fuz_sys::cli::format_error_chain(e),
+            "bootstrap token file rejected"
+        );
+    });
+    let Some(expected_token) = read.ok().and_then(bootstrap_token_from_file) else {
         // Close the window. Bootstrap cannot succeed without a readable token,
         // and `is_bootstrap_available` already reads an unreadable file as
         // closed at boot — so leaving the flag set means the two disagree, and
-        // every later request takes this leg and writes another audit row. That
-        // is the unbounded unauthenticated write channel the short-circuits
-        // above exist to close, reachable here by an operator deleting the
-        // token or narrowing its permissions after boot. This emit stays: it is
-        // the one that records the transition, and it fires once.
+        // every later request takes this leg and writes another audit row.
+        // This emit stays: it is the one that records the transition, and it
+        // fires once.
         options.bootstrap_available.store(false, Ordering::Relaxed);
+        ip_reservation.record();
         emit_failure(&options.audit, client_ip.as_deref(), "token_file_missing").await;
         return Err(BootstrapError::Classified {
             kind: BootstrapErrorKind::TokenFileMissing,
@@ -333,6 +430,7 @@ pub async fn bootstrap_handler(
     };
 
     if !bool::from(input.token.as_bytes().ct_eq(&expected_token)) {
+        ip_reservation.record();
         emit_failure(&options.audit, client_ip.as_deref(), "invalid_token").await;
         return Err(BootstrapError::Classified {
             kind: BootstrapErrorKind::InvalidToken,
@@ -345,6 +443,49 @@ pub async fn bootstrap_handler(
         .await
         .map_err(BootstrapError::PasswordHash)?;
 
+    // The write phase runs on its own task, which this request only awaits:
+    // once the token is burned the bootstrap must commit or report, and a
+    // client that disconnects drops the request's future — a drop between
+    // the burn (which completes on its blocking thread regardless) and the
+    // COMMIT would roll the transaction back silently, leaving the token gone,
+    // nothing created, and the window open. Everything from the pool checkout
+    // to the success audit row is on the task, so no await point of it is the
+    // request's to cancel. A panic on the task answers the 500.
+    let write = tokio::spawn(bootstrap_write(
+        options.clone(),
+        Arc::clone(token_store),
+        canonical_username,
+        password_hash,
+        client_ip,
+    ));
+    let result = write.await.map_err(BootstrapError::Task)?;
+
+    // Settle the reservation on the outcome: a failed burn is charged like
+    // every refusal; the race loser, a success, and a fault release it (the
+    // drop). A request dropped while the task runs releases it too.
+    if matches!(
+        result,
+        Err(BootstrapError::Classified {
+            kind: BootstrapErrorKind::TokenFileUndeletable
+        })
+    ) {
+        ip_reservation.record();
+    } else {
+        drop(ip_reservation);
+    }
+    result
+}
+
+/// The write phase of [`bootstrap_handler`], spawned so the request can't
+/// cancel it: the lock, the inserts, the session and its signed cookie, the
+/// burn, the commit, then the post-commit flip, callback, and audit row.
+async fn bootstrap_write(
+    options: BootstrapOptions,
+    token_store: Arc<dyn BootstrapTokenStore>,
+    canonical_username: String,
+    password_hash: HashedPassword,
+    client_ip: Option<String>,
+) -> Result<BootstrapSuccess, BootstrapError> {
     let mut client = options.pool.get().await?;
 
     let tx = client.transaction().await?;
@@ -360,10 +501,11 @@ pub async fn bootstrap_handler(
     if lock_row.is_none() {
         // Verify-write race loser — pre-check passed, UPDATE failed. Roll back
         // and flag bootstrap_available false so the early check catches the
-        // next caller. No audit row: this is reachable only by a concurrent
-        // legitimate attempt during the open window, and folding it into the
-        // same silent refusal as the steady-state case is what keeps the
-        // post-bootstrap probe channel write-free (see the note above).
+        // next caller. No audit row and no limiter charge: this is reachable
+        // only by a concurrent legitimate attempt during the open window, and
+        // folding it into the same silent refusal as the steady-state case is
+        // what keeps the post-bootstrap probe channel write-free (see the note
+        // in `bootstrap_handler`).
         tx.rollback().await.ok();
         options.bootstrap_available.store(false, Ordering::Relaxed);
         return Err(BootstrapError::Classified {
@@ -382,23 +524,59 @@ pub async fn bootstrap_handler(
     let session_token = create_capped_session(&tx, &account.id)
         .await?
         .into_token_for_new_account();
+    // Signed inside the transaction, as the twin signs it: a cookie that
+    // can't be written rolls the bootstrap back with the token unburned,
+    // rather than answering 500 for a committed bootstrap.
+    let set_cookie = sign_session_cookie(
+        &options.keyring,
+        &session_token,
+        options.session_cookie_name,
+    )
+    .map_err(BootstrapError::SessionCookie)?;
 
-    commit_checked(tx).await.map_err(BootstrapError::Commit)?;
+    // Burn the token last inside the transaction, immediately before the
+    // commit. After the lock UPDATE, so only the lock winner burns (its row
+    // lock is held across the unlink, so a concurrent attempt waits on its
+    // UPDATE); after the inserts, so a failed insert spends nothing; last, so
+    // the window between a burn and a failed commit is one round trip. A
+    // failed burn rolls everything back and leaves the window open: the
+    // operator fixes the directory and retries the same token.
+    match token_store.burn_token().await {
+        Ok(BurnOutcome::Burned) => {}
+        Ok(BurnOutcome::AlreadyGone) => {
+            tracing::warn!("bootstrap token file was already gone at the burn — counted as burned");
+        }
+        Err(e) => {
+            tx.rollback().await.ok();
+            tracing::error!(
+                error = %fuz_sys::cli::format_error_chain(&e),
+                "bootstrap rolled back: could not delete the token file — the server user needs write access to its directory; nothing was created and the token is still valid, retry"
+            );
+            emit_failure(
+                &options.audit,
+                client_ip.as_deref(),
+                "token_file_undeletable",
+            )
+            .await;
+            return Err(BootstrapError::Classified {
+                kind: BootstrapErrorKind::TokenFileUndeletable,
+            });
+        }
+    }
+
+    commit_checked(tx).await.map_err(|e| {
+        // the burn already ran: the token is gone and nothing was created
+        tracing::error!(
+            error = %fuz_sys::cli::format_error_chain(&e),
+            "bootstrap rolled back after its token file was deleted — write a new token and restart the server to bootstrap"
+        );
+        BootstrapError::Commit(e)
+    })?;
 
     options.bootstrap_available.store(false, Ordering::Relaxed);
 
     if let Some(ref cb) = options.on_keeper_resolved {
         cb.on_keeper_resolved(account.id).await;
-    }
-
-    // Best-effort: delete the bootstrap token post-commit. The
-    // configured location was logged at wiring time, so this log
-    // line doesn't need to thread the path through the trait.
-    if let Err(e) = token_store.delete_token().await {
-        tracing::error!(
-            error = %fuz_sys::cli::format_error_chain(&e),
-            "CRITICAL: failed to delete bootstrap token"
-        );
     }
 
     let _ = options
@@ -413,6 +591,7 @@ pub async fn bootstrap_handler(
 
     Ok(BootstrapSuccess {
         session_token,
+        set_cookie,
         account,
         actor,
     })
@@ -470,6 +649,7 @@ mod tests {
         let account_id = uuid::Uuid::nil();
         let success = BootstrapSuccess {
             session_token: "bootstrap-session-Qx6yN1".to_owned(),
+            set_cookie: "fuz_session=bootstrap-cookie-Wd4pZ8".to_owned(),
             account: AccountRow {
                 id: account_id,
                 username: "first_admin".to_owned(),
@@ -482,6 +662,7 @@ mod tests {
         };
         let rendered = format!("{success:?}");
         assert!(!rendered.contains("bootstrap-session-Qx6yN1"), "{rendered}");
+        assert!(!rendered.contains("bootstrap-cookie-Wd4pZ8"), "{rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
         assert!(rendered.contains("first_admin"), "{rendered}");
     }

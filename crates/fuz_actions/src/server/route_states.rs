@@ -115,7 +115,8 @@ impl AppBackend {
     }
 
     /// `/api/account/bootstrap` — the token file at
-    /// [`AppBackend::bootstrap_token_path`], and, when the server holds
+    /// [`AppBackend::bootstrap_token_path`], a per-IP limiter of its own built
+    /// through [`AppBackend::rate_limiters`], and, when the server holds
     /// daemon-token state, the callback that teaches it the keeper a
     /// bootstrap creates.
     #[must_use]
@@ -136,6 +137,16 @@ impl AppBackend {
                         Arc::new(fuz_auth::DaemonTokenKeeperResolved::new(Arc::clone(state)));
                     callback
                 }),
+                // its own bucket at the login IP bound, as the TS twin's
+                // `bootstrap_ip_rate_limiter` defaults; off where every limiter
+                // is (`RateLimiterMode::DisabledForTesting`)
+                bootstrap_ip_rate_limiter: self
+                    .rate_limiters
+                    .limiter(fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT),
+                // the gate's keyring and cookie name, so the cookie the
+                // handler signs in its transaction is the one the gate reads
+                keyring: Arc::clone(&gate.keyring),
+                session_cookie_name: gate.session_cookie_name,
             }),
             gate,
         }

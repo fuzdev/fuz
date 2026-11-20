@@ -264,8 +264,8 @@ impl BootstrapTokenStore for StubTokenStore {
         .boxed()
     }
 
-    fn delete_token(&self) -> BoxFuture<'_, io::Result<()>> {
-        async { Ok(()) }.boxed()
+    fn burn_token(&self) -> BoxFuture<'_, io::Result<fuz_sys::secure_file::BurnOutcome>> {
+        async { Ok(fuz_sys::secure_file::BurnOutcome::Burned) }.boxed()
     }
 }
 
@@ -527,8 +527,8 @@ fn bootstrap_state(
     token_store: Option<Arc<dyn BootstrapTokenStore>>,
     available: bool,
 ) -> BootstrapRouteState {
+    let gate = fuz_testing::testing_auth_gate(pool.clone());
     BootstrapRouteState {
-        gate: fuz_testing::testing_auth_gate(pool.clone()),
         options: Arc::new(BootstrapOptions {
             audit: Arc::new(AuditEmitter::new(pool.clone())),
             pool,
@@ -536,7 +536,11 @@ fn bootstrap_state(
             bootstrap_available: Arc::new(AtomicBool::new(available)),
             token_store,
             on_keeper_resolved: None,
+            bootstrap_ip_rate_limiter: None,
+            keyring: Arc::clone(&gate.keyring),
+            session_cookie_name: gate.session_cookie_name,
         }),
+        gate,
     }
 }
 
