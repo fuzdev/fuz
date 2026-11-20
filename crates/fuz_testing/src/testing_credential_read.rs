@@ -81,7 +81,7 @@ fn parse_testing_header_lines<'l>(lines: impl IntoIterator<Item = &'l str>) -> O
             .ok()?;
         // `HeaderValue` refuses the bytes a parser refuses: a control
         // character other than HTAB, and DEL
-        let value = HeaderValue::from_bytes(fuz_auth::trim_optional_whitespace(&bytes)).ok()?;
+        let value = HeaderValue::from_bytes(fuz_http::trim_optional_whitespace(&bytes)).ok()?;
         // `append` panics once the map is full; a list past the map's size is
         // no request head either
         headers.try_append(name, value).ok()?;

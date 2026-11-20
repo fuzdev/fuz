@@ -224,7 +224,7 @@ impl AuthGate {
 
     /// Refuse a request from a foreign origin: `Ok` when it carries no
     /// `Origin`, or exactly one the allowlist admits
-    /// ([`AllowedOrigins::allows_request`]), with the [`OriginChecked`]
+    /// ([`AllowedOrigins::allows_request_origin`]), with the [`OriginChecked`]
     /// witness the credential reads take.
     ///
     /// # Errors
@@ -236,7 +236,7 @@ impl AuthGate {
         reason = "Err is the ready-to-return axum Response — the spine REST handler idiom"
     )]
     pub fn check_origin<'h>(&self, headers: &'h HeaderMap) -> Result<OriginChecked<'h>, Response> {
-        if self.allowed_origins.allows_request(headers) {
+        if self.allowed_origins.allows_request_origin(headers) {
             Ok(OriginChecked { headers })
         } else {
             Err(fuz_http::forbidden_origin_response())

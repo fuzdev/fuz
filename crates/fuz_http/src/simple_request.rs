@@ -18,7 +18,9 @@
 //!
 //! JSON endpoints therefore require `application/json`
 //! ([`is_json_content_type`]), and endpoints that take other bodies require a
-//! type that isn't safelisted ([`is_cors_simple_content_type`]). Only `POST`
+//! well-formed type that isn't safelisted ([`is_cors_simple_content_type`]).
+//! Both read every `Content-Type` line ([`read_content_type`]), so a second
+//! line, or an empty one, is refused whichever comes first. Only `POST`
 //! needs the check: `PUT`, `PATCH`, and `DELETE` are never simple methods, so
 //! the browser always preflights them.
 //!
@@ -33,9 +35,11 @@
 
 use axum::Json;
 use axum::extract::Request;
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+
+use crate::request_headers::{HeaderRead, read_content_type};
 
 /// Canonical error reason for a refused content type. Mirrors `fuz_app`'s
 /// `ERROR_UNSUPPORTED_CONTENT_TYPE` (`http/error_schemas.ts`).
@@ -59,36 +63,27 @@ pub fn unsupported_content_type_response() -> Response {
         .into_response()
 }
 
-/// The `Content-Type` header's MIME essence (`type/subtype`, lowercased,
-/// parameters dropped), or `None` when it's absent or not visible ASCII.
-fn content_type_essence(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::CONTENT_TYPE)?.to_str().ok()?;
-    let essence = value.split(';').next().unwrap_or_default().trim();
-    Some(essence.to_ascii_lowercase())
-}
-
 /// True when a browser could have sent a `POST` with these headers
 /// cross-origin without a preflight: no `Content-Type`, or a CORS-safelisted
 /// one.
 ///
-/// Matches more than browsers do (a value they'd refuse to call safelisted —
-/// one with odd bytes, say — counts as safelisted here), so it only ever
-/// refuses too much, never too little.
+/// A malformed `Content-Type` ([`read_content_type`] refuses it — two lines,
+/// an empty one, an essence off the grammar, a byte outside header text)
+/// counts as simple too: a browser would refuse to call some of those
+/// safelisted, so this only ever refuses too much, never too little.
 #[must_use]
 pub fn is_cors_simple_content_type(headers: &HeaderMap) -> bool {
-    // absent, or not visible ASCII — a browser never safelists the latter, but
-    // refusing it costs nothing
-    let Some(essence) = content_type_essence(headers) else {
-        return true;
-    };
-    CORS_SAFELISTED_CONTENT_TYPES.contains(&essence.as_str())
+    match read_content_type(headers) {
+        HeaderRead::One(essence) => CORS_SAFELISTED_CONTENT_TYPES.contains(&essence.as_str()),
+        HeaderRead::Absent | HeaderRead::Refused => true,
+    }
 }
 
-/// True when `Content-Type` is `application/json` (any parameters, such as
-/// `charset`, allowed).
+/// True when `Content-Type` is exactly one well-formed line whose essence is
+/// `application/json` (any parameters, such as `charset`, allowed).
 #[must_use]
 pub fn is_json_content_type(headers: &HeaderMap) -> bool {
-    content_type_essence(headers).is_some_and(|essence| essence == "application/json")
+    matches!(read_content_type(headers), HeaderRead::One(essence) if essence == "application/json")
 }
 
 /// axum middleware refusing `POST`s a browser could send cross-origin without
@@ -107,7 +102,7 @@ pub async fn simple_request_layer(req: Request, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
+    use axum::http::{HeaderValue, header};
 
     fn with_content_type(value: &[u8]) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -176,5 +171,25 @@ mod tests {
         assert!(!is_json_content_type(&with_content_type(
             b"application/json-seq"
         )));
+    }
+
+    #[test]
+    fn a_repeated_content_type_is_refused_in_either_order() {
+        for lines in [
+            [&b"application/json"[..], b"text/plain"],
+            [b"text/plain", b"application/json"],
+            [b"application/json", b"application/json"],
+            [b"application/json", b""],
+        ] {
+            let mut headers = HeaderMap::new();
+            for line in lines {
+                headers.append(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_bytes(line).expect("header value"),
+                );
+            }
+            assert!(!is_json_content_type(&headers), "{lines:?}");
+            assert!(is_cors_simple_content_type(&headers), "{lines:?}");
+        }
     }
 }

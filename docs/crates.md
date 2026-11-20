@@ -416,8 +416,8 @@ HTTP primitives: JSON-RPC envelopes and the `JsonrpcError` taxonomy, flat REST
 error bodies, client-IP resolution (trusted proxies, right-to-left XFF that
 stops at the first malformed entry; `rate_limit_ip_key` keys an IPv6 client by
 its `/64` at limiter call sites only, so audit rows keep the full address), the
-gates (the Origin-only allowlist with no Referer fallback, the opt-in `Host`
-gate, the CORS simple-request gate), strict param / query / JSON-body
+gates (the Origin-only allowlist with no Referer fallback, the `Host` gate,
+the CORS simple-request gate), strict param / query / JSON-body
 decoding that doesn't fingerprint the backend, and `/ready`.
 
 - **`compose_stack` is the one composition root**: route groups, each with a
@@ -426,6 +426,17 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   mounts every gate; none is mounted by hand. It returns a `GatedRouter`, the
   only thing `serve_with_shutdown` serves, and logs how client IPs resolve
   (trusted proxies or the TCP peer), so no server repeats it.
+- **One strict reader per gate header** (`request_headers`, twin of
+  fuz_app's `http/request_headers.ts`), over every line of the header:
+  `read_origin`, `read_host` and `read_content_type` each answer a
+  `HeaderRead` — absent, one well-formed line, or refused — and an empty
+  line, a second line, a byte off the grammar, or a comma anywhere is
+  refused, so a repeat reads the same line by line as it does joined by a
+  runtime with no per-line view. `is_browser_context` is any `Origin` or
+  `Referer` line, an empty one included. Both spines are held to
+  `request_header_conformance.json`, a byte-identical copy of fuz_app's.
+  The line primitives the credential readers share (`single_line`,
+  `trim_optional_whitespace`) live here too.
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with a required
@@ -491,7 +502,8 @@ The rules a change must keep:
 
 - The non-cookie credential legs (daemon token, bearer) refuse browser callers.
 - **One strict reader per credential header** (`credential_headers`, twin of
-  fuz_app's `auth/credential_headers.ts`), over every line of the header: a
+  fuz_app's `auth/credential_headers.ts`), over every line of the header
+  (the line primitives are `fuz_http::request_headers`'): a
   value reads exactly or it is not that credential — nothing is decoded,
   unquoted, or repaired. `Cookie` lines read as their `; ` join (bytes, so a
   non-ASCII sibling cookie hides nothing): split on `;`, each pair stripped of

@@ -69,6 +69,7 @@ pub mod proxy;
 pub mod host;
 pub mod origin;
 pub mod origin_wildcard;
+pub mod request_headers;
 pub mod simple_request;
 
 // === JSON-RPC envelope + errors ===
@@ -166,6 +167,10 @@ pub use parsed_proxy::{ParsedProxy, ProxyParseError};
 pub use proxy::{is_trusted_ip, parse_proxy_entry, parse_proxy_list};
 pub use query::{assert_known_query_keys, query_first};
 pub use ready::{ReadyRouteState, ready_router};
+pub use request_headers::{
+    HeaderRead, is_browser_context, read_content_type, read_host, read_origin, single_line,
+    trim_optional_whitespace,
+};
 pub use rest_error::{
     AUTHENTICATION_REQUIRED_REASON, INSUFFICIENT_PERMISSIONS_REASON, INTERNAL_ERROR_REASON,
     INVALID_JSON_BODY_REASON, INVALID_QUERY_PARAMS_REASON, INVALID_REQUEST_BODY_REASON,

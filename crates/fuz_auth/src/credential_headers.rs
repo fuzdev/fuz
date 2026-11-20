@@ -19,6 +19,7 @@
 
 use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
+use fuz_http::{single_line, trim_optional_whitespace};
 
 use crate::api_token::is_api_token_shaped;
 use crate::daemon_token::{DAEMON_TOKEN_HEADER, is_daemon_token_shaped};
@@ -27,30 +28,12 @@ use crate::daemon_token::{DAEMON_TOKEN_HEADER, is_daemon_token_shaped};
 /// it.
 const BEARER_PREFIX: &str = "bearer ";
 
-/// Strip HTTP optional whitespace — SP and HTAB, nothing else — from both ends
-/// of a field value or a part of one.
-///
-/// Not `<[u8]>::trim_ascii`, which also strips LF, FF, and CR, and not
-/// `str::trim`, which strips every Unicode whitespace character — `0xA0` and
-/// `0x85` among them once a header's bytes are read as text. Twin of
-/// `fuz_app`'s `trim_optional_whitespace`.
-#[must_use]
-pub const fn trim_optional_whitespace(mut bytes: &[u8]) -> &[u8] {
-    while let [b' ' | b'\t', rest @ ..] = bytes {
-        bytes = rest;
-    }
-    while let [rest @ .., b' ' | b'\t'] = bytes {
-        bytes = rest;
-    }
-    bytes
-}
-
 /// Read the session cookie's value out of the request's `Cookie` lines.
 ///
 /// Several `Cookie` lines read as one value joined with `; ` — what Node and
 /// Bun hand the TS twin, and RFC 9113's rule for HTTP/2 cookie crumbs. The
 /// value is split on `;`, each pair is stripped of SP and HTAB at both ends
-/// ([`trim_optional_whitespace`]), and the first pair that begins with exactly
+/// ([`fuz_http::trim_optional_whitespace`]), and the first pair that begins with exactly
 /// `<cookie_name>=` wins. Its value is the rest of the pair, verbatim: not
 /// percent-decoded, not unquoted, whitespace after the `=` kept. A first pair
 /// that will not verify is not skipped for a later one.
@@ -79,17 +62,6 @@ pub fn read_session_cookie_value<'h>(
                 .strip_prefix(name)?
                 .strip_prefix(b"=")
         })
-}
-
-/// The one value of a header sent exactly once, as text — `None` when the
-/// header is absent, sent as more than one line, or holds a byte outside
-/// visible ASCII, SP, and HTAB.
-fn single_line(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
-    let mut lines = headers.get_all(name).iter();
-    match (lines.next(), lines.next()) {
-        (Some(line), None) => line.to_str().ok(),
-        _ => None,
-    }
 }
 
 /// Read the API token out of the request's `Authorization` lines.
@@ -147,22 +119,6 @@ mod tests {
             );
         }
         headers
-    }
-
-    #[test]
-    fn trim_strips_sp_and_htab_only() {
-        assert_eq!(trim_optional_whitespace(b" \t a b \t "), b"a b");
-        assert_eq!(trim_optional_whitespace(b" \t "), b"");
-        assert_eq!(trim_optional_whitespace(b""), b"");
-        for kept in [
-            &b"\xa0a\xa0"[..],
-            b"\x85a\x85",
-            b"\x0ba",
-            b"\x0ca",
-            b"\na\r",
-        ] {
-            assert_eq!(trim_optional_whitespace(kept), kept);
-        }
     }
 
     #[test]

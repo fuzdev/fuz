@@ -28,7 +28,8 @@
 //! its control — a well-formed unknown token — makes at least one, and fails
 //! the read.
 //! `is_browser_context` itself — the heart of the bearer rejection — is
-//! unit-tested inline in `bearer_auth.rs`.
+//! unit-tested beside `fuz_http::request_headers`, over the shared request
+//! header conformance table.
 
 #![expect(
     clippy::unwrap_used,

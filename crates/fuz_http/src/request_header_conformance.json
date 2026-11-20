@@ -1,0 +1,1158 @@
+{
+	"unit_placeholders": {
+		"cookie_name": "fuz_session",
+		"session_cookie": "session-cookie-value",
+		"api_token": "api-token-value",
+		"daemon_token": "daemon-token-value",
+		"host": "localhost:4460",
+		"foreign_host": "rebind.example",
+		"origin": "http://localhost:4460",
+		"foreign_origin": "https://evil.example"
+	},
+	"rows": [
+		{
+			"name": "a session, no Origin",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": "session"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and the allowed Origin",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin}"
+			],
+			"read": {
+				"origin": {
+					"one": "{origin}"
+				},
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": "session"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and an empty Origin",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin:"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			},
+			"note": "an empty Origin is a malformed browser signal: refused, never read as no Origin"
+		},
+		{
+			"name": "an API token and an empty Origin",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Origin:"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			},
+			"note": "the origin check runs ahead of the credential legs"
+		},
+		{
+			"name": "a session and a foreign Origin",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {foreign_origin}"
+			],
+			"read": {
+				"origin": {
+					"one": "{foreign_origin}"
+				},
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session, the allowed Origin, then a foreign one",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin}",
+				"Origin: {foreign_origin}"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session, a foreign Origin, then the allowed one",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {foreign_origin}",
+				"Origin: {origin}"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session and the allowed Origin twice",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin}",
+				"Origin: {origin}"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			},
+			"note": "more than one Origin is refused, even the same one twice"
+		},
+		{
+			"name": "a session, an empty Origin, then the allowed one",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin:",
+				"Origin: {origin}"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session, the allowed Origin, then an empty one",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin}",
+				"Origin:"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session and an Origin holding a byte outside ASCII",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin}\u00e9"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session and two Origins on one line",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin}, {foreign_origin}"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			},
+			"note": "no origin holds a comma, so a line holding one reads as the join of two lines it is"
+		},
+		{
+			"name": "a session and the allowed Origin with a trailing comma",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {origin},"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			}
+		},
+		{
+			"name": "a session and the opaque Origin",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: null"
+			],
+			"read": {
+				"origin": {
+					"one": "null"
+				},
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			},
+			"note": "`null` is a value a browser sends: the reader takes it and the allowlist refuses it"
+		},
+		{
+			"name": "an Origin holding a tab",
+			"lines": [
+				"Origin: http://local\thost:4460"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"wire_reason": "a reader-grammar row: the wire rows send its neighbours with a session"
+		},
+		{
+			"name": "an Origin in upper case",
+			"lines": [
+				"Origin: HTTP://LOCALHOST:4460"
+			],
+			"read": {
+				"origin": {
+					"one": "HTTP://LOCALHOST:4460"
+				},
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"wire_reason": "case is the allowlist matcher's concern, pinned by origin_conformance.json; the reader keeps the value as sent"
+		},
+		{
+			"name": "an API token, no Referer",
+			"lines": [
+				"Authorization: Bearer {api_token}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": "api_token"
+			},
+			"upgrade": {
+				"authenticates": "api_token"
+			}
+		},
+		{
+			"name": "an API token and an empty Referer",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Referer:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			},
+			"note": "any Referer line is browser context, an empty one included: the bearer leg discards its token and the request continues"
+		},
+		{
+			"name": "an API token and a Referer",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Referer: {origin}/page"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "an API token, a Referer, then an empty one",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Referer: {origin}/page",
+				"Referer:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "an API token, an empty Referer, then one",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Referer:",
+				"Referer: {origin}/page"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "an API token and a Referer holding a byte outside ASCII",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Referer: {origin}/\u00e9"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "a session and an empty Referer",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Referer:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": "session"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			},
+			"note": "browser context costs a session nothing"
+		},
+		{
+			"name": "the daemon token and an empty Referer",
+			"lines": [
+				"X-Daemon-Token: {daemon_token}",
+				"Referer:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "the daemon token and a Referer",
+			"lines": [
+				"X-Daemon-Token: {daemon_token}",
+				"Referer: {origin}/page"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "a Referer and no credential",
+			"lines": [
+				"Referer: {origin}/page"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": null
+			},
+			"upgrade": {
+				"authenticates": null
+			}
+		},
+		{
+			"name": "a session and the server's own Host",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {host}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": {
+					"one": "{host}"
+				},
+				"content_type": "absent"
+			},
+			"post": {
+				"authenticates": "session"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session, the server's Host, then a foreign one",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {host}",
+				"Host: {foreign_host}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			},
+			"note": "more than one Host is refused (RFC 9112 section 3.2)"
+		},
+		{
+			"name": "a session, a foreign Host, then the server's",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {foreign_host}",
+				"Host: {host}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			}
+		},
+		{
+			"name": "a session and a foreign Host",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {foreign_host}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": {
+					"one": "{foreign_host}"
+				},
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			}
+		},
+		{
+			"name": "a session, an empty Host, then the server's",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host:",
+				"Host: {host}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			},
+			"upgrade_runtime_refusal": "empty_host"
+		},
+		{
+			"name": "a session and an empty Host",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			},
+			"upgrade_runtime_refusal": "empty_host",
+			"note": "an empty Host names nothing: refused, never read as no Host"
+		},
+		{
+			"name": "a session, the server's Host, then an empty one",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {host}",
+				"Host:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			}
+		},
+		{
+			"name": "a session and the server's Host twice",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {host}",
+				"Host: {host}"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			}
+		},
+		{
+			"name": "no request headers",
+			"lines": [],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "absent"
+			},
+			"wire_reason": "no one answer holds: Bun and a plain request on @hono/node-server answer a request with no Host 400 before the app runs, while the Rust spine and a Node upgrade pass it to the host gate, which passes it"
+		},
+		{
+			"name": "a Host with a trailing comma",
+			"lines": [
+				"Host: localhost:4460,"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"wire_reason": "@hono/node-server refuses a request whose first Host its URL parser can't read before the app runs (an upgrade with a 500)",
+			"note": "no host holds a comma, so a line holding one reads as the join of two lines it is"
+		},
+		{
+			"name": "a Host holding a space",
+			"lines": [
+				"Host: localhost: 4460"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"wire_reason": "@hono/node-server refuses a request whose first Host its URL parser can't read before the app runs"
+		},
+		{
+			"name": "a Host holding a byte outside ASCII",
+			"lines": [
+				"Host: localhost\u00e9:4460"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "refused",
+				"content_type": "absent"
+			},
+			"wire_reason": "@hono/node-server refuses a request whose first Host its URL parser can't read before the app runs"
+		},
+		{
+			"name": "a Host in upper case",
+			"lines": [
+				"Host: LOCALHOST:4460"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": {
+					"one": "LOCALHOST:4460"
+				},
+				"content_type": "absent"
+			},
+			"wire_reason": "case is the host matcher's concern, pinned by origin_conformance.json; the reader keeps the value as sent"
+		},
+		{
+			"name": "a session, JSON then plain text",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json",
+				"Content-Type: text/plain"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			},
+			"note": "a Content-Type sent twice is refused in either order; an upgrade reads none"
+		},
+		{
+			"name": "a session, plain text then JSON",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: text/plain",
+				"Content-Type: application/json"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and JSON",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": {
+					"one": "application/json"
+				}
+			},
+			"post": {
+				"authenticates": "session"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and two types on one line",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json, text/plain"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and JSON twice",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json",
+				"Content-Type: application/json"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and an empty Content-Type",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session, JSON, then an empty Content-Type",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json",
+				"Content-Type:"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session, JSON with a parameter, then plain text",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json; charset=utf-8",
+				"Content-Type: text/plain"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			},
+			"note": "joined, the lines read `application/json; charset=utf-8, text/plain`, whose essence is JSON: only a comma refused anywhere in the value reads the join as the repeat it is"
+		},
+		{
+			"name": "a session and JSON with a quoted comma",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json; charset=\"a,b\""
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			},
+			"note": "a comma is refused anywhere in the value, a quoted parameter included, so that one line and the join of two never read alike"
+		},
+		{
+			"name": "a session and JSON in another case, with a parameter",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: Application/JSON; charset=utf-8"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": {
+					"one": "application/json"
+				}
+			},
+			"post": {
+				"authenticates": "session"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and a type with no subtype",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and an essence holding a space",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json extra"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "a session and JSON holding a byte outside ASCII",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Content-Type: application/json\u00e9"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": "session"
+			}
+		},
+		{
+			"name": "plain text with a parameter and spaces",
+			"lines": [
+				"Content-Type: text/plain ; charset=utf-8"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": {
+					"one": "text/plain"
+				}
+			},
+			"wire_reason": "a reader-grammar row: an essence the JSON route refuses either way"
+		},
+		{
+			"name": "a type with an empty subtype",
+			"lines": [
+				"Content-Type: application/"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"wire_reason": "a reader-grammar row: an essence the JSON route refuses either way"
+		},
+		{
+			"name": "a type with an empty type",
+			"lines": [
+				"Content-Type: /json"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"wire_reason": "a reader-grammar row: an essence the JSON route refuses either way"
+		},
+		{
+			"name": "JSON with an empty parameter list",
+			"lines": [
+				"Content-Type: application/json;"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": "absent",
+				"content_type": {
+					"one": "application/json"
+				}
+			},
+			"wire_reason": "a reader-grammar row: the wire rows send JSON with a parameter"
+		},
+		{
+			"name": "a session, a foreign Origin and a foreign Host",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin: {foreign_origin}",
+				"Host: {foreign_host}"
+			],
+			"read": {
+				"origin": {
+					"one": "{foreign_origin}"
+				},
+				"browser_context": true,
+				"host": {
+					"one": "{foreign_host}"
+				},
+				"content_type": "absent"
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			},
+			"note": "the host gate runs ahead of the origin check"
+		},
+		{
+			"name": "a session, an empty Origin and two Content-Types",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Origin:",
+				"Content-Type: application/json",
+				"Content-Type: text/plain"
+			],
+			"read": {
+				"origin": "refused",
+				"browser_context": true,
+				"host": "absent",
+				"content_type": "refused"
+			},
+			"post": {
+				"refused": "forbidden_origin"
+			},
+			"upgrade": {
+				"refused": "forbidden_origin"
+			},
+			"note": "the origin check runs ahead of the content-type check"
+		},
+		{
+			"name": "a session, a foreign Host and plain text",
+			"lines": [
+				"Cookie: {cookie_name}={session_cookie}",
+				"Host: {foreign_host}",
+				"Content-Type: text/plain"
+			],
+			"read": {
+				"origin": "absent",
+				"browser_context": false,
+				"host": {
+					"one": "{foreign_host}"
+				},
+				"content_type": {
+					"one": "text/plain"
+				}
+			},
+			"post": {
+				"refused": "forbidden_host"
+			},
+			"upgrade": {
+				"refused": "forbidden_host"
+			},
+			"note": "the host gate runs ahead of the content-type check"
+		},
+		{
+			"name": "an API token, the allowed Origin and plain text",
+			"lines": [
+				"Authorization: Bearer {api_token}",
+				"Origin: {origin}",
+				"Content-Type: text/plain"
+			],
+			"read": {
+				"origin": {
+					"one": "{origin}"
+				},
+				"browser_context": true,
+				"host": "absent",
+				"content_type": {
+					"one": "text/plain"
+				}
+			},
+			"post": {
+				"refused": "unsupported_content_type"
+			},
+			"upgrade": {
+				"authenticates": null
+			},
+			"note": "the origin passes, the bearer leg discards its token in browser context, and the content-type check refuses ahead of any 401"
+		}
+	]
+}

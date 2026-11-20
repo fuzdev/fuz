@@ -49,11 +49,12 @@
 //!
 //! ## Requests
 //!
-//! [`AllowedOrigins::allows_request`] passes a request with no `Origin` —
-//! non-browser clients (curl, server-to-server) don't auto-attach cookies, so
-//! CSRF doesn't apply, and auth is the control. An `Origin` that isn't visible
-//! ASCII, or more than one `Origin` header, is refused: neither is something a
-//! browser sends, and reading either as absent would fail open.
+//! [`AllowedOrigins::allows_request_origin`] passes a request with no `Origin`
+//! — non-browser clients (curl, server-to-server) don't auto-attach cookies,
+//! so CSRF doesn't apply, and auth is the control. A malformed `Origin`
+//! ([`crate::read_origin`]: an empty line, more than one line, a byte that
+//! isn't visible ASCII) is refused: none is something a browser sends, and
+//! reading one as absent would fail open.
 
 use std::fmt;
 use std::net::Ipv6Addr;
@@ -61,10 +62,12 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use fuz_sys::text::{quoted, truncate};
+
+use crate::request_headers::{HeaderRead, read_origin};
 
 /// Canonical error reason for an origin rejection. Mirrors `fuz_app`'s
 /// `ERROR_FORBIDDEN_ORIGIN` (`http/error_schemas.ts`) so the wire body
@@ -628,23 +631,20 @@ impl AllowedOrigins {
     }
 
     /// The request-level check: true when the request carries no `Origin`,
-    /// or exactly one that [`allows`](Self::allows) admits. An `Origin` that
-    /// isn't visible ASCII, or a second `Origin` header, is refused (module
-    /// doc § Requests).
+    /// or one well-formed line ([`crate::read_origin`]) that
+    /// [`allows`](Self::allows) admits. A malformed `Origin` is refused
+    /// (module doc § Requests). Twin of `fuz_app`'s `verify_request_source`.
     #[must_use]
-    pub fn allows_request(&self, headers: &HeaderMap) -> bool {
-        let mut values = headers.get_all(header::ORIGIN).iter();
-        match (values.next(), values.next()) {
-            (None, _) => true,
-            (Some(_), Some(_)) => false,
-            (Some(value), None) => {
-                std::str::from_utf8(value.as_bytes()).is_ok_and(|origin| self.allows(origin))
-            }
+    pub fn allows_request_origin(&self, headers: &HeaderMap) -> bool {
+        match read_origin(headers) {
+            HeaderRead::Absent => true,
+            HeaderRead::One(origin) => self.allows(origin),
+            HeaderRead::Refused => false,
         }
     }
 }
 
-/// axum middleware enforcing [`AllowedOrigins::allows_request`], refusing
+/// axum middleware enforcing [`AllowedOrigins::allows_request_origin`], refusing
 /// with [`forbidden_origin_response`].
 ///
 /// [`crate::compose_stack`] mounts it in every route group, the fallback
@@ -657,7 +657,7 @@ pub async fn origin_layer(
     req: Request,
     next: Next,
 ) -> Response {
-    if !allowed.allows_request(req.headers()) {
+    if !allowed.allows_request_origin(req.headers()) {
         return forbidden_origin_response();
     }
     next.run(req).await
@@ -754,7 +754,7 @@ fn is_canonical_ipv4_or_name(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
+    use axum::http::{HeaderValue, header};
 
     fn origins(raw: &str) -> AllowedOrigins {
         AllowedOrigins::parse(raw).unwrap_or_else(|e| panic!("{raw:?}: {e}"))
@@ -1013,22 +1013,25 @@ mod tests {
 
     #[test]
     fn request_without_origin_passes() {
-        assert!(origins("https://app.example.com").allows_request(&HeaderMap::new()));
+        assert!(origins("https://app.example.com").allows_request_origin(&HeaderMap::new()));
     }
 
     #[test]
     fn request_with_one_origin_is_matched() {
         let allowed = origins("https://app.example.com");
-        assert!(allowed.allows_request(&headers(&[b"https://app.example.com"])));
-        assert!(!allowed.allows_request(&headers(&[b"https://evil.example.com"])));
-        assert!(!allowed.allows_request(&headers(&[b""])));
+        assert!(allowed.allows_request_origin(&headers(&[b"https://app.example.com"])));
+        assert!(!allowed.allows_request_origin(&headers(&[b"https://evil.example.com"])));
+        assert!(!allowed.allows_request_origin(&headers(&[b""])));
     }
 
     #[test]
     fn request_with_an_unreadable_origin_is_refused() {
         let allowed = origins("http://*:*");
         for value in [&b"http://caf\xe9"[..], b"http://a\tb", b"http://\xff"] {
-            assert!(!allowed.allows_request(&headers(&[value])), "{value:?}");
+            assert!(
+                !allowed.allows_request_origin(&headers(&[value])),
+                "{value:?}"
+            );
         }
     }
 
@@ -1036,8 +1039,8 @@ mod tests {
     fn request_with_a_duplicated_origin_is_refused() {
         let allowed = origins("https://app.example.com");
         let same = b"https://app.example.com";
-        assert!(!allowed.allows_request(&headers(&[same, same])));
-        assert!(!allowed.allows_request(&headers(&[same, b"https://evil.example.com"])));
+        assert!(!allowed.allows_request_origin(&headers(&[same, same])));
+        assert!(!allowed.allows_request_origin(&headers(&[same, b"https://evil.example.com"])));
     }
 
     #[test]

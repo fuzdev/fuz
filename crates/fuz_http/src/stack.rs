@@ -59,7 +59,7 @@
 //! Every group, the fallback included, is checked unless it carries an
 //! [`OriginScope::CarvedOut`] with a stated reason — the one way to take a
 //! group out, and greppable as `origin_carve_out(`. A request with no
-//! `Origin` passes the check ([`AllowedOrigins::allows_request`]), so probes,
+//! `Origin` passes the check ([`AllowedOrigins::allows_request_origin`]), so probes,
 //! CLI clients and server-to-server callers are unaffected by the default;
 //! what it refuses is a browser page from a foreign origin, on any path.
 //!

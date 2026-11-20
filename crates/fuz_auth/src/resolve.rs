@@ -35,7 +35,6 @@ use crate::api_token::hash_api_token;
 use crate::api_token_queries::{
     query_api_token_live_account, query_validate_api_token, spawn_api_token_touch,
 };
-use crate::bearer_auth::is_browser_context;
 use crate::credential_deadline::credential_deadline_after;
 use crate::credential_headers::{read_bearer_token, read_daemon_token};
 use crate::credential_type::CredentialType;
@@ -47,6 +46,8 @@ use crate::session_cookie::{SessionCookieRead, parse_session_from_cookies};
 use crate::session_queries::query_session_get_valid;
 use crate::token_scope::TokenScope;
 use std::time::Instant;
+
+use fuz_http::is_browser_context;
 
 /// A credential leg could not finish its read: its pool checkout or a query
 /// failed, so whether the request carries that credential is unknown.

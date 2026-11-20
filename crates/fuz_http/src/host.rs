@@ -17,8 +17,8 @@
 //! A request without a `Host` header passes: browsers always send one, so
 //! its absence means a non-browser client, which the auth stack governs. An
 //! h2c prior-knowledge request carries no `Host` (only `:authority`), so it
-//! passes too — no browser speaks h2c. A request with more than one `Host`
-//! is refused (RFC 9112 §3.2).
+//! passes too — no browser speaks h2c. An empty `Host` and more than one
+//! `Host` are refused (RFC 9112 §3.2).
 //!
 //! The gate is on by default ([`crate::StackOptions::new`]). A refusal is
 //! said in the log as well as answered: the first in each
@@ -37,6 +37,8 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+
+use crate::request_headers::{HeaderRead, read_host, read_origin_or_host_lines};
 
 use fuz_sys::text::{quoted, truncate};
 
@@ -116,41 +118,32 @@ impl AllowedOrigins {
             .any(|scheme| self.allows(&format!("{scheme}{host}")))
     }
 
-    /// Host check for a request's `Host` header values — true when there are
-    /// none or one that passes [`allows_host`](Self::allows_host). A value
-    /// that isn't visible ASCII (a tab and the space allowed, as in a header
-    /// value) is refused, and so is more than one `Host` (RFC 9112 §3.2).
-    /// Twin of the TS `allows_request_hosts`.
+    /// Host check for a request's `Host` values, one per line — true when
+    /// there are none, or one ([`crate::read_host`]'s rule: printable ASCII,
+    /// no space or comma) that passes [`allows_host`](Self::allows_host). An
+    /// empty line, more than one line (RFC 9112 §3.2), and a byte outside
+    /// that set are refused. Twin of the TS `allows_request_hosts`.
     #[must_use]
     pub fn allows_request_hosts(&self, hosts: &[&str]) -> bool {
-        match hosts {
-            [] => true,
-            [host] => is_header_text(host) && self.allows_host(host),
-            _ => false,
-        }
+        self.allows_host_read(read_origin_or_host_lines(
+            hosts.iter().map(|h| h.as_bytes()),
+        ))
     }
 
     /// [`allows_request_hosts`](Self::allows_request_hosts) over a request's
-    /// headers; a `Host` value that isn't text is refused.
+    /// headers ([`crate::read_host`]).
     #[must_use]
     pub fn allows_request_host(&self, headers: &HeaderMap) -> bool {
-        let mut hosts = headers.get_all(header::HOST).iter();
-        match (hosts.next(), hosts.next()) {
-            (None, _) => true,
-            (Some(value), None) => value
-                .to_str()
-                .is_ok_and(|host| self.allows_request_hosts(&[host])),
-            (Some(_), Some(_)) => false,
+        self.allows_host_read(read_host(headers))
+    }
+
+    fn allows_host_read(&self, host: HeaderRead<&str>) -> bool {
+        match host {
+            HeaderRead::Absent => true,
+            HeaderRead::One(host) => self.allows_host(host),
+            HeaderRead::Refused => false,
         }
     }
-}
-
-/// True when every char is visible ASCII, the space, or a tab — what
-/// `HeaderValue::to_str` admits.
-fn is_header_text(value: &str) -> bool {
-    value
-        .bytes()
-        .all(|b| b == b'\t' || (b' '..=b'~').contains(&b))
 }
 
 /// Counts refusals between warnings, so a flood of foreign `Host`s writes one

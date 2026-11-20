@@ -104,7 +104,6 @@ pub mod session_queries;
 // === auth resolution + middleware ===
 pub mod acting;
 pub mod auth_gate;
-pub mod bearer_auth;
 mod credential_deadline;
 pub mod credential_headers;
 pub mod request_context;
@@ -227,7 +226,6 @@ pub use auth_cleanup::{
     spawn_auth_cleanup,
 };
 pub use auth_gate::{AUTH_MIDDLEWARE_PATH, AuthGate, OriginChecked, auth_middleware_applies};
-pub use bearer_auth::is_browser_context;
 pub use bootstrap::{
     BOOTSTRAP_TOKEN_LENGTH_MAX, BOOTSTRAP_TOKEN_MIN_BYTES, BootstrapInput, BootstrapOptions,
     bootstrap_handler, is_bootstrap_available,
@@ -238,9 +236,7 @@ pub use bootstrap_token_store::{BootstrapTokenStore, FileBootstrapTokenStore};
 pub use connection_closer::{
     ConnectionCloseTarget, ConnectionCloser, NoopConnectionCloser, queue_connection_close,
 };
-pub use credential_headers::{
-    read_bearer_token, read_daemon_token, read_session_cookie_value, trim_optional_whitespace,
-};
+pub use credential_headers::{read_bearer_token, read_daemon_token, read_session_cookie_value};
 pub use credential_type::{CredentialGate, CredentialType};
 pub use daemon_token::{
     DAEMON_TOKEN_HEADER, DAEMON_TOKEN_LEN, DaemonTokenKeeperResolved, DaemonTokenState,
