@@ -196,6 +196,38 @@ pub async fn query_invite_delete_unclaimed(
     Ok(row.is_some())
 }
 
+/// Delete every unclaimed invite issued by one of `created_by_actor_ids` —
+/// the invite cascade of an account delete or purge.
+///
+/// An invite records no authority, so one outliving its issuer's account
+/// would still admit a signup. Deleting is how an invite is revoked
+/// ([`query_invite_delete_unclaimed`]), so a voided invite answers a signup
+/// as a revoked or unknown one does, and an undelete has nothing to bring
+/// back. A claimed invite stays, as the record of the signup it admitted.
+/// Returns the deleted invites' ids. Mirrors `fuz_app`'s
+/// `query_invite_delete_unclaimed_by_creators`.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_invite_delete_unclaimed_by_creators(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    created_by_actor_ids: &[uuid::Uuid],
+) -> Result<Vec<uuid::Uuid>, tokio_postgres::Error> {
+    if created_by_actor_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = client
+        .query(
+            "DELETE FROM invite
+             WHERE created_by = ANY($1::uuid[]) AND claimed_at IS NULL
+             RETURNING id",
+            &[&created_by_actor_ids],
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
+}
+
 /// Find an unclaimed invite matching email and/or username, taking a
 /// row-level write lock on the matched row.
 ///

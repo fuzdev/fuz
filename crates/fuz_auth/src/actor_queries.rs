@@ -562,6 +562,13 @@ pub async fn query_account_has_active_global_role(
 /// transaction that does the removal — outside one, the locks end with the
 /// statement.
 ///
+/// The rows are locked in id order — account, then actor, then grant — as the
+/// sort returns them: each account's row, its actors' and its grants' before
+/// the next account's. [`crate::account_queries::query_account_lock_live_many`]
+/// takes account rows in the same order, so an offer between two admins and an
+/// admin's removal never wait on each other's rows in opposite orders. Ids
+/// never change, so no concurrent update can move a row the sort has placed.
+///
 /// `exclude_role_grant_id` leaves one grant out of the count, so a revoke asks
 /// whether any active admin account would remain without that grant — an
 /// account holding the grant on two actors keeps counting through the other.
@@ -590,6 +597,7 @@ pub async fn query_count_active_accounts_with_global_role_for_update(
            AND rg.role = $1
            AND rg.scope_id IS NULL
            AND {rg_active}
+         ORDER BY a.id, act.id, rg.id
          FOR UPDATE",
         rg_active = crate::role_grant_active_sql("rg"),
     );

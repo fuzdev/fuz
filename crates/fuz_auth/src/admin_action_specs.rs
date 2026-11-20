@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::account_queries::{
     AccountIdentitySnapshot, AdminAccountEntry, query_account_by_email, query_account_by_id,
-    query_account_by_username, query_account_soft_delete, query_account_undelete,
-    query_admin_account_list, query_purge_account,
+    query_account_by_username, query_account_lock_live, query_account_soft_delete,
+    query_account_undelete, query_admin_account_list, query_purge_account,
 };
 use crate::action_auth::{AuthSpec, credential_type_required};
 use crate::action_rate_limit::RateLimitClass;
@@ -40,7 +40,7 @@ use crate::credential_type::CredentialGate;
 use crate::credential_type::CredentialType;
 use crate::invite_queries::{
     Invite, InviteWithUsernames, query_create_invite, query_invite_delete_unclaimed,
-    query_invite_list_all_with_usernames,
+    query_invite_delete_unclaimed_by_creators, query_invite_list_all_with_usernames,
 };
 use crate::name_schema::NAME_LENGTH_MAX;
 use crate::params_helpers::{
@@ -49,12 +49,15 @@ use crate::params_helpers::{
 };
 use crate::role::{ROLE_ADMIN, ROLE_KEEPER, RoleRegistry};
 use crate::role_grant_offer_action_specs::emit_supersede_audits;
-use crate::role_grant_offer_queries::query_role_grant_offer_supersede_outgoing;
+use crate::role_grant_offer_queries::{
+    query_role_grant_offer_supersede_incoming, query_role_grant_offer_supersede_outgoing,
+};
 use fuz_http::{
     InputShape, JsonrpcError, conflict, forbidden, internal_error_with_source,
     invalid_input_params, invalid_params, method_not_found, not_found, parse_optional_bool_param,
     parse_optional_enum_param, parse_optional_str_param, parse_optional_uuid_param,
     parse_strict_params, parse_uuid_param, reject_null_keys, reject_unknown_keys, serialize_result,
+    unauthenticated,
 };
 
 /// `data.reason` when a non-admin targets an account other than their own
@@ -554,6 +557,17 @@ async fn handle_invite_create(
         }
     }
 
+    // The issuer's account was read before this transaction. A delete
+    // committed since creates nothing — refused as the dead credential it now
+    // is, as `account_token_create` refuses it — and one still to commit waits
+    // on this lock, then deletes the invite with the account's other unclaimed
+    // ones: a delete writes its tombstone first. Twin of the TS handler's.
+    if !query_account_lock_live(db, &ctx.auth.account.id)
+        .await
+        .map_err(|e| internal_error_with_source("invite issuer lock failed", &e))?
+    {
+        return Err(unauthenticated());
+    }
     let invite = match query_create_invite(
         db,
         email.as_deref(),
@@ -878,8 +892,8 @@ async fn emit_actor_lifecycle_audits<'a>(
     Ok(())
 }
 
-/// The `role_grant_offer_supersede` reason when an account's removal ends
-/// the pending offers its actors made; `cause_id` is the removed account.
+/// The `role_grant_offer_supersede` reason when an account's removal ends a
+/// pending offer it made or one made to it; `cause_id` is the removed account.
 const SUPERSEDE_REASON_ACCOUNT_DELETED: &str = "account_deleted";
 
 /// Supersede every pending offer the removed account's actors made, with its
@@ -907,6 +921,60 @@ async fn cancel_outgoing_offers(
     .await
 }
 
+/// Supersede every pending offer made to the deleted account, account- or
+/// actor-addressed, audited as the outgoing cascade is and, like it, with no
+/// notification. An undelete restores the account, so an offer left pending
+/// through the delete would come back with it and could be accepted.
+async fn cancel_incoming_offers(
+    ctx: &AuthenticatedActionContext<'_>,
+    db: &(impl deadpool_postgres::GenericClient + ?Sized),
+    target_account_id: uuid::Uuid,
+) -> Result<(), JsonrpcError> {
+    let superseded = query_role_grant_offer_supersede_incoming(db, &target_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("incoming offer supersede failed", &e))?;
+    emit_supersede_audits(
+        ctx,
+        db,
+        &superseded,
+        SUPERSEDE_REASON_ACCOUNT_DELETED,
+        target_account_id,
+    )
+    .await
+}
+
+/// Delete the unclaimed invites the removed account's actors issued, each
+/// audited as an `invite_delete` is. An invite records no authority, so one
+/// outliving its issuer's account would still admit a signup; deleted, it
+/// answers a signup as a revoked one does, and an undelete can't revive it. A
+/// claimed invite is untouched.
+async fn void_unclaimed_invites(
+    ctx: &AuthenticatedActionContext<'_>,
+    db: &(impl deadpool_postgres::GenericClient + ?Sized),
+    actors: &[ActorRow],
+) -> Result<(), JsonrpcError> {
+    let actor_ids: Vec<uuid::Uuid> = actors.iter().map(|a| a.id).collect();
+    let invite_ids = query_invite_delete_unclaimed_by_creators(db, &actor_ids)
+        .await
+        .map_err(|e| internal_error_with_source("invite void failed", &e))?;
+    // No `actor_id`, as the TS twin writes this row and its own invite events:
+    // account-grain. This spine's `invite_create` / `invite_delete` still set
+    // one, an older divergence of theirs.
+    for invite_id in invite_ids {
+        ctx.audit_emit(
+            db,
+            AuditLogInput::for_event(AuditEventType::InviteDelete)
+                .account(ctx.auth.account.id)
+                .ip(ctx.client_ip.clone())
+                .metadata(serde_json::json!({
+                    "invite_id": invite_id.to_string(),
+                })),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Soft-delete an account (self-or-admin, reversible tombstone).
 ///
 /// `account_id` is optional — omitted (or equal to the caller's own
@@ -917,8 +985,9 @@ async fn cancel_outgoing_offers(
 /// API or daemon token is refused with the dispatcher's own
 /// `credential_type_required` 403, ahead of the keeper / last-admin guards, so
 /// a leaked token can't end the account it belongs to. Tombstones
-/// the account + its actor(s), supersedes the pending offers its actors made,
-/// revokes all sessions/tokens, closes live
+/// the account + its actor(s), supersedes the pending offers its actors made
+/// and the ones made to it, revokes all sessions/tokens, deletes the unclaimed
+/// invites its actors issued, closes live
 /// sockets, and emits `account_delete` plus one `actor_delete` per
 /// soft-deleted actor — each carrying its identity snapshot. Auth
 /// resolution already rejects soft-deleted accounts, so the revoke +
@@ -974,6 +1043,7 @@ async fn handle_account_delete(
     };
 
     cancel_outgoing_offers(ctx, db, target_account_id, &actors).await?;
+    cancel_incoming_offers(ctx, db, target_account_id).await?;
 
     let mut soft_deleted_actors = Vec::new();
     for actor in &actors {
@@ -991,6 +1061,7 @@ async fn handle_account_delete(
     let _ = query_revoke_all_api_tokens_for_account(db, &target_account_id)
         .await
         .map_err(|e| internal_error_with_source("token revoke failed", &e))?;
+    void_unclaimed_invites(ctx, db, &actors).await?;
     ctx.close_connections_after_commit(ConnectionCloseTarget::Account(target_account_id));
 
     emit_account_lifecycle_audit(
@@ -1018,7 +1089,8 @@ async fn handle_account_delete(
 
 /// Hard-purge an account (keeper-gated, irreversible). Fail-loud:
 /// requires `confirm: true` and emits a WARN. Supersedes the pending offers
-/// its actors made, audited, before the cascade deletes them. Snapshots identity into
+/// its actors made, audited, and deletes the unclaimed invites they issued,
+/// before the cascade deletes the one and orphans the other. Snapshots identity into
 /// `account_purge` + per-actor `actor_purge` before the cascading delete
 /// removes the rows — the `audit_log` identity columns carry no FK, so
 /// the purged ids survive on historical rows and the snapshots name them.
@@ -1053,6 +1125,9 @@ async fn handle_account_purge(
     // Before the cascade, whose `ON DELETE CASCADE` would take the offers
     // with no audit row.
     cancel_outgoing_offers(ctx, db, target_account_id, &actors).await?;
+    // Before the cascade too: `invite.created_by` is `ON DELETE SET NULL`, so
+    // the cascade would leave the account's unclaimed invites usable.
+    void_unclaimed_invites(ctx, db, &actors).await?;
 
     let Some(snapshot) = query_purge_account(db, &target_account_id)
         .await
@@ -1103,7 +1178,11 @@ async fn handle_account_purge(
 /// Clears the `deleted_at` tombstone on the account + its soft-deleted
 /// actor(s), emitting `account_undelete` + one `actor_undelete` per
 /// reactivated actor. There is no self path (a tombstoned account can't
-/// authenticate); does not restore revoked sessions/tokens.
+/// authenticate). The inverse of the delete for the account, its actors and
+/// its role grants — the delete leaves the grants as they were, inert while no
+/// credential of the account authenticates — and for nothing the delete
+/// ended: revoked sessions and tokens, superseded offers and deleted invites
+/// stay ended.
 async fn handle_account_undelete(
     params: &Value,
     ctx: &AuthenticatedActionContext<'_>,

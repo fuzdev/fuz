@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 use fuz_db::{col, iso8601_timestamp_expr, qualify_columns};
 
+use crate::account_queries::query_account_lock_live_many;
 use crate::actor_queries::revoke_expired_role_grant_slot;
 use crate::role::{ROLE_ADMIN, ROLE_KEEPER, is_builtin_role};
 
@@ -220,10 +221,22 @@ pub enum RoleGrantOfferError {
     /// Grantor attempted to offer a role to their own account.
     #[error("cannot offer a role_grant to your own account")]
     SelfTarget,
-    /// `to_actor_id` does not exist or does not belong to
-    /// `to_account_id`.
+    /// `to_actor_id` is no active actor of `to_account_id` — missing,
+    /// tombstoned, or another account's.
     #[error("to_actor_id does not belong to to_account_id")]
     ActorAccountMismatch,
+    /// The recipient is not an active account: `to_account_id` names no
+    /// account, a soft-deleted one, or one with no active actor. A deleted
+    /// recipient and one that never existed are the one refusal, so a caller
+    /// learns nothing from it a missing id wouldn't tell. Twin of TS
+    /// `RoleGrantOfferRecipientNotActiveError`.
+    #[error("the recipient is not an active account")]
+    RecipientNotActive,
+    /// The grantor is not an active account: its actor is missing or
+    /// tombstoned, or its account soft-deleted — a delete that committed while
+    /// the offer was in flight. Twin of TS `RoleGrantOfferGrantorNotActiveError`.
+    #[error("the grantor is not an active account")]
+    GrantorNotActive,
     /// Actor-targeted offer being accepted by a different actor on the
     /// same recipient account.
     #[error("offer {0} is targeted to a different actor on this account")]
@@ -354,6 +367,13 @@ fn offer_pending_predicate(alias: &str, separator: &str) -> String {
 /// round-trip; the decline `UPDATE` shares the same positionally-identical
 /// projection via `decode_declined_row`.
 ///
+/// The rows come back oldest first, by `created_at` then `id`: an `UPDATE …
+/// RETURNING` has no fixed order, and the callers emit an audit row and a
+/// notification per row in the order returned, so without it two runs (or the
+/// two spines) write the same cascade in different orders. The tail ends the
+/// statement at every callsite. Twin of TS
+/// `ROLE_GRANT_OFFER_WITH_GRANTOR_SELECT`.
+///
 /// The continuation indent is baked rather than parameterized the way
 /// [`offer_pending_predicate`]'s is: this fragment lands at exactly one
 /// syntactic position at all four callsites — top level, immediately after
@@ -364,7 +384,8 @@ fn updated_offer_select() -> String {
     format!(
         "SELECT {returning}, grantor.account_id AS from_account_id
          FROM updated u
-         JOIN actor grantor ON grantor.id = u.from_actor_id",
+         JOIN actor grantor ON grantor.id = u.from_actor_id
+         ORDER BY u.created_at, u.id",
         returning = role_grant_offer_columns("u"),
     )
 }
@@ -409,8 +430,19 @@ fn decode_superseded_row(row: &tokio_postgres::Row) -> SupersededOffer {
 /// 1. Self-target — looks up the grantor's `actor.account_id` and
 ///    rejects if it matches `to_account_id`. Multi-actor-correct: the
 ///    grantor → account binding is 1:1 by definition of `actor`.
-/// 2. Actor-account binding — when `to_actor_id` is supplied, verifies
-///    the named actor belongs to `to_account_id`.
+/// 2. Recipient — `to_account_id` is a live account with an active actor; a
+///    named `to_actor_id` must be one of its active actors.
+/// 3. Grantor — the offering actor is active and its account live.
+///
+/// Both parties are checked here so every caller — the spine's handler and a
+/// consumer creating offers on its own path — gets the rule. Both account rows
+/// are read under `FOR SHARE` before the insert, in one statement in id order
+/// ([`query_account_lock_live_many`]): an account delete writes its tombstone first,
+/// so a delete committed before the read is waited for and seen (the offer is
+/// refused), and one after it waits for this transaction to commit and then
+/// supersedes the offer with the party's others. Run it inside the caller's
+/// transaction, which the lock spans. The self-target check comes first, so an
+/// offer to one's own account is refused as that whatever else it names.
 ///
 /// On the pending unique-index conflict, refreshes `to_actor_id`,
 /// `message`, and `expires_at` (matches TS upsert semantics — a second
@@ -422,8 +454,12 @@ fn decode_superseded_row(row: &tokio_postgres::Row) -> SupersededOffer {
 ///
 /// [`RoleGrantOfferError::SelfTarget`] when the offering actor's
 /// account matches `to_account_id`.
+/// [`RoleGrantOfferError::RecipientNotActive`] when `to_account_id` is missing,
+/// soft-deleted, or has no active actor.
 /// [`RoleGrantOfferError::ActorAccountMismatch`] when `to_actor_id` is
-/// supplied but doesn't belong to `to_account_id`.
+/// supplied but is no active actor of `to_account_id`.
+/// [`RoleGrantOfferError::GrantorNotActive`] when the grantor's actor or account
+/// is missing or tombstoned.
 /// [`RoleGrantOfferError::Query`] on any underlying driver error.
 pub async fn query_role_grant_offer_create(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
@@ -434,36 +470,59 @@ pub async fn query_role_grant_offer_create(
     // self-target means "the offering actor's account == the recipient
     // account", regardless of how many other actors live on either
     // account. Mirrors the TS comment in `query_role_grant_offer_create`.
-    let grantor_row = client
+    let grantor_account: Option<Uuid> = client
         .query_opt(
             "SELECT account_id FROM actor WHERE id = $1",
             &[&input.from_actor_id],
         )
-        .await?;
-    if let Some(row) = grantor_row {
-        let grantor_account: Uuid = row.get(0);
-        if grantor_account == input.to_account_id {
-            return Err(RoleGrantOfferError::SelfTarget);
-        }
+        .await?
+        .map(|row| row.get(0));
+    if grantor_account == Some(input.to_account_id) {
+        return Err(RoleGrantOfferError::SelfTarget);
     }
 
-    // Actor-account binding check when `to_actor_id` is supplied — the
-    // FK alone allows the actor to exist on any account; we need
-    // membership on `to_account_id` specifically.
-    if let Some(target_actor_id) = input.to_actor_id {
-        let target_row = client
-            .query_opt(
-                "SELECT account_id FROM actor WHERE id = $1",
-                &[&target_actor_id],
-            )
-            .await?;
-        let belongs = target_row.is_some_and(|r| {
-            let account_id: Uuid = r.get(0);
-            account_id == input.to_account_id
-        });
-        if !belongs {
-            return Err(RoleGrantOfferError::ActorAccountMismatch);
-        }
+    // Both parties' account rows, locked in one statement in id order — the
+    // order the last-admin guard locks its rows in, so the two never wait on
+    // each other — then judged recipient first, grantor second.
+    let parties: Vec<Uuid> = std::iter::once(input.to_account_id)
+        .chain(grantor_account)
+        .collect();
+    let live = query_account_lock_live_many(client, &parties).await?;
+    // The recipient: a live account with an active actor (the named one, when
+    // an actor is named).
+    if !live.contains(&input.to_account_id) {
+        return Err(RoleGrantOfferError::RecipientNotActive);
+    }
+    let recipient_actors: Vec<Uuid> = client
+        .query(
+            "SELECT id FROM actor WHERE account_id = $1 AND deleted_at IS NULL",
+            &[&input.to_account_id],
+        )
+        .await?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    if recipient_actors.is_empty() {
+        return Err(RoleGrantOfferError::RecipientNotActive);
+    }
+    if let Some(target_actor_id) = input.to_actor_id
+        && !recipient_actors.contains(&target_actor_id)
+    {
+        return Err(RoleGrantOfferError::ActorAccountMismatch);
+    }
+
+    // The grantor: a live actor of a live account.
+    let grantor_actor_active = client
+        .query_opt(
+            "SELECT id FROM actor WHERE id = $1 AND deleted_at IS NULL",
+            &[&input.from_actor_id],
+        )
+        .await?
+        .is_some();
+    let grantor_live = grantor_actor_active
+        && grantor_account.is_some_and(|account_id| live.contains(&account_id));
+    if !grantor_live {
+        return Err(RoleGrantOfferError::GrantorNotActive);
     }
 
     // Upsert via the partial unique index `role_grant_offer_pending_unique`.
@@ -1298,6 +1357,41 @@ pub async fn query_role_grant_offer_supersede_outgoing(
         select = updated_offer_select(),
     );
     let rows = client.query(&sql, &[&from_actor_ids]).await?;
+    Ok(rows.iter().map(decode_superseded_row).collect())
+}
+
+/// Supersede every pending offer **made to** `to_account_id` — the
+/// recipient-side cascade of an account delete.
+///
+/// An undelete restores the account, so an offer left pending through the
+/// delete would come back with it and could then be accepted; superseding it
+/// in the delete's transaction makes it terminal for good. Matching on
+/// `to_account_id` alone covers the actor-addressed offers too: an offer's
+/// `to_actor_id` is bound to its `to_account_id` at create. Each row carries
+/// the grantor's `account_id`, as every supersede cascade's does; the caller
+/// emits a `role_grant_offer_supersede` audit per entry. Mirrors TS
+/// `query_role_grant_offer_supersede_incoming`.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_role_grant_offer_supersede_incoming(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    to_account_id: &Uuid,
+) -> Result<Vec<SupersededOffer>, tokio_postgres::Error> {
+    let sql = format!(
+        "WITH updated AS (
+            UPDATE role_grant_offer o
+            SET superseded_at = NOW()
+            WHERE o.to_account_id = $1
+              AND {pending}
+            RETURNING o.*
+         )
+         {select}",
+        pending = offer_pending_predicate("o", PENDING_JOIN_NESTED),
+        select = updated_offer_select(),
+    );
+    let rows = client.query(&sql, &[to_account_id]).await?;
     Ok(rows.iter().map(decode_superseded_row).collect())
 }
 

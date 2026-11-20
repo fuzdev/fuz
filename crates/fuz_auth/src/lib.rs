@@ -246,8 +246,8 @@ pub use error::{BootstrapError, BootstrapErrorKind, SignupError, SignupErrorKind
 pub use hash::{SESSION_ID_LENGTH, SessionHash, hash_session_token, is_valid_session_id};
 pub use invite_queries::{
     Invite, InviteWithUsernames, LockedInvite, query_create_invite, query_invite_claim_unscoped,
-    query_invite_delete_unclaimed, query_invite_find_unclaimed_match_for_update,
-    query_invite_list_all_with_usernames,
+    query_invite_delete_unclaimed, query_invite_delete_unclaimed_by_creators,
+    query_invite_find_unclaimed_match_for_update, query_invite_list_all_with_usernames,
 };
 pub use keyring::{Keyring, KeyringError, KeyringErrors};
 pub use migrations::{
@@ -300,8 +300,8 @@ pub use role_grant_offer_queries::{
     ROLE_GRANT_OFFER_DEFAULT_TTL_MS, ROLE_GRANT_OFFER_SCOPE_KIND_GLOBAL_TOKEN,
     ROLE_GRANT_OFFER_SCOPE_SENTINEL_UUID, RevokeForScopeResult, RevokedGrantAtScope,
     RoleGrantOffer, RoleGrantOfferError, SupersededOffer, default_expiry_from_now,
-    query_accept_offer, query_role_grant_offer_create, query_role_grant_offer_supersede_outgoing,
-    query_role_grant_revoke_for_scope,
+    query_accept_offer, query_role_grant_offer_create, query_role_grant_offer_supersede_incoming,
+    query_role_grant_offer_supersede_outgoing, query_role_grant_revoke_for_scope,
 };
 pub use role_grant_schema::{RoleGrantRow, role_grant_active_sql};
 pub use route_response::{credential_type_required_response, token_scope_surface_denied_response};

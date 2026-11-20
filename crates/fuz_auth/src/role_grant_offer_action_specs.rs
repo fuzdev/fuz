@@ -29,6 +29,7 @@ use crate::actor_queries::{
     query_active_actors_by_account, query_count_active_accounts_with_global_role_for_update,
     query_create_role_grant,
 };
+use crate::actor_schema::ActorRow;
 use crate::audit_emitter::AuditLogInput;
 use crate::audit_event_type::AuditEventType;
 use crate::auth_action_context::AuthenticatedActionContext;
@@ -53,6 +54,7 @@ use fuz_http::{
     InputShape, JsonrpcError, forbidden, internal_error_with_source, invalid_input_params,
     invalid_params, invalid_request, method_not_found, not_found, parse_optional_str_param,
     parse_optional_uuid_param, parse_uuid_param, reject_unknown_keys, serialize_result,
+    unauthenticated,
 };
 
 /// WS-notification methods for the consentful-grant lifecycle.
@@ -701,6 +703,8 @@ async fn handle_role_grant_offer_create(
         ));
     }
 
+    // Both parties' rules live in the query, after every authority gate above,
+    // so a caller refused the conferral learns nothing of the recipient.
     let offer = match query_role_grant_offer_create(
         db,
         CreateRoleGrantOfferInput {
@@ -724,13 +728,19 @@ async fn handle_role_grant_offer_create(
                 Some(ERROR_ROLE_GRANT_OFFER_SELF_TARGET),
             ));
         }
-        Err(RoleGrantOfferError::ActorAccountMismatch) => {
+        // A named actor is the mismatch, else the account is not found — the
+        // answers `role_grant_assign` gives the same recipient.
+        Err(
+            RoleGrantOfferError::ActorAccountMismatch | RoleGrantOfferError::RecipientNotActive,
+        ) => {
             emit_create_failure_audit(ctx, db, &parsed, caller_account_id, caller_actor_id).await?;
-            return Err(invalid_params(
-                "to_actor_id does not belong to to_account_id",
-                Some(ERROR_ROLE_GRANT_OFFER_ACTOR_ACCOUNT_MISMATCH),
-            ));
+            return Err(recipient_not_found_error(parsed.to_actor_id));
         }
+        // The caller's own account was deleted while the request was in
+        // flight: refused as the dead credential it now is, as
+        // `account_token_create` refuses it, with no audit row from an account
+        // that is gone.
+        Err(RoleGrantOfferError::GrantorNotActive) => return Err(unauthenticated()),
         Err(err) => return Err(map_offer_error(err, "role_grant_offer_create")),
     };
 
@@ -1422,6 +1432,8 @@ fn map_offer_error(err: RoleGrantOfferError, ctx_label: &'static str) -> Jsonrpc
         // generic 500.
         e @ (RoleGrantOfferError::SelfTarget
         | RoleGrantOfferError::ActorAccountMismatch
+        | RoleGrantOfferError::RecipientNotActive
+        | RoleGrantOfferError::GrantorNotActive
         | RoleGrantOfferError::NotFound(_)
         | RoleGrantOfferError::AlreadyTerminal(_)
         | RoleGrantOfferError::Expired(_)
@@ -1465,6 +1477,43 @@ fn parse_assign_params(params: &Value) -> Result<AssignParams, JsonrpcError> {
     })
 }
 
+/// The refusal for a recipient that is missing or soft-deleted: an actor named
+/// that is no active actor of the account is the mismatch, else the account is
+/// not found. Offer-create and assign answer a deleted recipient exactly as a
+/// missing one, so the call says nothing a missing id wouldn't.
+fn recipient_not_found_error(to_actor_id: Option<uuid::Uuid>) -> JsonrpcError {
+    if to_actor_id.is_some() {
+        invalid_params(
+            "to_actor_id does not belong to to_account_id",
+            Some(ERROR_ROLE_GRANT_OFFER_ACTOR_ACCOUNT_MISMATCH),
+        )
+    } else {
+        not_found("account", None)
+    }
+}
+
+/// The recipient's active actors, refusing a recipient that can't receive a
+/// role: a missing or soft-deleted account (no active actor), or a named actor
+/// that is not one of them. Runs after every authority gate, so a caller
+/// refused the conferral learns nothing of the recipient. Twin of the TS
+/// `require_active_recipient` in `role_grant_offer_actions.ts`.
+async fn require_active_recipient(
+    db: &(impl deadpool_postgres::GenericClient + ?Sized),
+    to_account_id: uuid::Uuid,
+    to_actor_id: Option<uuid::Uuid>,
+) -> Result<Vec<ActorRow>, JsonrpcError> {
+    let actors = query_active_actors_by_account(db, &to_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("active_actors_for_account failed", &e))?;
+    let refused = to_actor_id.map_or(actors.is_empty(), |actor_id| {
+        !actors.iter().any(|a| a.id == actor_id)
+    });
+    if refused {
+        return Err(recipient_not_found_error(to_actor_id));
+    }
+    Ok(actors)
+}
+
 /// Resolve the grant's target actor. A supplied `to_actor_id` must be an active
 /// actor of `to_account_id`; otherwise the account's sole active actor is used
 /// (a multi-actor account must name one). A missing / actorless account
@@ -1474,24 +1523,13 @@ async fn resolve_assign_target_actor(
     to_account_id: uuid::Uuid,
     to_actor_id: Option<uuid::Uuid>,
 ) -> Result<uuid::Uuid, JsonrpcError> {
-    let actors = query_active_actors_by_account(db, &to_account_id)
-        .await
-        .map_err(|e| internal_error_with_source("active_actors_for_account failed", &e))?;
-    // A named actor must be an active actor of the account.
+    let actors = require_active_recipient(db, to_account_id, to_actor_id).await?;
     if let Some(actor_id) = to_actor_id {
-        return if actors.iter().any(|a| a.id == actor_id) {
-            Ok(actor_id)
-        } else {
-            Err(invalid_params(
-                "to_actor_id does not belong to to_account_id",
-                Some(ERROR_ROLE_GRANT_OFFER_ACTOR_ACCOUNT_MISMATCH),
-            ))
-        };
+        return Ok(actor_id);
     }
     // Otherwise resolve the account's sole active actor.
     match actors.as_slice() {
         [single] => Ok(single.id),
-        [] => Err(not_found("account", None)),
         _ => Err(invalid_params(
             "to_actor_id is required for a multi-actor account",
             None,

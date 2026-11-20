@@ -573,6 +573,20 @@ The rules a change must keep:
   a mint in flight across either waits and is refused — the login exactly as
   a wrong password is — or commits first and is revoked. A server that mints
   a session or a token through its own code takes the same lock.
+- **An offer and an invite are created under their principals' locks too.**
+  `query_role_grant_offer_create` takes `FOR SHARE` on its recipient's and
+  its grantor's accounts in one statement, in id order
+  (`query_account_lock_live_many`), and refuses a recipient or a grantor
+  that is not an active account (`RoleGrantOfferError::RecipientNotActive`,
+  `GrantorNotActive`) — a deleted recipient answered exactly as a missing
+  one; `invite_create` locks its issuer before its insert. An account
+  delete supersedes the pending offers made to the account as well as by
+  it, and with purge deletes the unclaimed invites it issued; role grants
+  are kept and come back with the undelete. The last-admin guard locks its
+  rows in account-id order, so no two of these wait on each other in
+  opposite orders. A server that creates offers through the query gets the
+  rule; one that mints invites through `query_create_invite` for an issuer
+  takes `query_account_lock_live` on the issuer first.
 - Every rate-limited attempt reserves its slot before it runs, and an attempt
   abandoned after its Argon2 work started is still charged.
 - `AuditEventType` is the spine-wide closed registry (auth and cell events);

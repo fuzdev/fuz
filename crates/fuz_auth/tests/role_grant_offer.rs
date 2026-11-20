@@ -18,8 +18,9 @@ use fuz_auth::actor_queries::query_create_role_grant;
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::role::{GrantPath, RoleSpec};
 use fuz_auth::role_grant_offer_action_specs::{
-    ERROR_ROLE_GRANT_BUILTIN_SCOPED, ERROR_ROLE_GRANT_OFFER_NOT_AUTHORIZED,
-    ERROR_ROLE_GRANT_OFFER_NOT_FOUND, ERROR_ROLE_GRANT_OFFER_ROLE_NOT_GRANTABLE,
+    ERROR_ROLE_GRANT_BUILTIN_SCOPED, ERROR_ROLE_GRANT_OFFER_ACTOR_ACCOUNT_MISMATCH,
+    ERROR_ROLE_GRANT_OFFER_NOT_AUTHORIZED, ERROR_ROLE_GRANT_OFFER_NOT_FOUND,
+    ERROR_ROLE_GRANT_OFFER_ROLE_NOT_GRANTABLE, ERROR_ROLE_GRANT_OFFER_SELF_TARGET,
     ERROR_ROLE_GRANT_OFFER_TERMINAL, ERROR_ROLE_NOT_WEB_GRANTABLE,
 };
 use fuz_auth::role_grant_schema::RoleGrantRow;
@@ -353,6 +354,291 @@ async fn role_grant_offer_create_rejects_actor_account_mismatch() {
     .expect_err("actor not on recipient account should reject");
 
     assert!(matches!(err, RoleGrantOfferError::ActorAccountMismatch));
+}
+
+/// An offer to a deleted account, or naming its tombstoned actor, answers
+/// exactly what one to an account or actor that doesn't exist answers — the
+/// answers `role_grant_assign` gives the same requests — and writes no offer.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn role_grant_offer_create_answers_a_deleted_recipient_as_a_missing_one() {
+    let pool = fresh_db_pool().await;
+    let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
+    let audit = build_audit(pool.clone());
+    let closer = closer();
+    let ctx = ctx(&admin, &audit, &closer);
+    let client = pool.get().await.expect("pool.get");
+    let (deleted, deleted_actor) = seed_account_actor(&pool, "deleted_recipient").await;
+    let (live, _) = seed_account_actor(&pool, "live_recipient").await;
+    common::admin_dispatch(
+        "account_delete",
+        &json!({ "account_id": deleted }),
+        &ctx,
+        &client,
+    )
+    .await
+    .expect("account_delete");
+    let missing = uuid::Uuid::new_v4();
+
+    let refuse = async |method: &str, params: Value| {
+        offer_dispatch(method, &params, &ctx, ActionDb::Pool(&client))
+            .await
+            .expect_err(method)
+    };
+    let account_refusal = refuse(
+        "role_grant_offer_create",
+        json!({ "to_account_id": missing, "role": "admin" }),
+    )
+    .await;
+    assert_eq!(account_refusal.code, JsonrpcErrorCode::NotFound);
+    let actor_refusal = refuse(
+        "role_grant_offer_create",
+        json!({ "to_account_id": live, "to_actor_id": missing, "role": "admin" }),
+    )
+    .await;
+    assert_eq!(actor_refusal.code, JsonrpcErrorCode::InvalidParams);
+    assert_eq!(
+        reason(&actor_refusal),
+        ERROR_ROLE_GRANT_OFFER_ACTOR_ACCOUNT_MISMATCH
+    );
+
+    for method in ["role_grant_offer_create", "role_grant_assign"] {
+        for (params, expected) in [
+            (
+                json!({ "to_account_id": deleted, "role": "admin" }),
+                &account_refusal,
+            ),
+            (
+                json!({ "to_account_id": missing, "role": "admin" }),
+                &account_refusal,
+            ),
+            (
+                json!({ "to_account_id": deleted, "to_actor_id": deleted_actor, "role": "admin" }),
+                &actor_refusal,
+            ),
+            (
+                json!({ "to_account_id": live, "to_actor_id": missing, "role": "admin" }),
+                &actor_refusal,
+            ),
+        ] {
+            let got = refuse(method, params.clone()).await;
+            assert_eq!(
+                serde_json::to_value(&got).expect("error json"),
+                serde_json::to_value(expected).expect("error json"),
+                "{method} {params}"
+            );
+        }
+    }
+
+    // A grantor with no authority to confer learns nothing of the recipient.
+    let unauthorized = seed_actor_context(&pool, "unauthorized_grantor").await;
+    let unauthorized_ctx = common::ctx(&unauthorized, &audit, &closer);
+    let mut refusals = Vec::new();
+    for to_account_id in [deleted, missing, live] {
+        let err = offer_dispatch(
+            "role_grant_offer_create",
+            &json!({ "to_account_id": to_account_id, "role": "admin" }),
+            &unauthorized_ctx,
+            ActionDb::Pool(&client),
+        )
+        .await
+        .expect_err("refused");
+        assert_eq!(err.code, JsonrpcErrorCode::Forbidden);
+        assert_eq!(reason(&err), ERROR_ROLE_GRANT_OFFER_NOT_AUTHORIZED);
+        refusals.push(serde_json::to_value(&err).expect("error json"));
+    }
+    assert_eq!(
+        refusals[0], refusals[2],
+        "a deleted recipient: as a live one"
+    );
+    assert_eq!(
+        refusals[1], refusals[2],
+        "a missing recipient: as a live one"
+    );
+
+    // The self-target check comes first, whatever actor is named.
+    let (_, live_actor) = seed_account_actor(&pool, "self_target_stranger").await;
+    let self_target = refuse(
+        "role_grant_offer_create",
+        json!({ "to_account_id": admin.account.id, "to_actor_id": live_actor, "role": "admin" }),
+    )
+    .await;
+    assert_eq!(reason(&self_target), ERROR_ROLE_GRANT_OFFER_SELF_TARGET);
+
+    let offers: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM role_grant_offer WHERE to_account_id = $1",
+            &[&deleted],
+        )
+        .await
+        .expect("count")
+        .get(0);
+    assert_eq!(offers, 0, "no offer to the deleted account was written");
+}
+
+/// An offer from `from` to `to_account` (naming `to_actor`), as the query
+/// answers it — called directly, with no handler around it.
+async fn offer_query(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    from: uuid::Uuid,
+    to_account: uuid::Uuid,
+    to_actor: Option<uuid::Uuid>,
+) -> Result<fuz_auth::RoleGrantOffer, RoleGrantOfferError> {
+    query_role_grant_offer_create(
+        client,
+        CreateRoleGrantOfferInput {
+            from_actor_id: from,
+            to_account_id: to_account,
+            to_actor_id: to_actor,
+            role: "teacher".to_owned(),
+            scope_kind: None,
+            scope_id: None,
+            message: None,
+            expires_at: default_expiry_from_now(),
+        },
+    )
+    .await
+}
+
+/// Tombstone an account and its actor, as the delete does.
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside a `#[test]` fn panics on a failed setup or check"
+)]
+async fn tombstone(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    account: uuid::Uuid,
+    actor: uuid::Uuid,
+) {
+    fuz_auth::account_queries::query_account_soft_delete(client, &account, None)
+        .await
+        .expect("account soft delete");
+    fuz_auth::actor_queries::query_actor_soft_delete(client, &actor, None)
+        .await
+        .expect("actor soft delete");
+}
+
+/// The query itself refuses a recipient that is not an active account — a
+/// deleted one, a missing one, one with no active actor — as one refusal, and
+/// a named actor that is no active actor of it; a caller creating offers on
+/// its own path gets the rule. Twin of the TS `role_grant_offer_queries.create`
+/// cases.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn the_create_query_refuses_a_recipient_that_is_not_an_active_account() {
+    let pool = fresh_db_pool().await;
+    let client = pool.get().await.expect("pool.get");
+    let (_, grantor) = seed_account_actor(&pool, "query_grantor").await;
+    let (deleted, deleted_actor) = seed_account_actor(&pool, "query_deleted").await;
+    tombstone(&client, deleted, deleted_actor).await;
+    let (actorless, actorless_actor) = seed_account_actor(&pool, "query_actorless").await;
+    fuz_auth::actor_queries::query_actor_soft_delete(&client, &actorless_actor, None)
+        .await
+        .expect("actor soft delete");
+    let missing = uuid::Uuid::new_v4();
+
+    for (to_account, to_actor, label) in [
+        (deleted, None, "a deleted recipient"),
+        (missing, None, "a missing recipient"),
+        (actorless, None, "a live account with no active actor"),
+        (
+            deleted,
+            Some(deleted_actor),
+            "an actor of a deleted recipient",
+        ),
+        (missing, Some(missing), "an actor of a missing recipient"),
+    ] {
+        let err = offer_query(&client, grantor, to_account, to_actor)
+            .await
+            .expect_err(label);
+        assert!(
+            matches!(err, RoleGrantOfferError::RecipientNotActive),
+            "{label}: {err:?}"
+        );
+    }
+
+    let (recipient, _) = seed_account_actor(&pool, "query_recipient").await;
+    let (_, stranger_actor) = seed_account_actor(&pool, "query_stranger").await;
+    let gone_actor = seed_extra_actor(&pool, recipient, "gone").await;
+    fuz_auth::actor_queries::query_actor_soft_delete(&client, &gone_actor, None)
+        .await
+        .expect("actor soft delete");
+    for (to_actor, label) in [
+        (stranger_actor, "another account's actor"),
+        (missing, "a missing actor"),
+        (gone_actor, "a tombstoned actor of a live account"),
+    ] {
+        let err = offer_query(&client, grantor, recipient, Some(to_actor))
+            .await
+            .expect_err(label);
+        assert!(
+            matches!(err, RoleGrantOfferError::ActorAccountMismatch),
+            "{label}: {err:?}"
+        );
+    }
+
+    // The self-target check comes first, whatever actor is named.
+    let grantor_account: uuid::Uuid = client
+        .query_one("SELECT account_id FROM actor WHERE id = $1", &[&grantor])
+        .await
+        .expect("grantor account")
+        .get(0);
+    let err = offer_query(&client, grantor, grantor_account, Some(stranger_actor))
+        .await
+        .expect_err("self target");
+    assert!(matches!(err, RoleGrantOfferError::SelfTarget), "{err:?}");
+
+    let written: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM role_grant_offer WHERE to_account_id = ANY($1)",
+            &[&vec![deleted, missing, actorless]],
+        )
+        .await
+        .expect("count")
+        .get(0);
+    assert_eq!(written, 0, "nothing written");
+}
+
+/// The query refuses a grantor that is not an active account — a deleted one,
+/// a tombstoned actor of a live account, a missing actor.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn the_create_query_refuses_a_grantor_that_is_not_an_active_account() {
+    let pool = fresh_db_pool().await;
+    let client = pool.get().await.expect("pool.get");
+    let (recipient, _) = seed_account_actor(&pool, "query_recipient_of_gone").await;
+    let (deleted, deleted_actor) = seed_account_actor(&pool, "query_grantor_deleted").await;
+    tombstone(&client, deleted, deleted_actor).await;
+    let (_, tombstoned_actor) = seed_account_actor(&pool, "query_grantor_actor_gone").await;
+    fuz_auth::actor_queries::query_actor_soft_delete(&client, &tombstoned_actor, None)
+        .await
+        .expect("actor soft delete");
+
+    for (from, label) in [
+        (deleted_actor, "a deleted grantor"),
+        (
+            tombstoned_actor,
+            "a tombstoned grantor actor on a live account",
+        ),
+        (uuid::Uuid::new_v4(), "a missing grantor actor"),
+    ] {
+        let err = offer_query(&client, from, recipient, None)
+            .await
+            .expect_err(label);
+        assert!(
+            matches!(err, RoleGrantOfferError::GrantorNotActive),
+            "{label}: {err:?}"
+        );
+    }
+    let written: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM role_grant_offer WHERE to_account_id = $1",
+            &[&recipient],
+        )
+        .await
+        .expect("count")
+        .get(0);
+    assert_eq!(written, 0, "nothing written");
 }
 
 #[tokio::test]

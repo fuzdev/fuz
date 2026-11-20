@@ -1025,6 +1025,294 @@ async fn account_removal_supersedes_the_accounts_outgoing_offers() {
     assert!(supersede_rows(&client, control).await.is_empty());
 }
 
+/// An account delete supersedes every pending offer made to the account,
+/// account- and actor-addressed and whoever made it, each with a
+/// `role_grant_offer_supersede` row (`reason: account_deleted`, `cause_id`: the
+/// account); an offer to another account is untouched, and an undelete brings
+/// none back.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn account_delete_supersedes_the_offers_made_to_the_account() {
+    let pool = fresh_db_pool().await;
+    let auth = with_admin(seed_admin(&pool).await);
+    let audit = build_audit(pool.clone());
+    let closer = closer();
+    let ctx = ctx(&auth, &audit, &closer);
+    let client = pool.get().await.expect("pool.get");
+    let (recipient, recipient_actor) = seed_account_actor(&pool, "incoming_recipient").await;
+    let (bystander, _) = seed_account_actor(&pool, "incoming_bystander").await;
+    let (_, grantor_a) = seed_account_actor(&pool, "incoming_grantor_a").await;
+    let (_, grantor_b) = seed_account_actor(&pool, "incoming_grantor_b").await;
+    let by_account = offer_from(&client, grantor_a, recipient).await;
+    let by_actor = fuz_auth::query_role_grant_offer_create(
+        &client,
+        fuz_auth::CreateRoleGrantOfferInput {
+            from_actor_id: grantor_b,
+            to_account_id: recipient,
+            to_actor_id: Some(recipient_actor),
+            role: ROLE_ADMIN.to_owned(),
+            scope_kind: None,
+            scope_id: None,
+            message: None,
+            expires_at: fuz_auth::default_expiry_from_now(),
+        },
+    )
+    .await
+    .expect("actor-addressed offer")
+    .id;
+    let control = offer_from(&client, grantor_a, bystander).await;
+
+    common::admin_dispatch(
+        "account_delete",
+        &json!({ "account_id": recipient }),
+        &ctx,
+        &client,
+    )
+    .await
+    .expect("account_delete");
+    common::admin_dispatch(
+        "account_undelete",
+        &json!({ "account_id": recipient }),
+        &ctx,
+        &client,
+    )
+    .await
+    .expect("account_undelete");
+
+    let is_pending = async |offer: uuid::Uuid| -> bool {
+        client
+            .query_one(
+                "SELECT superseded_at IS NULL FROM role_grant_offer WHERE id = $1",
+                &[&offer],
+            )
+            .await
+            .expect("offer row")
+            .get(0)
+    };
+    for offer in [by_account, by_actor] {
+        let rows = supersede_rows(&client, offer).await;
+        assert_eq!(rows.len(), 1, "one supersede row");
+        assert_eq!(rows[0]["reason"], json!("account_deleted"));
+        assert_eq!(rows[0]["cause_id"], json!(recipient.to_string()));
+        assert!(
+            !is_pending(offer).await,
+            "superseded, and still after the undelete"
+        );
+    }
+    assert!(
+        is_pending(control).await,
+        "an offer to another account stays pending"
+    );
+}
+
+/// `query_role_grant_offer_supersede_incoming` ends every pending offer to the
+/// account, whoever made it and however it is addressed, each with its
+/// grantor's account, and leaves a terminal offer and another account's alone.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn query_role_grant_offer_supersede_incoming_ends_the_accounts_pending_offers() {
+    let pool = fresh_db_pool().await;
+    let client = pool.get().await.expect("pool.get");
+    let (recipient, _) = seed_account_actor(&pool, "q_incoming_recipient").await;
+    let (bystander, _) = seed_account_actor(&pool, "q_incoming_bystander").await;
+    let (grantor_account, grantor_actor) = seed_account_actor(&pool, "q_incoming_grantor").await;
+    let pending = offer_from(&client, grantor_actor, recipient).await;
+    let control = offer_from(&client, grantor_actor, bystander).await;
+    let (_, other_grantor) = seed_account_actor(&pool, "q_incoming_other_grantor").await;
+    let declined = offer_from(&client, other_grantor, recipient).await;
+    fuz_auth::role_grant_offer_queries::query_role_grant_offer_decline(
+        &client, declined, recipient, None,
+    )
+    .await
+    .expect("decline");
+
+    let superseded = fuz_auth::query_role_grant_offer_supersede_incoming(&client, &recipient)
+        .await
+        .expect("supersede");
+    assert_eq!(superseded.len(), 1);
+    assert_eq!(superseded[0].offer.id, pending);
+    assert_eq!(superseded[0].from_account_id, grantor_account);
+    assert!(
+        fuz_auth::query_role_grant_offer_supersede_incoming(&client, &recipient)
+            .await
+            .expect("supersede again")
+            .is_empty(),
+        "a terminal offer is not stamped again"
+    );
+    let control_pending: bool = client
+        .query_one(
+            "SELECT superseded_at IS NULL FROM role_grant_offer WHERE id = $1",
+            &[&control],
+        )
+        .await
+        .expect("control")
+        .get(0);
+    assert!(control_pending, "another account's offer stays pending");
+    let declined_untouched: bool = client
+        .query_one(
+            "SELECT superseded_at IS NULL AND declined_at IS NOT NULL FROM role_grant_offer WHERE id = $1",
+            &[&declined],
+        )
+        .await
+        .expect("declined")
+        .get(0);
+    assert!(declined_untouched, "a declined offer is left as it was");
+}
+
+/// A cascade returns its offers oldest first (`created_at`, then `id`),
+/// whatever order their rows were last written in: a refresh rewrites the
+/// first offer's row after the second's, so an unordered `UPDATE … RETURNING`
+/// puts it last. The scan is pinned to the heap, where the refreshed row sits
+/// last: through an index the unordered order would follow whatever key that
+/// index has, here a random grantor id. The second grantor is created first,
+/// so the join to the grantors' actors, whichever side drives it, also puts the
+/// first offer last. Twin of the TS supersede order case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_cascade_returns_its_offers_oldest_first() {
+    let pool = fresh_db_pool().await;
+    let mut client = pool.get().await.expect("pool.get");
+    let (recipient, _) = seed_account_actor(&pool, "order_recipient").await;
+    let (_, second_grantor) = seed_account_actor(&pool, "order_second").await;
+    let (_, first_grantor) = seed_account_actor(&pool, "order_first").await;
+    let first = offer_from(&client, first_grantor, recipient).await;
+    let second = offer_from(&client, second_grantor, recipient).await;
+    // the refresh rewrites `first`'s row last; its `created_at` stays
+    assert_eq!(offer_from(&client, first_grantor, recipient).await, first);
+    let tx = client.transaction().await.expect("begin");
+    tx.batch_execute("SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off")
+        .await
+        .expect("pin the scan");
+    let superseded = fuz_auth::query_role_grant_offer_supersede_incoming(&tx, &recipient)
+        .await
+        .expect("supersede");
+    tx.commit().await.expect("commit");
+    let ids: Vec<uuid::Uuid> = superseded.iter().map(|o| o.offer.id).collect();
+    assert_eq!(ids, vec![first, second]);
+}
+
+/// Removing an account deletes the unclaimed invites its actors issued — soft
+/// delete and purge alike, the purge before its cascade nulls `created_by` —
+/// each with an `invite_delete` row; a claimed invite and another issuer's
+/// stay, and an undelete brings none back.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn account_removal_deletes_the_accounts_unclaimed_invites() {
+    let pool = fresh_db_pool().await;
+    let auth = with_admin(seed_admin(&pool).await);
+    let audit = build_audit(pool.clone());
+    let closer = closer();
+    let ctx = ctx(&auth, &audit, &closer);
+    let client = pool.get().await.expect("pool.get");
+    let (bystander, bystander_actor) = seed_account_actor(&pool, "invite_bystander").await;
+    let invite = async |username: &str, created_by: uuid::Uuid| -> uuid::Uuid {
+        fuz_auth::query_create_invite(&client, None, Some(username), Some(&created_by))
+            .await
+            .expect("invite")
+            .id
+    };
+    let exists = async |id: uuid::Uuid| -> bool {
+        client
+            .query_opt("SELECT id FROM invite WHERE id = $1", &[&id])
+            .await
+            .expect("invite row")
+            .is_some()
+    };
+    let control = invite("invitee_control", bystander_actor).await;
+
+    for (method, username) in [
+        ("account_delete", "deleted_issuer"),
+        ("account_purge", "purged_issuer"),
+    ] {
+        let (issuer, issuer_actor) = seed_account_actor(&pool, username).await;
+        let extra_actor = seed_extra_actor(&pool, issuer, "second_persona").await;
+        let unclaimed = [
+            invite(&format!("{username}_a"), issuer_actor).await,
+            invite(&format!("{username}_b"), extra_actor).await,
+        ];
+        let claimed = invite(&format!("{username}_c"), issuer_actor).await;
+        assert!(
+            fuz_auth::query_invite_claim_unscoped(&client, &claimed, &bystander)
+                .await
+                .expect("claim")
+        );
+        let params = if method == "account_purge" {
+            json!({ "account_id": issuer, "confirm": true })
+        } else {
+            json!({ "account_id": issuer })
+        };
+        common::admin_dispatch(method, &params, &ctx, &client)
+            .await
+            .expect(method);
+        if method == "account_delete" {
+            common::admin_dispatch(
+                "account_undelete",
+                &json!({ "account_id": issuer }),
+                &ctx,
+                &client,
+            )
+            .await
+            .expect("account_undelete");
+        }
+        for id in unclaimed {
+            assert!(
+                !exists(id).await,
+                "{method}: the unclaimed invite is deleted"
+            );
+            let rows = client
+                .query(
+                    "SELECT 1 FROM audit_log
+                     WHERE event_type = 'invite_delete' AND metadata->>'invite_id' = $1",
+                    &[&id.to_string()],
+                )
+                .await
+                .expect("audit rows");
+            assert_eq!(rows.len(), 1, "{method}: one invite_delete row");
+        }
+        assert!(exists(claimed).await, "{method}: the claimed invite stays");
+    }
+    assert!(exists(control).await, "another issuer's invite stays");
+}
+
+/// `query_invite_delete_unclaimed_by_creators` deletes the unclaimed invites
+/// the named actors issued and returns their ids; an empty list deletes none.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn query_invite_delete_unclaimed_by_creators_deletes_only_those() {
+    let pool = fresh_db_pool().await;
+    let client = pool.get().await.expect("pool.get");
+    let (_, issuer) = seed_account_actor(&pool, "q_invite_issuer").await;
+    let (_, other) = seed_account_actor(&pool, "q_invite_other").await;
+    let mine = fuz_auth::query_create_invite(&client, None, Some("q_mine"), Some(&issuer))
+        .await
+        .expect("invite")
+        .id;
+    let theirs = fuz_auth::query_create_invite(&client, None, Some("q_theirs"), Some(&other))
+        .await
+        .expect("invite")
+        .id;
+    assert!(
+        fuz_auth::query_invite_delete_unclaimed_by_creators(&client, &[])
+            .await
+            .expect("empty")
+            .is_empty()
+    );
+    assert_eq!(
+        fuz_auth::query_invite_delete_unclaimed_by_creators(&client, &[issuer])
+            .await
+            .expect("delete"),
+        vec![mine]
+    );
+    let remaining: Vec<uuid::Uuid> = client
+        .query("SELECT id FROM invite", &[])
+        .await
+        .expect("invites")
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(remaining, vec![theirs]);
+}
+
 /// The last-admin count locks what it counted: a second guard counting while
 /// the first's transaction removes an admin waits for its commit and then
 /// counts one — so two removals racing for the last two admins can't both
