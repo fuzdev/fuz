@@ -7,8 +7,9 @@
 //! JSON-body decoder in `json_body`, readiness + lifecycle, request
 //! tracing); the twins converge on the better shape and match observably
 //! (this side canonicalizes IPv6). The origin allowlist grammar is shared
-//! with the TS twin entry for entry. `host` (the DNS-rebinding gate) has no
-//! TS twin yet.
+//! with the TS twin entry for entry. `host` (the DNS-rebinding gate) is the
+//! twin of `fuz_app`'s `http/host.ts`; `request_headers` and `request_target`
+//! are the twins of its strict readers of the same names.
 //!
 //! An input-validation refusal ([`invalid_input_params`]) answers the generic
 //! `invalid params` and logs what was refused at `debug`
@@ -29,7 +30,8 @@
 //! the order a request meets them:
 //!
 //! ```text
-//! request_tracing_layer → per group: body cap → host_layer → origin_layer
+//! request_tracing_layer → catch_panic → `Allow` kept only on a 405
+//!   → per group: body cap → host_layer → origin_layer → cookie_clear_layer
 //!     → simple_request_layer → client_ip_middleware → handler
 //! ```
 //!

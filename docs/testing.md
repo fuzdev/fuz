@@ -101,6 +101,11 @@ Each suite's purpose is in its file's `//!` doc. Schema handling:
   — the test role needs `CREATEDB`, and a run that panics leaves that database
   for the next run to drop.
 
+`fuz_auth`'s `credential_mint_race` and `account_delete_races` play two
+transactions against each other; only real Postgres shows a lock wait or a
+lock order, so they exist only as `#[ignore]` suites, and a change to a row
+lock, a locking read or a `RETURNING` order runs them.
+
 ## Cross-backend suite
 
 **A change to a spine crate that `testing_spine_stub` links also runs fuz_app's
@@ -115,6 +120,12 @@ It is the broad behavioral coverage of the cell verbs: `fuz_cell_actions`'s own
 Postgres suite pins the authz gates (`tests/cell_authz.rs`'s `//!` lists them),
 and its unit tests are pure — so `cargo test --workspace` and the Postgres
 recipe can both be green with a cell handler broken.
+
+`fuz_http`'s `request_header_conformance.json` and
+`request_target_conformance.json`, like `fuz_testing`'s
+`credential_conformance.json`, are byte-identical copies of fuz_app's tables,
+run here by each module's unit test. fuz_app's `conformance_table_copies`
+cross test fails when a copy differs, so a row is edited in both repos.
 
 ## Known flakes
 

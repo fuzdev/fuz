@@ -459,8 +459,8 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   refuses an undecodable query in its own shape: `invalid_query_params` on a
   REST route and the WS upgrade, the `invalid_request` envelope on the RPC
   `GET`. Both spines are held to `request_target_conformance.json`, a
-  byte-identical copy of fuz_app's. A consumer's own handlers move to these
-  readers to get the rule; axum's `Query` and `Path` still decode leniently.
+  byte-identical copy of fuz_app's. A consumer's own handler reads through
+  these too; axum's `Query` and `Path` decode leniently.
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with a required
@@ -524,7 +524,10 @@ passwords, rate limiting, the REST routes (`/status`, `/login`, `/logout`,
 `/password`, `/bootstrap`, `/signup`), auth cleanup, and the audit registry.
 The rules a change must keep:
 
-- The non-cookie credential legs (daemon token, bearer) refuse browser callers.
+- The non-cookie credential legs (daemon token, bearer) discard their
+  credential on a browser-context request (any `Origin` or `Referer` line,
+  `fuz_http::is_browser_context`): the walk goes on without it, never a
+  refusal.
 - **One strict reader per credential header** (`credential_headers`, twin of
   fuz_app's `auth/credential_headers.ts`), over every line of the header
   (the line primitives are `fuz_http::request_headers`'): a
@@ -578,11 +581,14 @@ The rules a change must keep:
   its grantor's accounts in one statement, in id order
   (`query_account_lock_live_many`), and refuses a recipient or a grantor
   that is not an active account (`RoleGrantOfferError::RecipientNotActive`,
-  `GrantorNotActive`) — a deleted recipient answered exactly as a missing
+  `GrantorNotActive`) — a deleted recipient is refused exactly as a missing
   one; `invite_create` locks its issuer before its insert. An account
-  delete supersedes the pending offers made to the account as well as by
-  it, and with purge deletes the unclaimed invites it issued; role grants
-  are kept and come back with the undelete. The last-admin guard locks its
+  delete, and a purge, supersedes the pending offers made by the account
+  and deletes the unclaimed invites its actors issued; a delete also
+  supersedes the pending offers made to it (a purge's cascade removes
+  those). Role grants are kept and come back with the undelete; superseded
+  offers, deleted invites and revoked credentials stay ended. The
+  last-admin guard locks its
   rows in account-id order, so no two of these wait on each other in
   opposite orders. A server that creates offers through the query gets the
   rule; one that mints invites through `query_create_invite` for an issuer
@@ -938,7 +944,11 @@ Wire twins of fuz_app's (`fuz_realtime::ws_close_codes`):
 runs after the gates origin → 401 → token scope → acting actor (on every
 endpoint, `?acting=` through `require_acting_actor`) → `required_roles` (the
 resolved actor's active global grants, counted only while the actor and its
-account are active, so an actor soft-deleted mid-upgrade is refused). Then:
+account are active, so an actor soft-deleted mid-upgrade is refused). Any
+method but `GET` / `HEAD` on the path is the stack's 405 ahead of all of
+these; a query holding an escape that doesn't decode is 400
+`invalid_query_params` after the scope gate; a `GET` the gates admit that
+asks for no upgrade is the unrouted 404 (`route_not_found`). Then:
 
 1. register pending;
 2. re-read the credential and roles;
@@ -954,7 +964,8 @@ or token, so admission is where a revoked credential is caught.
 ### Non-RPC gate pipeline
 
 The audit stream, `fuz_db_admin`, and `fuz_fact_serving`'s bare route run one
-pipeline: origin → credential (session-only by default) → `?acting=` through
+pipeline: params (`RouteParams`) → query (strict, `read_query_pairs`) → origin
+→ credential (session-only by default) → `?acting=` through
 `require_acting_actor` → role. The audit stream reads the role from the
 **resolved actor's** grants; `fuz_db_admin` at account grain.
 

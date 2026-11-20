@@ -282,7 +282,7 @@ mod tests {
 
     /// The status a bodiless `POST` to `path` answers: a mounted JSON route
     /// refuses the missing content type (415) before reading anything, and an
-    /// unmounted one is axum's 404.
+    /// unmounted one is axum's 404 (a bare test router, with no stack).
     async fn post_status(router: Router, path: &str) -> StatusCode {
         let mut request = Request::builder()
             .method("POST")

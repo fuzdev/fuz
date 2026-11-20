@@ -1,7 +1,8 @@
 //! Query-string shape helpers converging axum handlers with the TS twin's
 //! query semantics.
 //!
-//! `fuz_app`'s route pipeline reads queries through Hono's `c.req.query()` —
+//! `fuz_app`'s route pipeline reads the query strictly
+//! (`http/request_target.ts`) and builds its record as Hono's did —
 //! a duplicated key resolves to its **first** occurrence, and routes that
 //! declare an `object` query schema 400 unknown keys in the
 //! params → query → 401 → authz → 403 phase order. axum's derived-serde
@@ -22,8 +23,8 @@
 //!
 //! [`read_query_pairs`]: crate::read_query_pairs
 //!
-//! A pair with an empty name (`?=x`) is not a key on the TS side: Hono builds
-//! the `c.req.query()` record by skipping a pair whose decoded name is empty,
+//! A pair with an empty name (`?=x`) is not a key on the TS side: the TS
+//! twin's query record skips a pair whose decoded name is empty,
 //! so a strict schema is never shown one. axum's extractor keeps it, as
 //! `("", "x")`, and [`assert_known_query_keys`] passes over it.
 

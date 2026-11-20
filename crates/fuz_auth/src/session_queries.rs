@@ -250,6 +250,15 @@ impl CappedSession {
 /// `ConnectionCloser`); a site that mints for an account created in the same
 /// transaction can evict nothing, since no other session can reference it.
 ///
+/// A caller minting for an existing account takes its row lock first in the
+/// same transaction ([`query_account_lock_verified`] after a password verify,
+/// [`query_account_lock_live`] otherwise) and refuses on `false`, so a
+/// password change or a delete in flight is ordered against the mint. A site
+/// minting for an account created in its own transaction needs none.
+///
+/// [`query_account_lock_verified`]: crate::account_queries::query_account_lock_verified
+/// [`query_account_lock_live`]: crate::account_queries::query_account_lock_live
+///
 /// # Errors
 ///
 /// Propagates `tokio_postgres::Error` from the underlying client.

@@ -227,6 +227,11 @@ pub fn spawn_api_token_touch(pool: &deadpool_postgres::Pool, token_id: &str, ip:
 /// Serialize it with [`TokenScopeDocument::to_json`](crate::TokenScopeDocument::to_json)
 /// so the size cap is enforced before the write.
 ///
+/// A caller minting for an account takes `query_account_lock_live` on it
+/// first in the same transaction, then re-reads the session that authorized
+/// the mint (`query_session_is_live`), and refuses when either is gone, so a
+/// password change or a delete in flight is ordered against the mint.
+///
 /// # Errors
 ///
 /// Propagates `tokio_postgres::Error` from the underlying client.
