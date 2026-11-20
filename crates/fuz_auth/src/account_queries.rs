@@ -456,6 +456,77 @@ pub async fn query_update_account_password(
     Ok(row.is_some())
 }
 
+/// Lock an account row for a credential mint, when the account is live and
+/// still holds the password hash its authorization verified.
+///
+/// A login verifies the password outside any transaction, so a password
+/// change or an account delete can commit between the verify and the session
+/// insert — and revoke "every session" before the new one exists. Run first
+/// in the mint's transaction, this read waits on the row lock either writer
+/// holds and then rereads the row as they committed it, so the mint is
+/// refused when the hash changed or the tombstone landed; and once it holds
+/// the lock, either writer waits for the mint to commit and then revokes what
+/// it minted. Both writers write the account row before they revoke, which is
+/// what makes the lock order them.
+///
+/// `FOR SHARE` is the weakest lock that conflicts with their `UPDATE`s (the
+/// session insert's foreign-key `FOR KEY SHARE` does not), and concurrent
+/// logins of one account share it. Twin of `fuz_app`'s
+/// `query_account_lock_verified`.
+///
+/// Returns `true` when the row is locked and current, `false` when it was
+/// deleted, tombstoned, or its hash changed.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_account_lock_verified(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    account_id: &uuid::Uuid,
+    password_hash: &str,
+) -> Result<bool, tokio_postgres::Error> {
+    let row = client
+        .query_opt(
+            "SELECT id FROM account
+             WHERE id = $1 AND deleted_at IS NULL AND password_hash = $2
+             FOR SHARE",
+            &[account_id, &password_hash],
+        )
+        .await?;
+    Ok(row.is_some())
+}
+
+/// Lock a live account row for a credential mint authorized by a credential
+/// the account already holds (`account_token_create`).
+///
+/// The request's credential was resolved outside the mint's transaction, so
+/// an account delete can commit between that read and the insert, revoking
+/// every token before the new one exists. Run first in the mint's
+/// transaction, this read waits on the delete's row lock and then sees its
+/// tombstone; once it holds the lock, a delete waits for the mint to commit
+/// and then revokes the token. The password is not re-checked: the mint
+/// verified none. Twin of `fuz_app`'s `query_account_lock_live`;
+/// [`query_account_lock_verified`] has why `FOR SHARE`.
+///
+/// Returns `true` when the row is locked and not tombstoned, `false` when it
+/// was deleted or tombstoned.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_account_lock_live(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    account_id: &uuid::Uuid,
+) -> Result<bool, tokio_postgres::Error> {
+    let row = client
+        .query_opt(
+            "SELECT id FROM account WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
+            &[account_id],
+        )
+        .await?;
+    Ok(row.is_some())
+}
+
 /// Identifying values snapshotted into a deletion/purge audit event so
 /// the identity behind a now-orphaned `audit_log` id isn't lost. Mirrors
 /// the TS `account_delete` / `account_purge` metadata snapshot.

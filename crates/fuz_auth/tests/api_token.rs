@@ -39,16 +39,18 @@ use serde_json::{Value, json};
 
 /// Build an `AccountActionContext` over a seeded account row — the
 /// account-grain sibling of `common::ctx` (account actions never resolve an
-/// actor).
+/// actor) — authenticated by the session `session_hash` names, as the
+/// dispatcher builds it for a session credential.
 fn account_ctx<'a>(
     auth: &'a RequestContext,
+    session_hash: &'a str,
     audit: &'a Arc<AuditEmitter>,
     closer: &'a Arc<dyn ConnectionCloser>,
 ) -> AccountActionContext<'a> {
     AccountActionContext {
         auth,
-        credential_type: None,
-        session_hash: None,
+        credential_type: Some(fuz_auth::CredentialType::Session),
+        session_hash: Some(session_hash),
         audit,
         post_commit: &NoopAuditPostCommit,
         connection_closer: closer,
@@ -130,8 +132,13 @@ async fn dispatch_token_create(
 ) -> Result<Value, fuz_http::JsonrpcError> {
     let audit = common::build_audit(pool.clone());
     let closer = common::closer();
-    let ctx = account_ctx(auth, &audit, &closer);
     let client = pool.get().await.expect("pool.get");
+    // the mint re-checks the session that authorized it, so it needs a live one
+    let session = fuz_auth::create_capped_session(&client, &auth.account.id)
+        .await
+        .expect("seed session");
+    let session_hash = fuz_auth::hash_session_token(&session.token);
+    let ctx = account_ctx(auth, session_hash.as_str(), &audit, &closer);
     AccountActionSpecs::dispatch("account_token_create", params, &ctx, &client).await
 }
 

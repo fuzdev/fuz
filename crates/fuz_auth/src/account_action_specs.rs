@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use serde_json::Value;
 
+use crate::account_queries::query_account_lock_live;
 use crate::action_auth::AuthSpec;
 use crate::action_rate_limit::RateLimitClass;
 use crate::api_token::generate_api_token;
@@ -30,14 +31,14 @@ use crate::connection_closer::ConnectionCloseTarget;
 use crate::credential_type::CredentialGate;
 use crate::params_helpers::require_text_len;
 use crate::session_queries::{
-    query_session_list_for_account, query_session_revoke_all_for_account,
+    query_session_is_live, query_session_list_for_account, query_session_revoke_all_for_account,
     query_session_revoke_for_account,
 };
 use crate::token_scope::{RawTokenScopeInput, TokenScopeDocument};
 use fuz_http::{
     InputShape, JsonrpcError, as_integral_i64, internal_error, internal_error_with_source,
     invalid_input_params, invalid_params, method_not_found, parse_optional_str_param,
-    parse_str_param, reject_null_keys, reject_unknown_keys, serialize_result,
+    parse_str_param, reject_null_keys, reject_unknown_keys, serialize_result, unauthenticated,
 };
 
 /// Max API tokens per account before the oldest are evicted on create.
@@ -521,6 +522,29 @@ async fn handle_account_token_create(
     });
 
     let generated = generate_api_token();
+
+    // The session that authorized this was read before the transaction. A
+    // delete or a password change committed since mints nothing — refused as
+    // the dead session it now is, the two losers one answer — and one still
+    // to commit waits on the account lock and then revokes the token: both
+    // write the account row before they revoke (`query_account_lock_live`,
+    // then `query_session_is_live`, which sees a revoke committed before the
+    // lock was granted).
+    if !query_account_lock_live(db, &account_id)
+        .await
+        .map_err(|e| internal_error_with_source("token create account lock failed", &e))?
+    {
+        return Err(unauthenticated());
+    }
+    let Some(session_hash) = ctx.session_hash else {
+        return Err(unauthenticated());
+    };
+    if !query_session_is_live(db, session_hash, &account_id)
+        .await
+        .map_err(|e| internal_error_with_source("token create session read failed", &e))?
+    {
+        return Err(unauthenticated());
+    }
 
     let minted = query_create_api_token(
         db,

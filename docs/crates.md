@@ -564,6 +564,15 @@ The rules a change must keep:
   lower credential or anonymous.
 - `create_capped_session` is the only production session minter
   (`fuz_testing`'s fixtures insert uncapped rows directly).
+- **A credential is minted under the account's row lock.** Login and
+  `account_token_create` run first, in their mint transaction, a `FOR SHARE`
+  re-check of the account (`query_account_lock_verified`: live and still the
+  hash that was verified; `query_account_lock_live`, then
+  `query_session_is_live` for the session that authorized the token). A
+  password change and a delete write the account row before they revoke, so
+  a mint in flight across either waits and is refused — the login exactly as
+  a wrong password is — or commits first and is revoked. A server that mints
+  a session or a token through its own code takes the same lock.
 - Every rate-limited attempt reserves its slot before it runs, and an attempt
   abandoned after its Argon2 work started is still charged.
 - `AuditEventType` is the spine-wide closed registry (auth and cell events);

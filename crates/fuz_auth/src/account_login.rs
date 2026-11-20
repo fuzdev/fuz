@@ -20,8 +20,9 @@ use fuz_http::{db_unavailable_response_with_source, internal_error_response_with
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::account_queries::query_account_with_password_hash;
+use crate::account_queries::{query_account_lock_verified, query_account_with_password_hash};
 use crate::account_route_state::AccountRouteState;
+use crate::account_schema::AccountWithPasswordHash;
 use crate::audit_emitter::AuditLogInput;
 use crate::audit_event_type::AuditEventType;
 use crate::connection_closer::ConnectionCloseTarget;
@@ -30,7 +31,7 @@ use crate::primitive_schemas::USERNAME_PROVIDED_LENGTH_MAX;
 use crate::rate_limiter::{RESERVATION_WAIT_MAX, reserve_optional};
 use crate::route_helpers::session_cookie_header;
 use crate::route_response::rate_limit_exceeded;
-use crate::session_queries::create_capped_session;
+use crate::session_queries::{CappedSession, create_capped_session};
 use crate::timing::{compute_fail_deadline, wait_for_deadline};
 use fuz_http::ClientIp;
 
@@ -196,7 +197,8 @@ async fn login_inner(
     // `password_argon2`) and must not hold a client while it does. Nothing
     // was guarded by holding it: the lookup is a plain read outside any
     // transaction, so the row could change between it and the verify either
-    // way, and the session insert below runs in its own transaction.
+    // way — which is why the session insert below runs in a transaction of its
+    // own that re-reads the row under a lock first.
     let account_with_hash = {
         let client = state
             .gate
@@ -237,7 +239,26 @@ async fn login_inner(
         .charge_if_cancelled(account_reservation.charge_if_cancelled(verify))
         .await;
 
-    let Some(account) = account.filter(|_| password_valid) else {
+    // `create_capped_session` is an INSERT + a cap eviction, which are only
+    // atomic inside a transaction. The transaction is opened here rather than
+    // around the whole handler so it never spans the Argon2 verify above — it
+    // covers the account lock and the two statements that must not be
+    // observed apart. It bounds one creator, not concurrent ones — see
+    // `query_session_enforce_limit`. It first locks the account row as the
+    // verify read it — live, the verified hash — so a password change or a
+    // delete that committed since mints nothing, and one still to commit waits
+    // and then revokes this session (`query_account_lock_verified`).
+    let minted = match account.filter(|_| password_valid) {
+        Some(account) => mint_login_session(&state.gate.pool, &account)
+            .await?
+            .map(|session| (account, session)),
+        None => None,
+    };
+
+    // A wrong password, and a right one whose account changed under it, are
+    // one refusal: the same answer, charge, and audit row, so the caller can't
+    // learn the password was right a moment ago.
+    let Some((account, session)) = minted else {
         // One failed credential check, charged to both buckets — the account
         // one keyed by the canonical username on the unknown-account path, so
         // misses against a nonexistent account share one bucket too.
@@ -254,10 +275,9 @@ async fn login_inner(
         // the Option through the field directly.
         input.account_id = failure_account_id;
         let _ = state.audit.emit(input).await;
-        // Single 401 site for both the no-account and wrong-password paths
-        // (they converge through `account.filter(|_| password_valid)`), so
-        // the floor wait threads through here once — masking the timing
-        // delta between the two. 429 returns above without waiting; the
+        // Single 401 site for the no-account, wrong-password, and changed-account
+        // paths, so the floor wait threads through here once — masking the
+        // timing delta between them. 429 returns above without waiting; the
         // success path below does not wait either.
         wait_for_deadline(fail_deadline).await;
         return Err(fuz_http::rest_error_response(
@@ -276,29 +296,6 @@ async fn login_inner(
     if let Some(ref limiter) = state.login_account_rate_limiter {
         limiter.reset(&account_rate_key);
     }
-
-    // `create_capped_session` is an INSERT + a cap eviction, which are only
-    // atomic inside a transaction. The transaction is opened here rather than
-    // around the whole handler so it never spans the Argon2 verify above — it
-    // covers exactly the two statements that must not be observed apart.
-    // Bootstrap and signup already held transactions; this is the site that ran
-    // on a bare pooled client, where the pair would have had no atomicity at
-    // all. It bounds one creator, not concurrent ones — see
-    // `query_session_enforce_limit`.
-    let mut client = state
-        .gate
-        .pool
-        .get()
-        .await
-        .map_err(|e| db_unavailable_response_with_source("login: db pool error", &e))?;
-    let session = async {
-        let tx = client.transaction().await?;
-        let session = create_capped_session(&tx, &account.id).await?;
-        commit_checked(tx).await?;
-        Ok::<_, fuz_db::DbError>(session)
-    }
-    .await
-    .map_err(|e| internal_error_response_with_source("login: session creation failed", &e))?;
 
     // The sessions the cap evicted are gone from the table, but not from the
     // connections they opened — a WebSocket keeps the authority it resolved at
@@ -335,6 +332,44 @@ async fn login_inner(
         Json(LoginSuccess { ok: true }),
     )
         .into_response())
+}
+
+/// Mint the login's session in one transaction, when the account is still as
+/// the verify read it: live, holding the verified hash.
+///
+/// `None` when [`query_account_lock_verified`] finds it changed — nothing is
+/// written and the transaction is rolled back. The commit is
+/// [`commit_checked`], so a session is returned only for a commit the server
+/// acknowledged.
+///
+/// # Errors
+///
+/// The 503 for a pool checkout, the flat 500 for the `BEGIN`, any statement,
+/// or the commit.
+#[expect(
+    clippy::result_large_err,
+    reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
+)]
+async fn mint_login_session(
+    pool: &fuz_db::Pool,
+    account: &AccountWithPasswordHash,
+) -> Result<Option<CappedSession>, Response> {
+    let mut client = pool
+        .get()
+        .await
+        .map_err(|e| db_unavailable_response_with_source("login: db pool error", &e))?;
+    async {
+        let tx = client.transaction().await?;
+        if !query_account_lock_verified(&tx, &account.id, &account.password_hash).await? {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let session = create_capped_session(&tx, &account.id).await?;
+        commit_checked(tx).await?;
+        Ok::<_, fuz_db::DbError>(Some(session))
+    }
+    .await
+    .map_err(|e| internal_error_response_with_source("login: session creation failed", &e))
 }
 
 #[cfg(test)]
