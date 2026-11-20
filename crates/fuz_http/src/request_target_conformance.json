@@ -1,0 +1,1107 @@
+{
+	"query": [
+		{
+			"name": "no query string at all",
+			"query": null,
+			"read": {
+				"pairs": []
+			}
+		},
+		{
+			"name": "an empty query string",
+			"query": "",
+			"read": {
+				"pairs": []
+			}
+		},
+		{
+			"name": "one pair",
+			"query": "a=1",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						"1"
+					]
+				]
+			}
+		},
+		{
+			"name": "a key with no `=` reads an empty value",
+			"query": "a",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						""
+					]
+				]
+			}
+		},
+		{
+			"name": "a key with an empty value",
+			"query": "a=",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						""
+					]
+				]
+			}
+		},
+		{
+			"name": "a nameless pair is kept, for the caller to skip",
+			"query": "=x",
+			"read": {
+				"pairs": [
+					[
+						"",
+						"x"
+					]
+				]
+			}
+		},
+		{
+			"name": "a lone `=`",
+			"query": "=",
+			"read": {
+				"pairs": [
+					[
+						"",
+						""
+					]
+				]
+			}
+		},
+		{
+			"name": "empty pieces between `&` are no pairs",
+			"query": "&&a=1&&",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						"1"
+					]
+				]
+			}
+		},
+		{
+			"name": "a repeated key keeps every occurrence, in order",
+			"query": "a=1&a=2",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						"1"
+					],
+					[
+						"a",
+						"2"
+					]
+				]
+			}
+		},
+		{
+			"name": "only the first `=` splits a pair",
+			"query": "a=1=2",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						"1=2"
+					]
+				]
+			}
+		},
+		{
+			"name": "`;` separates nothing",
+			"query": "a=1;b=2",
+			"read": {
+				"pairs": [
+					[
+						"a",
+						"1;b=2"
+					]
+				]
+			}
+		},
+		{
+			"name": "`+` reads as a space, in a key and a value",
+			"query": "a+b=c+d",
+			"read": {
+				"pairs": [
+					[
+						"a b",
+						"c d"
+					]
+				]
+			}
+		},
+		{
+			"name": "`%2B` is a plus, not a space",
+			"query": "%2B=%2B",
+			"read": {
+				"pairs": [
+					[
+						"+",
+						"+"
+					]
+				]
+			}
+		},
+		{
+			"name": "`%20` is a space",
+			"query": "q=%20",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						" "
+					]
+				]
+			}
+		},
+		{
+			"name": "an encoded slash",
+			"query": "q=%2F",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"/"
+					]
+				]
+			}
+		},
+		{
+			"name": "a two-byte character",
+			"query": "q=%C3%A9",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"é"
+					]
+				]
+			}
+		},
+		{
+			"name": "lowercase hex digits",
+			"query": "q=%c3%a9",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"é"
+					]
+				]
+			}
+		},
+		{
+			"name": "a four-byte character",
+			"query": "q=%F0%9F%98%80",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"😀"
+					]
+				]
+			}
+		},
+		{
+			"name": "the replacement character itself, encoded, is a character",
+			"query": "q=%EF%BF%BD",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"�"
+					]
+				]
+			}
+		},
+		{
+			"name": "an encoded NUL is a character",
+			"query": "q=%00",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"\u0000"
+					]
+				]
+			}
+		},
+		{
+			"name": "an encoded percent",
+			"query": "q=%25",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"%"
+					]
+				]
+			}
+		},
+		{
+			"name": "an encoded percent before hex digits decodes once",
+			"query": "q=%25FF",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"%FF"
+					]
+				]
+			}
+		},
+		{
+			"name": "an encoded `&` and `=` stay in the value",
+			"query": "q=%26%3D",
+			"read": {
+				"pairs": [
+					[
+						"q",
+						"&="
+					]
+				]
+			}
+		},
+		{
+			"name": "an encoded key",
+			"query": "%61cting=x",
+			"read": {
+				"pairs": [
+					[
+						"acting",
+						"x"
+					]
+				]
+			}
+		},
+		{
+			"name": "a lone byte that is no UTF-8",
+			"query": "q=%FF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a valid character before an invalid byte",
+			"query": "q=%C3%A9%FF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a truncated two-byte sequence",
+			"query": "q=%C3",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a truncated three-byte sequence",
+			"query": "q=%E2%82",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a continuation byte alone",
+			"query": "q=%80",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "an overlong encoding of `/`",
+			"query": "q=%C0%AF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "the bytes of a lone surrogate",
+			"query": "q=%ED%A0%80",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a code point past U+10FFFF",
+			"query": "q=%F4%90%80%80",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a bare `%`",
+			"query": "q=%",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a `%` with one hex digit at the end",
+			"query": "q=%F",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a `%` with a non-hex digit",
+			"query": "q=%G0",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a `%` followed by a second `%`",
+			"query": "q=%%41",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a bare `%` in a key",
+			"query": "%=x",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "an undecodable key",
+			"query": "%FF=1",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "an undecodable value of a key no route reads",
+			"query": "method=x&junk=%FF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "an undecodable value behind a repeated key",
+			"query": "id=a&id=%FF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "the first undecodable component decides the refusal (invalid UTF-8 first)",
+			"query": "a=%FF&b=%G0",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "the first undecodable component decides the refusal (malformed escape first)",
+			"query": "a=%G0&b=%FF",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a malformed escape after invalid bytes in one value",
+			"query": "q=%FF%G0",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		}
+	],
+	"param": [
+		{
+			"name": "plain text",
+			"segment": "abc",
+			"read": {
+				"value": "abc"
+			}
+		},
+		{
+			"name": "an empty segment",
+			"segment": "",
+			"read": {
+				"value": ""
+			}
+		},
+		{
+			"name": "`+` stays a plus in a path",
+			"segment": "a+b",
+			"read": {
+				"value": "a+b"
+			}
+		},
+		{
+			"name": "an encoded plus",
+			"segment": "%2B",
+			"read": {
+				"value": "+"
+			}
+		},
+		{
+			"name": "an encoded slash",
+			"segment": "a%2Fb",
+			"read": {
+				"value": "a/b"
+			}
+		},
+		{
+			"name": "an encoded colon",
+			"segment": "blake3%3Aabc",
+			"read": {
+				"value": "blake3:abc"
+			}
+		},
+		{
+			"name": "a two-byte character",
+			"segment": "%C3%A9",
+			"read": {
+				"value": "é"
+			}
+		},
+		{
+			"name": "lowercase hex digits",
+			"segment": "%c3%a9",
+			"read": {
+				"value": "é"
+			}
+		},
+		{
+			"name": "a raw non-ASCII character",
+			"segment": "é",
+			"read": {
+				"value": "é"
+			}
+		},
+		{
+			"name": "an encoded NUL is a character",
+			"segment": "%00",
+			"read": {
+				"value": "\u0000"
+			}
+		},
+		{
+			"name": "an encoded percent",
+			"segment": "%25",
+			"read": {
+				"value": "%"
+			}
+		},
+		{
+			"name": "an encoded percent before hex digits decodes once",
+			"segment": "%25FF",
+			"read": {
+				"value": "%FF"
+			}
+		},
+		{
+			"name": "the replacement character itself, encoded",
+			"segment": "%EF%BF%BD",
+			"read": {
+				"value": "�"
+			}
+		},
+		{
+			"name": "a lone byte that is no UTF-8",
+			"segment": "%FF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a valid character before an invalid byte",
+			"segment": "%C3%A9%FF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a truncated two-byte sequence",
+			"segment": "%C3",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a continuation byte alone",
+			"segment": "%80",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "an overlong encoding of `/`",
+			"segment": "%C0%AF",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "the bytes of a lone surrogate",
+			"segment": "%ED%A0%80",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a code point past U+10FFFF",
+			"segment": "%F4%90%80%80",
+			"read": {
+				"refused": "invalid_utf8"
+			}
+		},
+		{
+			"name": "a bare `%`",
+			"segment": "%",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a `%` with one hex digit at the end",
+			"segment": "%F",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a `%` with a non-hex digit",
+			"segment": "%G0",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a `%` followed by a second `%`",
+			"segment": "%%41",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		},
+		{
+			"name": "a malformed escape after invalid bytes",
+			"segment": "%FF%G0",
+			"read": {
+				"refused": "malformed_escape"
+			}
+		}
+	],
+	"wire": [
+		{
+			"name": "rpc GET: a plain id is echoed",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=wire",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "wire"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an encoded two-byte id decodes",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%C3%A9",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "é"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an encoded slash in the id decodes",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%2F",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "/"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an encoded NUL in the id decodes",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%00",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "\u0000"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an encoded percent decodes once",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%25FF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "%FF"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: `+` in the id is a space",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=a+b",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "a b"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an encoded plus is a plus",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%2B",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "+"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an encoded integer id is a number",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%34%32",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": 42
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an invalid byte in the id",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%FF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: a valid character before an invalid byte",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%C3%A9%FF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: a truncated sequence",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%C3",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an overlong encoding",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%C0%AF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: the bytes of a lone surrogate",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%ED%A0%80",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: a bare `%`",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: a malformed escape",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%G0",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an undecodable method",
+			"method": "GET",
+			"target": "{rpc_path}?method=%FF&id=wire",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an undecodable params value",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=wire&params=%7B%22x%22%3A%22%FF%22%7D",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an undecodable key no handler reads",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=wire&junk=%FF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an undecodable key name",
+			"method": "GET",
+			"target": "{rpc_path}?%FF=1&method=account_verify&id=wire",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an undecodable repeat of a key read first-wins",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=wire&id=%FF",
+			"as": "keeper_session",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "rpc GET: an anonymous caller hears the query refusal, read before any action",
+			"method": "GET",
+			"target": "{rpc_path}?method=account_verify&id=%FF",
+			"as": "none",
+			"expect": {
+				"status": 400,
+				"jsonrpc": {
+					"id": null,
+					"code": -32600,
+					"reason": "undecodable query string"
+				}
+			}
+		},
+		{
+			"name": "account status: an undecodable acting",
+			"method": "GET",
+			"target": "{account_status_path}?acting=%FF",
+			"as": "keeper_session",
+			"requires": "account_status",
+			"expect": {
+				"status": 400,
+				"error": "invalid_query_params"
+			}
+		},
+		{
+			"name": "account status: an undecodable key the route never reads",
+			"method": "GET",
+			"target": "{account_status_path}?junk=%FF",
+			"as": "keeper_session",
+			"requires": "account_status",
+			"expect": {
+				"status": 400,
+				"error": "invalid_query_params"
+			}
+		},
+		{
+			"name": "account status: an anonymous caller hears 401 first, the query read after it",
+			"method": "GET",
+			"target": "{account_status_path}?acting=%FF",
+			"as": "none",
+			"requires": "account_status",
+			"expect": {
+				"status": 401,
+				"error": "authentication_required"
+			}
+		},
+		{
+			"name": "account status: a decodable malformed acting is account-only, not refused",
+			"method": "GET",
+			"target": "{account_status_path}?acting=%C3%A9",
+			"as": "keeper_session",
+			"requires": "account_status",
+			"expect": {
+				"status": 200
+			}
+		},
+		{
+			"name": "ws upgrade: an undecodable acting",
+			"method": "GET",
+			"target": "{ws_path}?acting=%FF",
+			"as": "keeper_session",
+			"upgrade": true,
+			"requires": "ws",
+			"expect": {
+				"status": 400,
+				"error": "invalid_query_params"
+			}
+		},
+		{
+			"name": "ws upgrade: an undecodable key the upgrade never reads",
+			"method": "GET",
+			"target": "{ws_path}?junk=%G0",
+			"as": "keeper_session",
+			"upgrade": true,
+			"requires": "ws",
+			"expect": {
+				"status": 400,
+				"error": "invalid_query_params"
+			}
+		},
+		{
+			"name": "ws upgrade: an anonymous caller hears 401 first",
+			"method": "GET",
+			"target": "{ws_path}?acting=%FF",
+			"as": "none",
+			"upgrade": true,
+			"requires": "ws",
+			"expect": {
+				"status": 401,
+				"error": "authentication_required"
+			}
+		},
+		{
+			"name": "ws upgrade: a decodable malformed acting reads as omitted",
+			"method": "GET",
+			"target": "{ws_path}?acting=%C3%A9",
+			"as": "keeper_session",
+			"upgrade": true,
+			"requires": "ws",
+			"expect": {
+				"status": 101
+			}
+		},
+		{
+			"name": "bare fact: an invalid byte in the hash param",
+			"method": "GET",
+			"target": "/api/facts/%FF",
+			"as": "keeper_session",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "bare fact: a malformed escape in the hash param",
+			"method": "GET",
+			"target": "/api/facts/%G0",
+			"as": "keeper_session",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "bare fact: the param refusal precedes the 401",
+			"method": "GET",
+			"target": "/api/facts/%FF",
+			"as": "none",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "bare fact: an encoded colon in the hash decodes to a well-formed hash",
+			"method": "GET",
+			"target": "/api/facts/blake3%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"as": "keeper_session",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 404
+			}
+		},
+		{
+			"name": "bare fact: an undecodable acting",
+			"method": "GET",
+			"target": "/api/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?acting=%FF",
+			"as": "keeper_session",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 400,
+				"error": "invalid_query_params"
+			}
+		},
+		{
+			"name": "bare fact: an undecodable key the route never reads",
+			"method": "GET",
+			"target": "/api/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?junk=%C3",
+			"as": "keeper_session",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 400,
+				"error": "invalid_query_params"
+			}
+		},
+		{
+			"name": "bare fact: the param refusal precedes the query refusal",
+			"method": "GET",
+			"target": "/api/facts/%FF?acting=%FF",
+			"as": "keeper_session",
+			"requires": "fact_serving_admin_hash",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "cell fact: an invalid byte in the cell id",
+			"method": "GET",
+			"target": "/api/cells/%FF/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"as": "none",
+			"requires": "fact_serving",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "cell fact: an invalid byte in the hash",
+			"method": "GET",
+			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/%C3%A9%FF",
+			"as": "none",
+			"requires": "fact_serving",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "cell fact: a bare `%` in the hash",
+			"method": "GET",
+			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/%",
+			"as": "none",
+			"requires": "fact_serving",
+			"expect": {
+				"status": 400,
+				"error": "invalid_route_params"
+			}
+		},
+		{
+			"name": "cell fact: decodable params that name no cell",
+			"method": "GET",
+			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"as": "none",
+			"requires": "fact_serving",
+			"expect": {
+				"status": 404
+			}
+		},
+		{
+			"name": "rpc GET: an encoded key ahead of a plain one is its first occurrence",
+			"method": "GET",
+			"target": "{rpc_path}?%6Dethod=account_verify&method=no_such_method&id=wire",
+			"as": "keeper_session",
+			"expect": {
+				"status": 200,
+				"jsonrpc": {
+					"id": "wire"
+				}
+			}
+		},
+		{
+			"name": "cell fact: a route that reads no query refuses nothing in it",
+			"method": "GET",
+			"target": "/api/cells/00000000-0000-0000-0000-000000000000/facts/blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?junk=%FF",
+			"as": "none",
+			"requires": "fact_serving",
+			"expect": {
+				"status": 404
+			}
+		}
+	]
+}

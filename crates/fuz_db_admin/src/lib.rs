@@ -45,7 +45,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
@@ -58,8 +58,8 @@ use fuz_db::{
     PgErrorKind, UntypedTextParam, classify_pg_error, commit_checked, is_valid_sql_identifier,
 };
 use fuz_http::{
-    ClientIp, assert_known_query_keys, invalid_query_params_response,
-    invalid_route_params_response, query_first,
+    ClientIp, RouteParams, assert_known_query_keys, invalid_query_params_response,
+    invalid_route_params_response, query_first, read_query_pairs,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -236,7 +236,7 @@ pub fn db_admin_router(state: DbAdminRouteState) -> Router {
 
 async fn handle_health(
     State(state): State<DbAdminRouteState>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
@@ -247,6 +247,9 @@ async fn handle_health(
     // Query shape before auth — the TS pipeline's phase order (params →
     // query → 401/403), so the two backends answer a malformed query
     // identically whatever the caller's credentials.
+    // every escape in the query decoded strictly first
+    let query_pairs =
+        read_query_pairs(query.as_deref()).map_err(|_| invalid_query_params_response())?;
     assert_known_query_keys(&query_pairs, &["acting"])?;
     let acting = parse_acting_query(query_first(&query_pairs, "acting"))?;
 
@@ -362,7 +365,7 @@ fn db_unavailable() -> Response {
 
 async fn handle_tables(
     State(state): State<DbAdminRouteState>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
@@ -371,6 +374,9 @@ async fn handle_tables(
     // ahead of the route.
     let origin = state.gate.check_origin(&headers)?;
     // Query shape before auth — see `handle_health`.
+    // every escape in the query decoded strictly first
+    let query_pairs =
+        read_query_pairs(query.as_deref()).map_err(|_| invalid_query_params_response())?;
     assert_known_query_keys(&query_pairs, &["acting"])?;
     let acting = parse_acting_query(query_first(&query_pairs, "acting"))?;
 
@@ -520,8 +526,8 @@ mod query_param_tests {
 
 async fn handle_table_detail(
     State(state): State<DbAdminRouteState>,
-    Path(name): Path<String>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RouteParams(name): RouteParams<String>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
@@ -536,6 +542,9 @@ async fn handle_table_detail(
     if !is_valid_sql_identifier(&name) {
         return Err(invalid_route_params_response());
     }
+    // every escape in the query decoded strictly first
+    let query_pairs =
+        read_query_pairs(query.as_deref()).map_err(|_| invalid_query_params_response())?;
     assert_known_query_keys(&query_pairs, &["acting", "offset", "limit"])?;
     let acting = parse_acting_query(query_first(&query_pairs, "acting"))?;
     let (offset, limit) = parse_paging(
@@ -725,8 +734,8 @@ async fn perform_table_detail(
 
 async fn handle_row_delete(
     State(state): State<DbAdminRouteState>,
-    Path((name, id)): Path<(String, String)>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RouteParams((name, id)): RouteParams<(String, String)>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
@@ -740,6 +749,9 @@ async fn handle_row_delete(
     if !is_valid_sql_identifier(&name) {
         return Err(invalid_route_params_response());
     }
+    // every escape in the query decoded strictly first
+    let query_pairs =
+        read_query_pairs(query.as_deref()).map_err(|_| invalid_query_params_response())?;
     assert_known_query_keys(&query_pairs, &["acting"])?;
     let acting = parse_acting_query(query_first(&query_pairs, "acting"))?;
 
@@ -1078,7 +1090,7 @@ mod origin_gate_tests {
             r#"{"error":"forbidden_origin"}"#.to_owned(),
         );
         let foreign = || headers(Some("https://evil.example"));
-        let bad_query = || Query(vec![("nope".to_owned(), "1".to_owned())]);
+        let bad_query = || RawQuery(Some("nope=1".to_owned()));
         assert_eq!(
             answer(handle_health(State(state()), bad_query(), None, foreign()).await).await,
             forbidden
@@ -1091,7 +1103,7 @@ mod origin_gate_tests {
             answer(
                 handle_table_detail(
                     State(state()),
-                    Path("not a table".to_owned()),
+                    RouteParams("not a table".to_owned()),
                     bad_query(),
                     None,
                     foreign(),
@@ -1105,7 +1117,7 @@ mod origin_gate_tests {
             answer(
                 handle_row_delete(
                     State(state()),
-                    Path(("not a table".to_owned(), "1".to_owned())),
+                    RouteParams(("not a table".to_owned(), "1".to_owned())),
                     bad_query(),
                     None,
                     foreign(),
@@ -1124,7 +1136,7 @@ mod origin_gate_tests {
         for origin in [None, Some(fuz_testing::TESTING_ALLOWED_ORIGIN)] {
             let response = handle_tables(
                 State(state()),
-                Query(vec![("nope".to_owned(), "1".to_owned())]),
+                RawQuery(Some("nope=1".to_owned())),
                 None,
                 headers(origin),
             )
@@ -1155,7 +1167,7 @@ mod origin_gate_tests {
             axum::http::header::COOKIE,
             axum::http::HeaderValue::from_str(set_cookie.split(';').next().unwrap()).unwrap(),
         );
-        let response = handle_tables(State(state()), Query(Vec::new()), None, headers).await;
+        let response = handle_tables(State(state()), RawQuery(None), None, headers).await;
         let response = response.unwrap_or_else(|response| response);
         assert_eq!(
             response
@@ -2042,15 +2054,15 @@ mod row_delete_pg_tests {
         for (budget, phase) in [(1, "the role gate"), (2, "the handler")] {
             let state = || State(route_state(fuz_testing::budgeted_pool(&DB.url(), budget)));
             assert_unavailable(
-                handle_tables(state(), Query(Vec::new()), None, headers.clone()).await,
+                handle_tables(state(), RawQuery(None), None, headers.clone()).await,
                 &format!("tables, {phase}"),
             )
             .await;
             assert_unavailable(
                 handle_table_detail(
                     state(),
-                    Path("scratch_single".to_owned()),
-                    Query(Vec::new()),
+                    RouteParams("scratch_single".to_owned()),
+                    RawQuery(None),
                     None,
                     headers.clone(),
                 )
@@ -2061,8 +2073,8 @@ mod row_delete_pg_tests {
             assert_unavailable(
                 handle_row_delete(
                     state(),
-                    Path(("scratch_single".to_owned(), "a".to_owned())),
-                    Query(Vec::new()),
+                    RouteParams(("scratch_single".to_owned(), "a".to_owned())),
+                    RawQuery(None),
                     None,
                     headers.clone(),
                 )

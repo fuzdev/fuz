@@ -269,7 +269,7 @@ async fn both_rpc_handlers_refuse_a_foreign_origin_first() {
         axum::extract::State(state()),
         None,
         foreign,
-        axum::extract::Query(Vec::new()),
+        axum::extract::RawQuery(None),
     )
     .await;
     assert_eq!(read(get).await, forbidden);
@@ -279,7 +279,7 @@ async fn both_rpc_handlers_refuse_a_foreign_origin_first() {
         axum::extract::State(state()),
         None,
         axum::http::HeaderMap::new(),
-        axum::extract::Query(Vec::new()),
+        axum::extract::RawQuery(None),
     )
     .await;
     assert_eq!(read(get).await.0, 400);
@@ -298,29 +298,33 @@ async fn every_get_response_past_the_origin_check_is_no_store() {
             .get(axum::http::header::CACHE_CONTROL)
             .map(|v| v.to_str().unwrap().to_owned())
     };
-    let get = |headers: axum::http::HeaderMap, query: &[(&str, &str)]| {
-        let query = query
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
+    let get = |headers: axum::http::HeaderMap, query: &str| {
         fuz_actions::rpc_dispatch::rpc_get_handler(
             axum::extract::State(state()),
             None,
             headers,
-            axum::extract::Query(query),
+            axum::extract::RawQuery(Some(query.to_owned())),
         )
     };
     assert_eq!(fuz_actions::RPC_GET_CACHE_CONTROL, "no-store");
     let no_store = Some(fuz_actions::RPC_GET_CACHE_CONTROL.to_owned());
 
-    let missing_method = get(axum::http::HeaderMap::new(), &[]).await;
+    let missing_method = get(axum::http::HeaderMap::new(), "").await;
     assert_eq!(missing_method.status(), 400);
     assert_eq!(cache_control(&missing_method), no_store, "a query refusal");
+
+    let undecodable = get(axum::http::HeaderMap::new(), "method=x&id=%FF").await;
+    assert_eq!(undecodable.status(), 400);
+    assert_eq!(
+        cache_control(&undecodable),
+        no_store,
+        "an undecodable query"
+    );
 
     // an unregistered method answers from the dispatcher, ahead of the pool
     let dispatched = get(
         axum::http::HeaderMap::new(),
-        &[("method", "definitely_missing_method"), ("id", "1")],
+        "method=definitely_missing_method&id=1",
     )
     .await;
     assert_eq!(dispatched.status(), 404);
@@ -331,7 +335,7 @@ async fn every_get_response_past_the_origin_check_is_no_store() {
         axum::http::header::ORIGIN,
         axum::http::HeaderValue::from_static("https://evil.example"),
     );
-    let refused = get(foreign, &[]).await;
+    let refused = get(foreign, "").await;
     assert_eq!(refused.status(), 403);
     assert_eq!(
         cache_control(&refused),

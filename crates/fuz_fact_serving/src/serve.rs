@@ -80,7 +80,8 @@
 //! ## The origin check
 //!
 //! Both routes open with the gate's origin check
-//! ([`fuz_auth::AuthGate::check_origin`]), ahead of the params: a page from a
+//! ([`fuz_auth::AuthGate::check_origin`]), and the stack's `origin_layer`
+//! runs ahead of the params extractor ([`RouteParams`]): a page from a
 //! foreign origin is refused `403` before anything is read, as the TS twin's
 //! origin middleware refuses it ahead of the route. A request with no `Origin`
 //! — an `<img>` load, a CLI fetch — is unaffected.
@@ -180,7 +181,7 @@ use std::path::PathBuf;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Extension, Path as AxumPath, Query, State};
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -193,7 +194,8 @@ use fuz_cell::{can_view_cell, cell_steward_admits};
 use fuz_crypto::ContentHash;
 use fuz_fact::{parse_fact_file_url, query_get_fact, query_get_fact_meta};
 use fuz_http::{
-    ClientIp, assert_known_query_keys, invalid_route_params_response, is_valid_uuid, query_first,
+    ClientIp, RouteParams, assert_known_query_keys, invalid_query_params_response,
+    invalid_route_params_response, is_valid_uuid, query_first, read_query_pairs,
 };
 use uuid::Uuid;
 
@@ -257,17 +259,17 @@ pub fn fact_routers(state: FactServingRouteState) -> Router {
 
 /// Handler for `GET /api/cells/{cell_id}/facts/{hash}` — per-reference read.
 ///
-/// Both path params are decoded as raw strings and judged here rather than by
-/// a typed extractor: the TS twin declares `params: object({cell_id: Uuid,
-/// hash: FactHashSchema})`, so a refusal has to be the spine's flat 400
-/// `invalid_route_params` (an extractor rejection is axum's own plain-text
-/// body), `cell_id` has to take the wire UUID grammar rather than
+/// Both path params are decoded strictly as strings ([`RouteParams`], whose
+/// refusal of an escape that doesn't decode is the flat 400
+/// `invalid_route_params`) and judged here rather than by a typed
+/// deserialize: the TS twin declares `params: object({cell_id: Uuid,
+/// hash: FactHashSchema})`, so `cell_id` has to take the wire UUID grammar rather than
 /// `Uuid::parse_str`'s wider one, and `hash` the `FactHashSchema` grammar
 /// ([`ContentHash::parse_fact_hash`]). The grammar takes the max UUID in any
 /// case, as the twin's `Uuid` does; it names no cell, so it is a 404.
 async fn cell_fact_handler(
     State(state): State<FactServingRouteState>,
-    AxumPath((cell_id_str, hash_str)): AxumPath<(String, String)>,
+    RouteParams((cell_id_str, hash_str)): RouteParams<(String, String)>,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Response {
@@ -386,8 +388,8 @@ async fn cell_fact_handler(
 /// 403 `insufficient_permissions` carrying `required_roles`.
 async fn bare_fact_handler(
     State(state): State<FactServingRouteState>,
-    AxumPath(hash_str): AxumPath<String>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RouteParams(hash_str): RouteParams<String>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Response {
@@ -403,7 +405,11 @@ async fn bare_fact_handler(
         return invalid_route_params_response();
     };
 
-    // Query shape before auth — the TS phase order (params → query → 401).
+    // Query shape before auth — the TS phase order (params → query → 401),
+    // every escape in it decoded strictly first.
+    let Ok(query_pairs) = read_query_pairs(query.as_deref()) else {
+        return invalid_query_params_response();
+    };
     if let Err(resp) = assert_known_query_keys(&query_pairs, &["acting"]) {
         return resp;
     }

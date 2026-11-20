@@ -88,6 +88,9 @@ pub mod rest_error;
 // === query-string shape (TS-twin duplicate/unknown-key semantics) ===
 pub mod query;
 
+// === the request target decoded strictly: the query pairs, the path params ===
+pub mod request_target;
+
 // === JSON request bodies (TS-twin `invalid_json_body` / `invalid_request_body`) ===
 pub mod json_body;
 
@@ -171,6 +174,7 @@ pub use request_headers::{
     HeaderRead, is_browser_context, read_content_type, read_host, read_origin, single_line,
     trim_optional_whitespace,
 };
+pub use request_target::{PercentDecodeError, RouteParams, read_path_segment, read_query_pairs};
 pub use rest_error::{
     AUTHENTICATION_REQUIRED_REASON, INSUFFICIENT_PERMISSIONS_REASON, INTERNAL_ERROR_REASON,
     INVALID_JSON_BODY_REASON, INVALID_QUERY_PARAMS_REASON, INVALID_REQUEST_BODY_REASON,

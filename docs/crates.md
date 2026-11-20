@@ -437,6 +437,19 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   `request_header_conformance.json`, a byte-identical copy of fuz_app's.
   The line primitives the credential readers share (`single_line`,
   `trim_optional_whitespace`) live here too.
+- **The request target is decoded strictly** (`request_target`, twin of
+  fuz_app's `http/request_target.ts`): `read_query_pairs` over the raw query
+  and `read_path_segment` refuse an escape that doesn't decode — a `%` not
+  followed by two hex digits, or bytes that are not UTF-8
+  (`PercentDecodeError`) — where `serde_urlencoded` writes U+FFFD and axum's
+  `Path` leaves a malformed escape as text. The spine's handlers take
+  `RawQuery` and the `RouteParams<T>` extractor, whose every rejection is the
+  flat `invalid_route_params` body, never axum's plain text. Each surface
+  refuses an undecodable query in its own shape: `invalid_query_params` on a
+  REST route and the WS upgrade, the `invalid_request` envelope on the RPC
+  `GET`. Both spines are held to `request_target_conformance.json`, a
+  byte-identical copy of fuz_app's. A consumer's own handlers move to these
+  readers to get the rule; axum's `Query` and `Path` still decode leniently.
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with a required

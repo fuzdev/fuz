@@ -24,7 +24,9 @@
 //!   `GET` (and the `HEAD` axum serves through it) is a 404. The acting-actor phase runs on every
 //!   endpoint, gated or not: the `?acting=` query selector (first
 //!   occurrence; a malformed value reads as omitted, as the twin's
-//!   `parse_acting` reads it) goes through
+//!   `parse_acting` reads it, but a query holding an escape that doesn't
+//!   decode, in any key, is 400 `invalid_query_params` —
+//!   [`fuz_http::read_query_pairs`]) goes through
 //!   [`fuz_auth::route_helpers::require_acting_actor`], which answers 400
 //!   `actor_required` (a multi-actor account omitting `acting`, with the
 //!   `available` actors), 400 `actor_not_on_account` (a selector naming no
@@ -118,14 +120,14 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use deadpool_postgres::Pool;
 use fuz_auth::actor_queries::query_active_actor_holds_any_global_role;
 use fuz_auth::{AdmissionRecheck, ResolvedAuth, recheck_admission};
-use fuz_http::{ClientIp, query_first};
+use fuz_http::{ClientIp, invalid_query_params_response, query_first, read_query_pairs};
 use fuz_realtime::{
     ActionPeer, Connection, ConnectionGuard, ConnectionIdentity, ConnectionPeer,
     ConnectionRegistry, ConnectionSender, DEFAULT_MAX_IN_FLIGHT_PEER_REQUESTS_PER_CONNECTION,
@@ -509,7 +511,7 @@ fn asks_for_websocket(headers: &HeaderMap) -> bool {
 /// not ask is a 404. Any other method on the path is a 404 too.
 async fn ws_handler(
     State(state): State<WsHandlerState>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
@@ -564,7 +566,12 @@ async fn ws_handler(
     // `run_authorization_phase` on the upgrade route. The selector is read the way the
     // twin's `parse_acting` reads it: first occurrence, a malformed value as
     // omitted, unknown keys ignored. The helper answers the twin's 400s and
-    // its `no_actors_on_account` 500.
+    // its `no_actors_on_account` 500. The query is decoded strictly first,
+    // every key, so an escape that doesn't decode anywhere in it is a 400
+    // `invalid_query_params` rather than a selector read through U+FFFD.
+    let Ok(query_pairs) = read_query_pairs(query.as_deref()) else {
+        return invalid_query_params_response();
+    };
     let acting = fuz_auth::parse_acting_selector(query_first(&query_pairs, "acting"))
         .ok()
         .flatten();

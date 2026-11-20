@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 
 use axum::Json;
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use fuz_http::{
@@ -54,7 +54,9 @@ struct StatusUnauthenticated {
 
 /// `GET /status` handler.
 ///
-/// The query is read as raw pairs through `fuz_http::query_first` — the TS
+/// The query is decoded strictly (`fuz_http::read_query_pairs`) once the caller
+/// is known — an escape that doesn't decode is 400 `invalid_query_params` —
+/// and read as raw pairs through `fuz_http::query_first` — the TS
 /// twin declares **no** query schema (the handler reads `acting` via Hono's
 /// first-occurrence-wins `c.req.query()`), so unknown keys are ignored and a
 /// duplicated `acting` reads as its first occurrence — never a pre-auth
@@ -69,7 +71,7 @@ struct StatusUnauthenticated {
 /// own anonymous answer is the refusal.
 pub async fn status_handler(
     State(state): State<AccountRouteState>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Response {
@@ -100,6 +102,13 @@ pub async fn status_handler(
     };
 
     let account_id = r.account.id;
+
+    // The query, decoded strictly, every key — read here, after the anonymous
+    // 401, where the twin reads it, so a caller with no account learns
+    // nothing of the query.
+    let Ok(query_pairs) = fuz_http::read_query_pairs(query.as_deref()) else {
+        return fuz_http::invalid_query_params_response();
+    };
 
     let client = match state.gate.pool.get().await {
         Ok(c) => c,

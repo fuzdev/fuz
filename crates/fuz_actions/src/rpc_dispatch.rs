@@ -40,7 +40,7 @@
 //! handler's own origin belt, its twin) does not carry it, as on the twin.
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use fuz_auth::OriginChecked;
@@ -253,9 +253,18 @@ const REASON_MISSING_METHOD_QUERY_PARAM: &str = "missing method query parameter"
 /// the query contract.
 const REASON_MISSING_ID_QUERY_PARAM: &str = "missing id query parameter";
 
+/// `data.reason` when an escape in `GET /rpc`'s query string doesn't decode
+/// ([`fuz_http::read_query_pairs`]) — before any key is read, so the answer
+/// echoes no id. The literal `fuz_app`'s `RPC_GET_UNDECODABLE_QUERY_REASON`
+/// sends.
+const REASON_UNDECODABLE_QUERY: &str = "undecodable query string";
+
 /// Axum handler for `GET /rpc`. Parses method/id/params from query.
 ///
-/// The query is read as raw pairs through `fuz_http::query_first` — the TS
+/// The query is decoded strictly first ([`fuz_http::read_query_pairs`]), every
+/// key, so an escape that doesn't decode anywhere in it is `invalid_request`
+/// with the reason `undecodable query string`; then read as raw pairs through
+/// `fuz_http::query_first` — the TS
 /// twin reads `method` / `id` / `params` via Hono's first-occurrence-wins
 /// `c.req.query()`, so a duplicated key resolves to its first value and
 /// unknown keys are ignored — first-occurrence-wins is the contract, so the
@@ -264,13 +273,19 @@ pub async fn rpc_get_handler(
     State(dispatch): State<ActionDispatch>,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let origin = match dispatch.gate.check_origin(&headers) {
         Ok(origin) => origin,
         Err(refused) => return refused,
     };
-    let mut response = rpc_get_dispatch(&dispatch, origin, client_ip, &query_pairs).await;
+    let mut response = match fuz_http::read_query_pairs(query.as_deref()) {
+        Ok(query_pairs) => rpc_get_dispatch(&dispatch, origin, client_ip, &query_pairs).await,
+        Err(_) => jsonrpc_error_http_response(
+            Value::Null,
+            invalid_request(Some(REASON_UNDECODABLE_QUERY)),
+        ),
+    };
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static(RPC_GET_CACHE_CONTROL),
@@ -411,10 +426,12 @@ mod get_transport_tests {
             "missing method query parameter"
         );
         assert_eq!(REASON_MISSING_ID_QUERY_PARAM, "missing id query parameter");
+        assert_eq!(REASON_UNDECODABLE_QUERY, "undecodable query string");
 
         for reason in [
             REASON_MISSING_METHOD_QUERY_PARAM,
             REASON_MISSING_ID_QUERY_PARAM,
+            REASON_UNDECODABLE_QUERY,
         ] {
             let error = invalid_request(Some(reason));
             assert_eq!(error.code, fuz_http::JsonrpcErrorCode::InvalidRequest);

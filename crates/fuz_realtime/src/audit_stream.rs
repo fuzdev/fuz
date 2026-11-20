@@ -71,7 +71,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -81,7 +81,9 @@ use fuz_auth::{
     AdmissionRecheck, AuditEmitter, AuditLogEvent, AuthGate, CredentialGate, ROLE_ADMIN,
     credential_type_required_response, parse_acting_query, recheck_admission,
 };
-use fuz_http::{ClientIp, assert_known_query_keys, query_first};
+use fuz_http::{
+    ClientIp, assert_known_query_keys, invalid_query_params_response, query_first, read_query_pairs,
+};
 use serde::Serialize;
 
 use uuid::Uuid;
@@ -231,7 +233,7 @@ pub fn audit_stream_router(state: AuditStreamRouteState) -> Router {
 /// closed it; any other read failure is a 500.
 async fn audit_stream(
     State(state): State<AuditStreamRouteState>,
-    Query(query_pairs): Query<Vec<(String, String)>>,
+    RawQuery(query): RawQuery,
     client_ip: Option<Extension<ClientIp>>,
     headers: HeaderMap,
 ) -> Response {
@@ -248,6 +250,10 @@ async fn audit_stream(
     // credentials. `?acting=` is the only key the twin's
     // `AuditStreamQuery` (`object({acting})`) declares; first
     // occurrence wins on a duplicate, as it does on every other spine surface.
+    // An escape that doesn't decode, in any key, is the same 400.
+    let Ok(query_pairs) = read_query_pairs(query.as_deref()) else {
+        return invalid_query_params_response();
+    };
     if let Err(response) = assert_known_query_keys(&query_pairs, &["acting"]) {
         return response;
     }

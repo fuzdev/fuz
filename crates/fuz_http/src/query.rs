@@ -11,12 +11,16 @@
 //! unknown keys, and rejects ahead of any params/auth work the TS order
 //! runs first.
 //!
-//! Handlers that must match the TS twin therefore take
-//! `Query<Vec<(String, String)>>` (never rejects) and go through
-//! [`query_first`] — plus [`assert_known_query_keys`] when (and only when)
-//! the TS route declares a strict query schema. A TS route with **no**
-//! query schema (e.g. `GET /api/account/status`) ignores unknown keys, so
-//! its twin uses [`query_first`] alone.
+//! Handlers that must match the TS twin therefore take axum's `RawQuery`,
+//! read it with [`read_query_pairs`] (strict decoding, refusing an escape
+//! that doesn't decode where `Query`'s `form_urlencoded` writes U+FFFD) at the
+//! phase the TS route reads its query, and go through [`query_first`] — plus
+//! [`assert_known_query_keys`] when (and only when) the TS route declares a
+//! strict query schema. A TS route with **no** query schema (e.g.
+//! `GET /api/account/status`) ignores unknown keys, so its twin uses
+//! [`query_first`] alone.
+//!
+//! [`read_query_pairs`]: crate::read_query_pairs
 //!
 //! A pair with an empty name (`?=x`) is not a key on the TS side: Hono builds
 //! the `c.req.query()` record by skipping a pair whose decoded name is empty,
@@ -41,9 +45,9 @@ use crate::rest_error::invalid_query_params_response;
 /// one on both sides — `?+=x` and `?%20=x` name a key that is one space, and
 /// are refused like any other undeclared key.
 ///
-/// One spelling still differs: a key named for an `Object.prototype` member
-/// (`constructor`, `toString`, `__proto__`, …) is dropped by Hono's record
-/// builder, so the TS route accepts it; here it is an undeclared key.
+/// A key named for an `Object.prototype` member (`constructor`, `toString`,
+/// `__proto__`, …) is an undeclared key like any other, as on the TS twin,
+/// whose record is a null-prototype object the strict schema refuses it in.
 ///
 /// # Errors
 ///
