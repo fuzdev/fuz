@@ -585,7 +585,10 @@ pub async fn query_role_grant_offer_create(
 /// transaction to commit the grant it authorized. A plain `EXISTS` could read
 /// the grant as active while a revoke commits in between. The actor and
 /// account tombstones are read but not locked — ordering a delete racing an
-/// accept isn't worth locking two more tables.
+/// accept isn't worth locking two more tables; a delete supersedes the
+/// grantor's pending offers, which the accept's claim then refuses. Taken
+/// before the accept claims its offer, as a removal of the grantor takes the
+/// grant before the offers.
 async fn grantor_holds_global_admin(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     grantor_actor_id: Uuid,
@@ -613,6 +616,12 @@ async fn grantor_holds_global_admin(
 /// Accept an offer atomically.
 ///
 /// In-transaction sequence (matches TS `query_accept_offer`):
+/// 0. Read the offer's grantor, role and scope unlocked — written once with
+///    the offer, never updated — and, for an unscoped `admin` offer, whether
+///    the grantor still holds a global `admin`, under a share lock on that
+///    grant. Before the claim, the order a removal of the grantor takes the
+///    two: its last-admin guard locks the grant, its supersede then the
+///    grantor's offers.
 /// 1. `SELECT ... FOR UPDATE` lock on the offer row, IDOR-guarded by
 ///    `to_account_id`. Subsequent concurrent callers block on the
 ///    lock until this transaction commits.
@@ -627,8 +636,8 @@ async fn grantor_holds_global_admin(
 ///    differs from `actor_id`, surface [`RoleGrantOfferError::ActorMismatch`] even if the
 ///    actor belongs to `to_account_id`. A builtin-role offer that must not
 ///    mint — `keeper` at all, a builtin bound to a scope, or one whose grantor
-///    no longer holds an active global `admin` (read under `FOR SHARE`) —
-///    surfaces [`RoleGrantOfferError::BuiltinRefused`].
+///    no longer holds an active global `admin` (read in step 0) — surfaces
+///    [`RoleGrantOfferError::BuiltinRefused`].
 /// 5. Verify `actor_id` belongs to `to_account_id`
 ///    (defense-in-depth — handler passes a session-bound actor, but
 ///    the query enforces for direct callers).
@@ -671,6 +680,34 @@ pub async fn query_accept_offer(
         to_account_id,
         actor_id,
     } = input;
+
+    // An unscoped `admin` offer's grantor must still hold a global `admin`
+    // when the grant is minted, read under a share lock on that grant — taken
+    // before the offer is claimed, the order a removal of the grantor takes
+    // the two: its last-admin guard locks the grant, its supersede then the
+    // grantor's offers. Claiming the offer first held the row that supersede
+    // needs while waiting on the grant the guard held. The grantor, role and
+    // scope are written once with the offer and never updated, so they are
+    // read without a lock; everything the claim checks is checked on the
+    // claimed row.
+    let Some(head) = client
+        .query_opt(
+            "SELECT from_actor_id, role, scope_id FROM role_grant_offer
+             WHERE id = $1 AND to_account_id = $2",
+            &[&offer_id, &to_account_id],
+        )
+        .await?
+    else {
+        return Err(RoleGrantOfferError::NotFound(offer_id));
+    };
+    let head_grantor: Uuid = head.get(0);
+    let head_role: String = head.get(1);
+    let head_scope_id: Option<Uuid> = head.get(2);
+    let grantor_holds_admin = if head_role == ROLE_ADMIN && head_scope_id.is_none() {
+        Some(grantor_holds_global_admin(client, head_grantor).await?)
+    } else {
+        None
+    };
 
     // Claim the offer with a row-level lock. We defer writing
     // `accepted_at` until the role_grant row exists — the
@@ -790,7 +827,9 @@ pub async fn query_accept_offer(
         } else if locked.scope_id.is_some() {
             // Builtin roles are global-only.
             Some(BuiltinOfferRefusal::Scoped)
-        } else if !grantor_holds_global_admin(client, locked.from_actor_id).await? {
+        } else if grantor_holds_admin != Some(true) {
+            // read under its share lock before the claim, on the same
+            // immutable grantor the claimed row carries
             Some(BuiltinOfferRefusal::GrantorNotAuthorized)
         } else {
             None

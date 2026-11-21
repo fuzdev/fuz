@@ -16,6 +16,13 @@
 //! uncommitted delete and is then refused, and a delete waits on an uncommitted
 //! create and then ends what it wrote.
 //!
+//! And the last-admin guard against an admin-offer accept: the accept holds
+//! its grantor's grant and key-shares the grantor's actor, the guard locks the
+//! actor and then the grant, and neither may deadlock the other. The other
+//! interleaving, the removal ahead of the accept, takes the grantor's grant
+//! before the offer row on both sides, so the accept waits holding nothing and
+//! is refused.
+//!
 //! Twin of `fuz_app`'s `src/test/auth/account_delete.races.db.test.ts`.
 //!
 //! Gated behind `#[ignore]` — run with:
@@ -32,8 +39,10 @@
 
 use std::time::{Duration, Instant};
 
+use fuz_auth::actor_queries::query_count_active_accounts_with_global_role_locked;
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::role::ROLE_ADMIN;
+use fuz_auth::role_grant_offer_queries::query_role_grant_offer_supersede_outgoing;
 use fuz_auth::role_grant_schema::RoleGrantRow;
 use fuz_auth::{AdminOfferAuthorize, RoleGrantOfferActionSpecs, RoleRegistry};
 use fuz_db::{ActionDb, Pool};
@@ -544,3 +553,284 @@ async fn an_offer_between_two_admins_and_a_third_admins_delete_never_deadlock() 
         assert_eq!(pending, 1, "the offer is pending");
     }
 }
+
+/// An admin-offer accept and a removal of its grantor never deadlock.
+///
+/// The accept share-locks its grantor's admin grant, then inserts a grant
+/// naming the grantor's actor — a foreign-key key share on it. The removal's
+/// last-admin guard locks the grantor's actor, then its grant. A holder of the
+/// recipient's actor stalls the accept's insert after its share lock, and the
+/// guard then stalls on the grant holding the actor; released, the accept's key
+/// share on the actor must not wait on the guard — a `FOR UPDATE` guard
+/// deadlocks there, `FOR NO KEY UPDATE` does not. One delete, one revoke of the
+/// grantor's grant, one purge. Twin of the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn an_admin_offer_accept_and_a_removal_of_its_grantor_never_deadlock() {
+    for removal in ["delete", "revoke", "purge"] {
+        let f = setup().await;
+        // the deleter's grant is in the database too, so the grantor is not
+        // the last admin the guard counts
+        seed_role_grant_direct(&f.pool, f.deleter.actor.id, ROLE_ADMIN, None).await;
+        let grantor = with_admin(seed_actor_context(&f.pool, "accept_grantor").await);
+        let grant_id = seed_role_grant_direct(&f.pool, grantor.actor.id, ROLE_ADMIN, None).await;
+        let recipient = seed_actor_context(&f.pool, "accept_recipient").await;
+        let offered = in_tx!(f.pool, |tx| offer(
+            &f.pool,
+            &grantor,
+            recipient.account.id,
+            &tx
+        ))
+        .expect("the admin offer");
+        let offer_id = offered["offer"]["id"].as_str().unwrap().to_owned();
+
+        let mut holder_client = f.pool.get().await.unwrap();
+        let holder = holder_client.transaction().await.unwrap();
+        holder
+            .query_one(
+                "SELECT id FROM actor WHERE id = $1 FOR UPDATE",
+                &[&recipient.actor.id],
+            )
+            .await
+            .unwrap();
+
+        let until_waiters = |n: i64, what: &'static str| {
+            let pool = f.pool.clone();
+            async move {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while lock_waiters(&pool).await < n {
+                    assert!(Instant::now() < deadline, "{what}");
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+        };
+        let accept = async {
+            in_tx!(f.pool, |tx| async {
+                let audit = common::build_audit(f.pool.clone());
+                let closer = common::closer();
+                let ctx = common::ctx(&recipient, &audit, &closer);
+                RoleGrantOfferActionSpecs::dispatch(
+                    "role_grant_offer_accept",
+                    &json!({ "offer_id": offer_id }),
+                    &ctx,
+                    &ActionDb::Tx(&tx),
+                    &AdminOfferAuthorize,
+                    &RoleRegistry::default(),
+                )
+                .await
+            })
+        };
+        let remove_then_release = async {
+            until_waiters(
+                1,
+                "the accept holds the grantor's grant and waits at its insert",
+            )
+            .await;
+            let remove = async {
+                match removal {
+                    "delete" => in_tx!(f.pool, |tx| admin_action(
+                        &f.pool,
+                        &f.deleter,
+                        "account_delete",
+                        &json!({ "account_id": grantor.account.id }),
+                        &tx
+                    )),
+                    "purge" => in_tx!(f.pool, |tx| admin_action(
+                        &f.pool,
+                        &f.deleter,
+                        "account_purge",
+                        &json!({ "account_id": grantor.account.id, "confirm": true }),
+                        &tx
+                    )),
+                    _ => in_tx!(f.pool, |tx| async {
+                        let audit = common::build_audit(f.pool.clone());
+                        let closer = common::closer();
+                        let ctx = common::ctx(&f.deleter, &audit, &closer);
+                        RoleGrantOfferActionSpecs::dispatch(
+                            "role_grant_revoke",
+                            &json!({ "actor_id": grantor.actor.id, "role_grant_id": grant_id }),
+                            &ctx,
+                            &ActionDb::Tx(&tx),
+                            &AdminOfferAuthorize,
+                            &RoleRegistry::default(),
+                        )
+                        .await
+                    }),
+                }
+            };
+            let release = async {
+                until_waiters(
+                    2,
+                    "the guard holds the grantor's actor and waits on the grant",
+                )
+                .await;
+                holder.commit().await.unwrap();
+            };
+            let (removed, ()) = tokio::join!(remove, release);
+            removed
+        };
+        let (accepted, removed) = tokio::join!(accept, remove_then_release);
+        accepted.unwrap_or_else(|e| panic!("the accept ({removal}): {e:?}"));
+        removed.unwrap_or_else(|e| panic!("the {removal}: {e:?}"));
+
+        let client = f.pool.get().await.unwrap();
+        let conferred: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM role_grant rg JOIN actor act ON act.id = rg.actor_id
+                 WHERE act.account_id = $1 AND rg.role = $2 AND rg.revoked_at IS NULL",
+                &[&recipient.account.id, &ROLE_ADMIN],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(conferred, 1, "the recipient is an admin ({removal})");
+        let grantor_row = client
+            .query_opt(
+                "SELECT a.deleted_at IS NOT NULL,
+                        (SELECT revoked_at IS NOT NULL FROM role_grant WHERE id = $2)
+                 FROM account a WHERE a.id = $1",
+                &[&grantor.account.id, &grant_id],
+            )
+            .await
+            .unwrap();
+        match removal {
+            "purge" => assert!(grantor_row.is_none(), "the grantor is purged"),
+            "delete" => assert!(
+                grantor_row.unwrap().get::<_, bool>(0),
+                "the grantor is deleted"
+            ),
+            _ => assert!(
+                grantor_row.unwrap().get::<_, bool>(1),
+                "the grantor's grant is revoked"
+            ),
+        }
+    }
+}
+
+/// An admin-offer accept sent across a removal of its grantor is refused.
+///
+/// The other interleaving: the removal ahead. Its guard locks the grantor's
+/// grant and its write runs; the accept is sent and waits; the removal then
+/// ends the grantor's pending offers (a delete or revoke supersedes them, a
+/// purge's cascade deletes them) and commits. The accept takes the grantor's
+/// grant before it claims the offer, so it waits there holding nothing and is
+/// refused once the removal commits; one that claimed the offer first would
+/// hold the row the removal's supersede needs, and the two deadlock. Twin of
+/// the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn an_admin_offer_accept_sent_across_a_removal_of_its_grantor_is_refused() {
+    for removal in ["delete", "revoke", "purge"] {
+        let f = setup().await;
+        seed_role_grant_direct(&f.pool, f.deleter.actor.id, ROLE_ADMIN, None).await;
+        let grantor = with_admin(seed_actor_context(&f.pool, "ahead_grantor").await);
+        let grant_id = seed_role_grant_direct(&f.pool, grantor.actor.id, ROLE_ADMIN, None).await;
+        let recipient = seed_actor_context(&f.pool, "ahead_recipient").await;
+        let offered = in_tx!(f.pool, |tx| offer(
+            &f.pool,
+            &grantor,
+            recipient.account.id,
+            &tx
+        ))
+        .expect("the admin offer");
+        let offer_id = offered["offer"]["id"].as_str().unwrap().to_owned();
+
+        let mut removal_client = f.pool.get().await.unwrap();
+        let removal_tx = removal_client.transaction().await.unwrap();
+        query_count_active_accounts_with_global_role_locked(&removal_tx, ROLE_ADMIN, None)
+            .await
+            .unwrap();
+        match removal {
+            "delete" => {
+                removal_tx
+                    .execute(
+                        "UPDATE account SET deleted_at = NOW() WHERE id = $1",
+                        &[&grantor.account.id],
+                    )
+                    .await
+                    .unwrap();
+                removal_tx
+                    .execute(
+                        "UPDATE actor SET deleted_at = NOW() WHERE account_id = $1",
+                        &[&grantor.account.id],
+                    )
+                    .await
+                    .unwrap();
+            }
+            "revoke" => {
+                removal_tx
+                    .execute(
+                        "UPDATE role_grant SET revoked_at = NOW() WHERE id = $1",
+                        &[&grant_id],
+                    )
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+
+        let accept = async {
+            in_tx!(f.pool, |tx| async {
+                let audit = common::build_audit(f.pool.clone());
+                let closer = common::closer();
+                let ctx = common::ctx(&recipient, &audit, &closer);
+                RoleGrantOfferActionSpecs::dispatch(
+                    "role_grant_offer_accept",
+                    &json!({ "offer_id": offer_id }),
+                    &ctx,
+                    &ActionDb::Tx(&tx),
+                    &AdminOfferAuthorize,
+                    &RoleRegistry::default(),
+                )
+                .await
+            })
+        };
+        let finish = async {
+            until_lock_waiters(&f.pool, 1, "the accept waits on the removal").await;
+            if removal == "purge" {
+                removal_tx
+                    .execute("DELETE FROM account WHERE id = $1", &[&grantor.account.id])
+                    .await
+                    .unwrap_or_else(|e| panic!("the purge's delete: {e}"));
+            } else {
+                query_role_grant_offer_supersede_outgoing(&removal_tx, &[grantor.actor.id])
+                    .await
+                    .unwrap_or_else(|e| panic!("the {removal}'s supersede: {e}"));
+            }
+            removal_tx.commit().await.unwrap();
+        };
+        let (accepted, ()) = tokio::join!(accept, finish);
+        let refused = accepted.expect_err("the accept is refused");
+        assert_ne!(
+            refused.code,
+            JsonrpcErrorCode::InternalError,
+            "the accept is refused, not failed ({removal}): {refused:?}"
+        );
+
+        let client = f.pool.get().await.unwrap();
+        let conferred: i64 = client
+            .query_one(
+                "SELECT COUNT(*) FROM role_grant rg JOIN actor act ON act.id = rg.actor_id
+                 WHERE act.account_id = $1 AND rg.role = $2",
+                &[&recipient.account.id, &ROLE_ADMIN],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(conferred, 0, "no admin grant conferred ({removal})");
+    }
+}
+
+/// Wait until `n` sessions of the database wait on a lock. The deadline fails a
+/// wait that never comes; it is no timing assertion, so it is set far past any
+/// scheduling delay.
+async fn until_lock_waiters(pool: &Pool, n: i64, what: &str) {
+    let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
+    while lock_waiters(pool).await < n {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// How long a lock wait a test arranged may take to show, a bound on a hang only.
+const LOCK_WAIT_DEADLINE: Duration = Duration::from_secs(20);

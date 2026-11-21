@@ -26,7 +26,7 @@ use crate::action_auth::AuthSpec;
 use crate::action_rate_limit::RateLimitClass;
 use crate::actor_queries::{
     query_account_has_active_global_role, query_account_has_global_role,
-    query_active_actors_by_account, query_count_active_accounts_with_global_role_for_update,
+    query_active_actors_by_account, query_count_active_accounts_with_global_role_locked,
     query_create_role_grant,
 };
 use crate::actor_schema::ActorRow;
@@ -1260,7 +1260,7 @@ async fn handle_role_grant_revoke(
         if query_account_has_active_global_role(db, &target_account_id, ROLE_ADMIN)
             .await
             .map_err(|e| internal_error_with_source("admin role check failed", &e))?
-            && query_count_active_accounts_with_global_role_for_update(
+            && query_count_active_accounts_with_global_role_locked(
                 db,
                 ROLE_ADMIN,
                 Some(&role_grant_id),

@@ -19,7 +19,7 @@ use crate::action_rate_limit::RateLimitClass;
 use crate::actor_queries::{
     query_account_has_active_global_role, query_account_has_global_role, query_actor_soft_delete,
     query_actor_undelete, query_actors_by_account,
-    query_count_active_accounts_with_global_role_for_update,
+    query_count_active_accounts_with_global_role_locked,
 };
 use crate::actor_schema::ActorRow;
 use crate::api_token_queries::query_revoke_all_api_tokens_for_account;
@@ -763,7 +763,7 @@ async fn guard_account_removable(
     if query_account_has_active_global_role(db, target_account_id, ROLE_ADMIN)
         .await
         .map_err(|e| internal_error_with_source("admin role check failed", &e))?
-        && query_count_active_accounts_with_global_role_for_update(db, ROLE_ADMIN, None)
+        && query_count_active_accounts_with_global_role_locked(db, ROLE_ADMIN, None)
             .await
             .map_err(|e| internal_error_with_source("admin count failed", &e))?
             <= 1

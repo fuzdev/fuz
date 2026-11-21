@@ -482,9 +482,9 @@ pub async fn query_update_account_password(
 /// orders against, it conflicts with [`query_account_lock_live`] (the token
 /// mint, the same strength), the `FOR SHARE` of
 /// [`query_account_lock_live_many`] (an offer or invite create), and the
-/// last-admin guard's `FOR UPDATE`. None of those waits on an account row
-/// while holding a session row, and once a mint holds the lock it waits on
-/// nothing but the session rows its eviction deletes, so no cycle runs
+/// last-admin guard's `FOR NO KEY UPDATE`. None of those waits on an account
+/// row while holding a session row, and once a mint holds the lock it waits
+/// on nothing but the session rows its eviction deletes, so no cycle runs
 /// through it. Twin of `fuz_app`'s `query_account_lock_verified`.
 ///
 /// Returns `true` when the row is locked and current, `false` when it was
@@ -595,7 +595,7 @@ pub async fn query_account_lock_live(
 ///
 /// The rows are locked as the sort returns them, so every caller takes them in
 /// id order, as the last-admin guard
-/// ([`crate::actor_queries::query_count_active_accounts_with_global_role_for_update`])
+/// ([`crate::actor_queries::query_count_active_accounts_with_global_role_locked`])
 /// takes its account rows: two transactions locking two of the same accounts
 /// never wait on each other in opposite orders. Taken one statement per
 /// account, an offer between two admins could hold one party's row while the

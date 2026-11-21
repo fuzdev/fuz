@@ -505,7 +505,7 @@ pub async fn query_account_has_global_role(
 /// grants off a *resolved* acting actor, which a tombstoned actor never is.
 ///
 /// Also used by the last-admin branch of the removability guard: a soft-deleted
-/// admin is excluded from `query_count_active_accounts_with_global_role_for_update`, so
+/// admin is excluded from `query_count_active_accounts_with_global_role_locked`, so
 /// the guard must use the same active predicate when testing whether the target
 /// is an admin — otherwise removing an already-tombstoned admin is falsely
 /// blocked as `cannot_delete_last_admin`. Soft-delete does **not** revoke `role_grant`
@@ -546,7 +546,7 @@ pub async fn query_account_has_active_global_role(
 /// global (`scope_id IS NULL`) role grant for `role`, counting only grants on
 /// **active actors** (`act.deleted_at IS NULL`) — and lock what it counted.
 ///
-/// Mirrors `fuz_app`'s `query_count_active_accounts_with_global_role_for_update`.
+/// Mirrors `fuz_app`'s `query_count_active_accounts_with_global_role_locked`.
 /// Used by the last-admin guards — on `account_delete` / `account_purge` and on
 /// `role_grant_revoke` of an `admin` grant: soft-delete revokes neither a
 /// tombstoned account's nor a tombstoned actor's admin grant, so an unfiltered
@@ -556,11 +556,24 @@ pub async fn query_account_has_active_global_role(
 /// admin be removed).
 ///
 /// **Locks** every counted `role_grant`, `actor`, and `account` row
-/// (`FOR UPDATE`) until the caller's transaction ends, so two guards racing to
-/// remove the last two admins serialize: the second waits for the first to
-/// commit, re-reads the rows it changed, and counts one. Run it inside the
-/// transaction that does the removal — outside one, the locks end with the
-/// statement.
+/// `FOR NO KEY UPDATE` until the caller's transaction ends. That conflicts with
+/// another guard, so two guards racing to remove the last two admins serialize:
+/// the second waits for the first to commit, re-reads the rows it changed, and
+/// counts one. It conflicts with every write that lowers the count — a revoke's
+/// or a soft delete's `UPDATE` of a counted row, a purge's `DELETE` — with the
+/// `FOR SHARE OF rg` an admin-offer accept takes on its grantor's grant, and
+/// with the locks a credential mint, an offer and an invite take on the account
+/// row. Run it inside the transaction that does the removal — outside one, the
+/// locks end with the statement.
+///
+/// It does not conflict with a foreign key's `FOR KEY SHARE` — the lock an
+/// insert or update naming a counted row takes (an accept's new grant naming
+/// its grantor, a cell's `created_by`), and the lock that deadlocked an accept
+/// holding its grantor's grant against a guard holding the grantor's actor.
+/// Such a write only adds a reference: it never lowers the count, so the guard
+/// fails closed — what it counted is at most what will stand, and a removal it
+/// allows leaves an admin. A purge that deletes a row such a write names still
+/// takes `FOR UPDATE` and waits for it.
 ///
 /// The rows are locked in id order — account, then actor, then grant — as the
 /// sort returns them: each account's row, its actors' and its grants' before
@@ -578,12 +591,12 @@ pub async fn query_account_has_active_global_role(
 /// # Errors
 ///
 /// Propagates `tokio_postgres::Error` from the underlying client.
-pub async fn query_count_active_accounts_with_global_role_for_update(
+pub async fn query_count_active_accounts_with_global_role_locked(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     role: &str,
     exclude_role_grant_id: Option<&uuid::Uuid>,
 ) -> Result<i64, tokio_postgres::Error> {
-    // `FOR UPDATE` refuses an aggregate, so the rows come back and are
+    // A locking clause refuses an aggregate, so the rows come back and are
     // counted here. The excluded grant is dropped in code, not SQL: filtering
     // it in the WHERE would leave it unlocked, and two cross-revokes (each
     // locking only the other's grant, then updating it) would deadlock
@@ -598,7 +611,7 @@ pub async fn query_count_active_accounts_with_global_role_for_update(
            AND rg.scope_id IS NULL
            AND {rg_active}
          ORDER BY a.id, act.id, rg.id
-         FOR UPDATE",
+         FOR NO KEY UPDATE",
         rg_active = crate::role_grant_active_sql("rg"),
     );
     let rows = client.query(&sql, &[&role]).await?;

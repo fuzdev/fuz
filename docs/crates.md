@@ -598,11 +598,15 @@ The rules a change must keep:
   supersedes the pending offers made to it (a purge's cascade removes
   those). Role grants are kept and come back with the undelete; superseded
   offers, deleted invites and revoked credentials stay ended. The
-  last-admin guard locks its
-  rows in account-id order, so no two of these wait on each other in
-  opposite orders. A server that creates offers through the query gets the
-  rule; one that mints invites through `query_create_invite` for an issuer
-  takes `query_account_lock_live` on the issuer first.
+  last-admin guard (`query_count_active_accounts_with_global_role_locked`)
+  locks its rows `FOR NO KEY UPDATE` in account-id order, so no two of these
+  wait on each other in opposite orders, and an insert's foreign-key key
+  share on a counted row — which can only add an admin — never waits on
+  it. An accept of a builtin offer share-locks its grantor's grant before it
+  claims the offer row, the order a removal takes them. A server that
+  creates offers through the query gets the rule; one that mints invites
+  through `query_create_invite` for an issuer takes
+  `query_account_lock_live_many` on the issuer first.
 - Every rate-limited attempt reserves its slot before it runs, and an attempt
   abandoned after its Argon2 work started is still charged.
 - `AuditEventType` is the spine-wide closed registry (auth and cell events);

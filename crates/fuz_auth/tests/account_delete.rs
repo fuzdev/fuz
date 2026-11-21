@@ -24,7 +24,7 @@ use fuz_auth::account_queries::query_account_by_id;
 use fuz_auth::actor_queries::{
     ResolveActingActorResult, query_account_has_active_global_role, query_account_has_global_role,
     query_active_actors_by_account, query_actor_soft_delete, query_actors_by_account,
-    query_count_active_accounts_with_global_role_for_update, query_keeper_account_id,
+    query_count_active_accounts_with_global_role_locked, query_keeper_account_id,
     resolve_acting_actor,
 };
 use fuz_auth::admin_action_specs::{
@@ -818,7 +818,7 @@ async fn tombstoned_actor_admin_grant_excluded_from_last_admin_guards() {
     {
         let client = pool.get().await.expect("pool.get");
         assert_eq!(
-            query_count_active_accounts_with_global_role_for_update(&client, ROLE_ADMIN, None)
+            query_count_active_accounts_with_global_role_locked(&client, ROLE_ADMIN, None)
                 .await
                 .expect("count active admins"),
             1,
@@ -845,7 +845,7 @@ async fn tombstoned_actor_admin_grant_excluded_from_last_admin_guards() {
     {
         let client = pool.get().await.expect("pool.get");
         assert_eq!(
-            query_count_active_accounts_with_global_role_for_update(&client, ROLE_ADMIN, None)
+            query_count_active_accounts_with_global_role_locked(&client, ROLE_ADMIN, None)
                 .await
                 .expect("count active admins after activating a2 base"),
             2,
@@ -1329,7 +1329,7 @@ async fn the_admin_count_locks_what_it_counted() {
     let mut first_client = pool.get().await.expect("pool.get");
     let first = first_client.transaction().await.expect("begin");
     assert_eq!(
-        query_count_active_accounts_with_global_role_for_update(&first, ROLE_ADMIN, None)
+        query_count_active_accounts_with_global_role_locked(&first, ROLE_ADMIN, None)
             .await
             .expect("count"),
         2
@@ -1346,10 +1346,9 @@ async fn the_admin_count_locks_what_it_counted() {
         async move {
             let mut client = pool.get().await.expect("pool.get");
             let tx = client.transaction().await.expect("begin");
-            let count =
-                query_count_active_accounts_with_global_role_for_update(&tx, ROLE_ADMIN, None)
-                    .await
-                    .expect("count");
+            let count = query_count_active_accounts_with_global_role_locked(&tx, ROLE_ADMIN, None)
+                .await
+                .expect("count");
             tx.rollback().await.expect("rollback");
             count
         }
