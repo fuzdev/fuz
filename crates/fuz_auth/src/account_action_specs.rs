@@ -36,9 +36,9 @@ use crate::session_queries::{
 };
 use crate::token_scope::{RawTokenScopeInput, TokenScopeDocument};
 use fuz_http::{
-    InputShape, JsonrpcError, as_integral_i64, internal_error, internal_error_with_source,
-    invalid_input_params, invalid_params, method_not_found, parse_optional_str_param,
-    parse_str_param, reject_null_keys, reject_unknown_keys, serialize_result, unauthenticated,
+    InputShape, JsonrpcError, as_integral_i64, internal_error_with_source, invalid_input_params,
+    invalid_params, method_not_found, parse_optional_str_param, parse_str_param, reject_null_keys,
+    reject_unknown_keys, serialize_result, unauthenticated,
 };
 
 /// Max API tokens per account before the oldest are evicted on create.
@@ -242,7 +242,9 @@ async fn handle_account_verify(
     let summary = crate::account_queries::query_account_summary(db, &account_id)
         .await
         .map_err(|e| internal_error_with_source("verify query failed", &e))?
-        .ok_or_else(|| internal_error("account not found"))?;
+        // deleted or purged since the credential was read: the dead
+        // credential's 401
+        .ok_or_else(unauthenticated)?;
 
     let result = AccountVerifyResult {
         id: summary.id.to_string(),

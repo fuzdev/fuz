@@ -14,7 +14,9 @@
 //!    resolves the acting actor from the account-grain identity + the request's
 //!    `acting` input into a [`fuz_auth::ResolvedAuthContext`]. One pool checkout
 //!    before the handler's tx. Resolution failures fold into the wire error
-//!    (`actor_required` / `actor_not_on_account` 400, `no_actors_on_account` 500).
+//!    (`actor_required` / `actor_not_on_account` 400, `unauthenticated` 401 for
+//!    an account removed since its credential was read, `no_actors_on_account`
+//!    500).
 //!    `read_acting` supplies the selector, reading a malformed one as
 //!    omitted — the twin of `fuz_app`'s `parse_acting`.
 //! 4. **403** — [`fuz_auth::check_action_auth_post_authorization`]: the

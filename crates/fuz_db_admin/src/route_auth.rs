@@ -29,9 +29,9 @@ use uuid::Uuid;
 /// the TS pipeline's phase order: the credential-channel gate
 /// (`credential_type_required` 403), the token-scope surface gate
 /// (`token_scope_required` 403), the acting-selector resolution
-/// (`actor_not_on_account` / `actor_required` 400, `no_actors_on_account`
-/// 500 — the authorization phase), and finally the role gate
-/// (`insufficient_permissions` 403).
+/// (`actor_not_on_account` / `actor_required` 400, the removed account's 401,
+/// `no_actors_on_account` 500 — the authorization phase), and finally the
+/// role gate (`insufficient_permissions` 403).
 ///
 /// ## Acting resolution vs the account-grain role gate
 ///

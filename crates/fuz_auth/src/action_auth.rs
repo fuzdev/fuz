@@ -157,7 +157,8 @@ impl AuthSpec {
     /// / `cell_field_list` / `cell_item_list`): an authenticated single-actor
     /// caller resolves to the `Actor` variant for per-row authz; an anonymous
     /// (or multi-actor-no-`acting`) caller falls back to anonymous /
-    /// account-grain. Never 401s.
+    /// account-grain. Never 401s a live caller — only one whose account was
+    /// removed after its credential was read.
     ///
     /// A gate narrower than [`CredentialGate::Any`] rejects the *anonymous*
     /// caller too — [`CredentialGate::admits`] is false for `None` — which

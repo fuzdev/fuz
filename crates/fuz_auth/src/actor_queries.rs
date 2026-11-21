@@ -166,8 +166,13 @@ pub(crate) fn decode_actor_lookup_row(row: &tokio_postgres::Row) -> ActorLookupR
 pub enum ResolveActingActorResult {
     /// The acting actor — a single-actor account, or `acting` named one on it.
     Resolved(ActorRow),
-    /// The account enumerated zero actors (server-invariant violation → 500).
+    /// A live account enumerated zero actors (server-invariant violation →
+    /// 500).
     NoActors,
+    /// The account enumerated zero actors because it is gone — tombstoned or
+    /// purged since its credential was read, its actors with it. The dead
+    /// credential's 401.
+    AccountRemoved,
     /// Multiple actors and no `acting` pick → 400 with the available list.
     ActorRequired {
         /// Every actor on the account, in stable `(created_at, id)` order.
@@ -182,7 +187,10 @@ pub enum ResolveActingActorResult {
 /// Ports `fuz_app`'s `resolve_acting_actor`. Rules:
 ///
 /// - `acting` omitted + 1 actor → use it.
-/// - `acting` omitted + 0 actors → [`NoActors`](ResolveActingActorResult::NoActors).
+/// - 0 actors → [`NoActors`](ResolveActingActorResult::NoActors) when the
+///   account is still live,
+///   [`AccountRemoved`](ResolveActingActorResult::AccountRemoved) when it is
+///   tombstoned or gone.
 /// - `acting` omitted + >1 actor → [`ActorRequired`](ResolveActingActorResult::ActorRequired)
 ///   with the available list — never a silent pick.
 /// - `acting` present + on the account → use it.
@@ -202,7 +210,16 @@ pub async fn resolve_acting_actor(
 ) -> Result<ResolveActingActorResult, tokio_postgres::Error> {
     let mut actors = query_active_actors_by_account(client, account_id).await?;
     if actors.is_empty() {
-        return Ok(ResolveActingActorResult::NoActors);
+        // a live account with no actor, or one removed since its credential
+        // was read — one read, on this path alone, tells them apart
+        let live = crate::account_queries::query_account_by_id(client, account_id)
+            .await?
+            .is_some();
+        return Ok(if live {
+            ResolveActingActorResult::NoActors
+        } else {
+            ResolveActingActorResult::AccountRemoved
+        });
     }
     if let Some(acting_id) = acting {
         return Ok(actors.into_iter().find(|a| a.id == acting_id).map_or(

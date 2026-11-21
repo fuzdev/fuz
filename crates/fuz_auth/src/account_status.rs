@@ -122,9 +122,9 @@ pub async fn status_handler(
     let summary = match query_account_summary(&client, &account_id).await {
         Ok(Some(s)) => s,
         Ok(None) => {
-            // Torn read — account vanished between auth resolution and this
-            // fetch. Surface as 401 (matches the unauthenticated body), the
-            // closest analogue to the TS `account_vanished` fall-through.
+            // The account was removed between auth resolution and this
+            // fetch. Surface as 401 (matches the unauthenticated body), as the
+            // twin answers an account its own read no longer finds.
             let bootstrap = if state.bootstrap_available.load(Ordering::Relaxed) {
                 Some(true)
             } else {
@@ -204,8 +204,8 @@ pub async fn status_handler(
 
 /// Resolve the status persona, mapping every structured non-resolution
 /// ([`ResolveActingActorResult`] `ActorRequired` / `ActorNotOnAccount` /
-/// `NoActors`) to `None` — `/status` surfaces ambiguity as `actor: null` (the
-/// frontend's persona picker), never an error.
+/// `NoActors` / `AccountRemoved`) to `None` — `/status` surfaces ambiguity as
+/// `actor: null` (the frontend's persona picker), never an error.
 async fn resolve_status_actor(
     client: &deadpool_postgres::Client,
     account_id: &uuid::Uuid,
@@ -216,7 +216,8 @@ async fn resolve_status_actor(
             ResolveActingActorResult::Resolved(actor) => Some(actor),
             ResolveActingActorResult::ActorRequired { .. }
             | ResolveActingActorResult::ActorNotOnAccount
-            | ResolveActingActorResult::NoActors => None,
+            | ResolveActingActorResult::NoActors
+            | ResolveActingActorResult::AccountRemoved => None,
         },
     )
 }

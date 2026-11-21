@@ -464,12 +464,13 @@ async fn bare_fact_handler(
 /// account-grain credential and reading **that persona's** grants.
 ///
 /// A single-actor admin auto-resolves; a multi-actor admin disambiguates with
-/// `?acting=`. The resolution and its three denials come from the shared
+/// `?acting=`. The resolution and its denials come from the shared
 /// [`require_acting_actor`], so this route answers a selector exactly as
 /// `fuz_db_admin` and `fuz_realtime`'s audit stream do — 400 `actor_required`
 /// with the available list when a multi-actor account names no persona, an
-/// opaque 400 `actor_not_on_account` for a foreign one, 500
-/// `no_actors_on_account` for the signup-invariant violation.
+/// opaque 400 `actor_not_on_account` for a foreign one, 401 for an account
+/// removed since its credential was read, 500 `no_actors_on_account` for the
+/// signup-invariant violation.
 async fn resolve_admin<C: GenericClient + ?Sized>(
     client: &C,
     auth: &fuz_auth::ResolvedAuth,

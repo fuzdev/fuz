@@ -104,6 +104,9 @@ pub fn clear_session_cookie_header(cookie_name: &str) -> Result<HeaderMap, Respo
 /// - [`NoActors`](ResolveActingActorResult::NoActors) → 500
 ///   `{error: "no_actors_on_account"}`. A signup-invariant violation, not a
 ///   client error, so it is logged and reported as the server fault it is.
+/// - [`AccountRemoved`](ResolveActingActorResult::AccountRemoved) → 401
+///   `{error: "authentication_required"}`: the account was removed since its
+///   credential was read, the dead credential's answer.
 ///
 /// A query failure is the same 500 as any other, with the detail left in the
 /// `tracing::error!` breadcrumb rather than on the wire.
@@ -158,6 +161,9 @@ pub async fn require_acting_actor(
                 Json(serde_json::json!({"error": "actor_required", "available": available})),
             )
                 .into_response())
+        }
+        ResolveActingActorResult::AccountRemoved => {
+            Err(fuz_http::authentication_required_response())
         }
         ResolveActingActorResult::NoActors => {
             tracing::error!(%account_id, context, "account has no active actors");

@@ -181,15 +181,22 @@ impl<'a> ResolvedAuthContext<'a> {
 ///   - multi-actor + no `acting` → `actor_required` 400 (`Required`) or
 ///     account-grain fallback (`Optional`).
 ///   - `acting` names a foreign actor → `actor_not_on_account` 400.
-///   - zero actors → `no_actors_on_account` 500 (signup invariant violation).
+///   - zero actors → `no_actors_on_account` 500 on a live account (signup
+///     invariant violation), the 401 `unauthenticated` on a removed one.
 ///
-/// The credential-resolved `account` is reused for the built context — no torn
-/// read window, so `fuz_app`'s `account_vanished` 500 branch can't fire here.
+/// The credential-resolved `account` is reused for the built context, and the
+/// acting actor is the row [`resolve_acting_actor`] read — neither is read a
+/// second time, so there is no torn read between two reads, as in the twin.
+/// An account removed after the credential read reaches the phase anyway: an
+/// account-grain spec builds on the carried row, and an actor-grain one finds
+/// the account's actors gone and answers the dead credential's 401, as a
+/// request arriving after the removal does.
 ///
 /// # Errors
 ///
 /// Returns a [`JsonrpcError`] folding the resolution failure into the wire
-/// shape (`actor_required` / `actor_not_on_account` 400, `no_actors_on_account`
+/// shape (`actor_required` / `actor_not_on_account` 400, `unauthenticated` 401
+/// for an account removed since its credential was read, `no_actors_on_account`
 /// 500), or an internal error on a DB failure.
 pub async fn apply_authorization_phase<C: GenericClient + ?Sized>(
     client: &C,
@@ -246,6 +253,8 @@ pub async fn apply_authorization_phase<C: GenericClient + ?Sized>(
         }
         ResolveActingActorResult::ActorNotOnAccount => Err(actor_not_on_account_error()),
         ResolveActingActorResult::NoActors => Err(no_actors_error()),
+        // removed since the credential was read: the dead credential's 401
+        ResolveActingActorResult::AccountRemoved => Err(fuz_http::unauthenticated()),
     }
 }
 
@@ -273,7 +282,7 @@ fn actor_not_on_account_error() -> JsonrpcError {
     }
 }
 
-/// `no_actors_on_account` 500 — the account enumerated zero actors. A
+/// `no_actors_on_account` 500 — a live account enumerated zero actors. A
 /// server-invariant violation: signup / bootstrap always mint an actor in-tx.
 fn no_actors_error() -> JsonrpcError {
     JsonrpcError {

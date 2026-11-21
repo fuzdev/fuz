@@ -31,10 +31,9 @@
 //!   [`fuz_auth::route_helpers::require_acting_actor`], which answers 400
 //!   `actor_required` (a multi-actor account omitting `acting`, with the
 //!   `available` actors), 400 `actor_not_on_account` (a selector naming no
-//!   active actor of the account), or 500 `no_actors_on_account` (the
-//!   account has no active actor). The twin's fourth outcome, the 500
-//!   `account_vanished` of a torn read, has no counterpart: the actor read
-//!   here is one statement.
+//!   active actor of the account), 401 `authentication_required` (the
+//!   account was removed since its credential was read), or 500
+//!   `no_actors_on_account` (a live account has no active actor).
 //! - **Admission**, in `on_upgrade` — [`admit_upgrade`]: the connection is
 //!   registered pending, its credential re-read, and only then admitted, so
 //!   a revocation racing the upgrade cannot leave a socket on a dead
@@ -565,8 +564,8 @@ async fn ws_handler(
     // Acting-actor phase — every endpoint, gated or not, as the twin's
     // `run_authorization_phase` on the upgrade route. The selector is read the way the
     // twin's `parse_acting` reads it: first occurrence, a malformed value as
-    // omitted, unknown keys ignored. The helper answers the twin's 400s and
-    // its `no_actors_on_account` 500. The query is decoded strictly first,
+    // omitted, unknown keys ignored. The helper answers the twin's 400s, its
+    // removed-account 401 and its `no_actors_on_account` 500. The query is decoded strictly first,
     // every key, so an escape that doesn't decode anywhere in it is a 400
     // `invalid_query_params` rather than a selector read through U+FFFD.
     let Ok(query_pairs) = read_query_pairs(query.as_deref()) else {

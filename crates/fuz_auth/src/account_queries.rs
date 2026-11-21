@@ -263,10 +263,13 @@ pub async fn query_account_by_id(
     Ok(row.map(|r| decode_account_row(&r)))
 }
 
-/// Load the client-safe account summary for `account_verify`.
+/// Load the client-safe summary of a live account, for `account_verify` and
+/// `/status`.
 ///
 /// Returns `SessionAccountJson`-shaped fields. Excludes `password_hash`
-/// and audit columns.
+/// and audit columns. A tombstoned account reads as gone, as a purged one
+/// does: both callers answer an account removed since its credential was read
+/// as the dead credential, which is what `fuz_app` answers.
 ///
 /// # Errors
 ///
@@ -276,7 +279,7 @@ pub async fn query_account_summary(
     account_id: &uuid::Uuid,
 ) -> Result<Option<AccountSummaryRow>, tokio_postgres::Error> {
     let sql = format!(
-        "SELECT {columns} FROM account WHERE id = $1",
+        "SELECT {columns} FROM account WHERE id = $1 AND deleted_at IS NULL",
         columns = account_summary_columns(),
     );
     let row = client.query_opt(&sql, &[account_id]).await?;
