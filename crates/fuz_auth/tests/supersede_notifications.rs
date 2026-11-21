@@ -13,8 +13,10 @@
 //!   sent its grantor's actor as `cause_id` (never the account id), and the
 //!   grantor of one made to it, sent the removed account. The removed account
 //!   hears none of it.
-//! - **A self-service disable** tells both parties of each sibling it ends,
-//!   the grantor and then the caller, whose answer lists no offers.
+//! - **A self-service disable** tells both parties of each offer it ends, as
+//!   the admin revoke does — the caller's incoming siblings, then its own
+//!   outgoing offers, the grantor of each first; the caller's answer lists no
+//!   offers.
 //!
 //! Twin of `fuz_app`'s `role_grant_offer_actions.notifications*.db.test.ts`
 //! and the self-service case in `self_service_role_actions.db.test.ts`.
@@ -331,14 +333,17 @@ async fn a_purge_tells_each_offers_other_party() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-async fn a_self_service_disable_tells_both_parties_of_each_sibling() {
+async fn a_self_service_disable_tells_both_parties_of_each_offer_it_ends() {
     let pool = fresh_db_pool().await;
     let client = pool.get().await.expect("pool.get");
     let caller = seed_actor_context(&pool, "caller").await;
     let grant = seed_role_grant_direct(&pool, caller.actor.id, "teacher", None).await;
     let caller = with_grant(caller, grant, "teacher");
     let (grantor_account, grantor) = seed_account_actor(&pool, "grantor").await;
+    let (recipient_account, _) = seed_account_actor(&pool, "recipient").await;
     let sibling = offer(&client, grantor, caller.account.id, "teacher").await;
+    // the caller's own offer, of another role: every outgoing offer ends
+    let outgoing = offer(&client, caller.actor.id, recipient_account, ROLE_ADMIN).await;
 
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -361,12 +366,39 @@ async fn a_self_service_disable_tells_both_parties_of_each_sibling() {
     .await
     .expect("self-service disable");
 
+    let reason = "role_grant_revoked";
     assert_eq!(
         supersedes(&observed.drained().await),
         vec![
-            supersede(grantor_account, sibling, "role_grant_revoked", grant),
-            supersede(caller.account.id, sibling, "role_grant_revoked", grant),
+            supersede(grantor_account, sibling, reason, grant),
+            supersede(caller.account.id, sibling, reason, grant),
+            supersede(caller.account.id, outgoing, reason, grant),
+            supersede(recipient_account, outgoing, reason, grant),
         ],
-        "the sibling's grantor, then the caller, whose answer lists no offers"
+        "the incoming sibling, then the outgoing offer, each grantor first — \
+         as the admin revoke tells them"
+    );
+    // one forensic row per offer ended, each the caller's, targeting the
+    // offer's recipient
+    let rows: Vec<(uuid::Uuid, uuid::Uuid, String)> = client
+        .query(
+            "SELECT target_account_id, actor_id, metadata->>'offer_id' FROM audit_log
+             WHERE event_type = 'role_grant_offer_supersede'
+               AND metadata->>'reason' = 'role_grant_revoked'
+               AND metadata->>'cause_id' = $1
+             ORDER BY seq",
+            &[&grant.to_string()],
+        )
+        .await
+        .expect("supersede rows")
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (caller.account.id, caller.actor.id, sibling.to_string()),
+            (recipient_account, caller.actor.id, outgoing.to_string()),
+        ],
     );
 }

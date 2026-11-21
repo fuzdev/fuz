@@ -640,16 +640,13 @@ async fn handle_invite_delete(
         .map_err(|e| internal_error_with_source("invite_delete query failed", &e))?;
 
     if !deleted {
-        // Deliberate divergence from TS: emit a failure audit on
-        // `invite_not_found`. The probe key is a UUID (no PII concern,
-        // unlike the `invite_create` denial paths whose probe keys are
-        // email/username), so the PII-sink reasoning that suppresses
-        // failure audits on those paths doesn't apply here. Operationally
-        // this parallels the `admin_session_revoke_all` 404 pattern — a
-        // real admin attempt against a missing resource is forensic
-        // signal worth keeping. TS uniformly grouped this with the
-        // email/username cases; the convergence direction is TS adopts
-        // the emit.
+        // A failure audit on `invite_not_found`, as the TS twin writes. The
+        // probe key is a UUID (no PII concern, unlike the `invite_create`
+        // denial paths whose probe keys are email/username), so the
+        // PII-sink reasoning that suppresses failure audits on those paths
+        // doesn't apply here. Operationally this parallels the
+        // `admin_session_revoke_all` 404 pattern — a real admin attempt
+        // against a missing resource is forensic signal worth keeping.
         ctx.audit_emit(
             db,
             AuditLogInput::for_event(AuditEventType::InviteDelete)
@@ -1002,13 +999,13 @@ async fn void_unclaimed_invites(
     let invite_ids = query_invite_delete_unclaimed_by_creators(db, &actor_ids)
         .await
         .map_err(|e| internal_error_with_source("invite void failed", &e))?;
-    // No `actor_id`, as the TS twin writes this row and its own invite events:
-    // account-grain. This spine's `invite_create` / `invite_delete` still set
-    // one, an older divergence of theirs.
+    // The remover's row, as an `invite_delete` call writes it: the acting
+    // actor and account, as the TS twin writes this row.
     for invite_id in invite_ids {
         ctx.audit_emit(
             db,
             AuditLogInput::for_event(AuditEventType::InviteDelete)
+                .actor(ctx.auth.actor.id)
                 .account(ctx.auth.account.id)
                 .ip(ctx.client_ip.clone())
                 .metadata(serde_json::json!({

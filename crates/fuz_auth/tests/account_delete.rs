@@ -1259,15 +1259,23 @@ async fn account_removal_deletes_the_accounts_unclaimed_invites() {
                 !exists(id).await,
                 "{method}: the unclaimed invite is deleted"
             );
-            let rows = client
+            let rows: Vec<(Option<uuid::Uuid>, Option<uuid::Uuid>)> = client
                 .query(
-                    "SELECT 1 FROM audit_log
+                    "SELECT actor_id, account_id FROM audit_log
                      WHERE event_type = 'invite_delete' AND metadata->>'invite_id' = $1",
                     &[&id.to_string()],
                 )
                 .await
-                .expect("audit rows");
-            assert_eq!(rows.len(), 1, "{method}: one invite_delete row");
+                .expect("audit rows")
+                .iter()
+                .map(|row| (row.get(0), row.get(1)))
+                .collect();
+            // the remover's row, as an `invite_delete` call writes it
+            assert_eq!(
+                rows,
+                vec![(Some(auth.actor.id), Some(auth.account.id))],
+                "{method}: one invite_delete row, the remover's"
+            );
         }
         assert!(exists(claimed).await, "{method}: the claimed invite stays");
     }

@@ -1346,39 +1346,46 @@ pub struct ActiveRoleGrantForActor {
     pub account_id: Uuid,
 }
 
-/// Result of [`query_revoke_role_grant`] — the revoked grant plus any
-/// pending offers superseded by the revoke.
+/// Result of [`query_revoke_role_grant`] — the revoked grant plus every
+/// pending offer the revoke superseded.
 #[derive(Debug, Clone)]
 pub struct RevokeRoleGrantResult {
     pub id: Uuid,
     pub role: String,
     pub scope_kind: Option<String>,
     pub scope_id: Option<Uuid>,
-    /// Pending offers for the same `(account, role, scope)` that were
-    /// marked superseded as a side effect. Empty when no siblings were
-    /// pending. The caller emits a `role_grant_offer_supersede` audit
-    /// event per entry with `reason: 'role_grant_revoked'` +
-    /// `cause_id: <revoked role_grant id>`.
+    /// The pending offers the revoke ended: the revokee account's incoming
+    /// offers of the revoked grant's `(role, scope)`, then every offer the
+    /// revokee's actor made. The caller emits a `role_grant_offer_supersede`
+    /// audit event per entry with `reason: 'role_grant_revoked'` +
+    /// `cause_id: <revoked role_grant id>` and queues its notifications.
     pub superseded_offers: Vec<SupersededOffer>,
 }
 
-/// Revoke an active role grant by id, constrained to a specific actor
-/// (IDOR guard).
+/// Revoke an active role grant by id, constrained to a specific actor (IDOR
+/// guard), and end the pending offers the grant stood behind.
 ///
-/// Supersedes pending offers for the revoked grant's
-/// `(to_account, role, scope)` in the same transaction. The revokee's account
-/// row is locked first
-/// ([`crate::account_queries::query_account_lock_for_revoke`]), so no offer to
-/// or from the account is made, and none accepted, while the revoke runs: the
-/// offers it locks are the offers it writes. Then those offers, in id order,
-/// before the grant is updated: an accept claims its offers before it inserts
-/// its grant, and that insert waits on an uncommitted update of the same
-/// grant, so the grant first and the offers second would close a cycle with
-/// it. A caller that supersedes the revokee's outgoing offers too
-/// (`role_grant_revoke`) takes the account row and then every offer it writes
-/// in one statement first ([`query_role_grant_offer_lock_for_revoke`]); the
-/// locks here then find rows the transaction already holds. Mirrors TS
-/// `query_revoke_role_grant`.
+/// The one supersede rule every revoke follows — the admin
+/// `role_grant_revoke`, a self-service disable, and a consumer's direct call
+/// alike.
+///
+/// Two sets of offers end with the grant, in the same transaction: the
+/// revokee account's pending offers of the grant's `(role, scope)` — an offer
+/// accepted after the revoke would hand the role straight back — and every
+/// pending offer the revokee's actor made, whatever its role — an offer
+/// records no authority, so one made under this grant would still confer on
+/// accept.
+///
+/// Locks follow the class order (accounts, then offers, then grants): the
+/// revokee's account row
+/// ([`crate::account_queries::query_account_lock_for_revoke`]), which keeps
+/// any new offer to or from the account out and any accept by it waiting,
+/// then both sets of offers in one id-ordered statement
+/// ([`query_role_grant_offer_lock_for_revoke`]), then the grant's update — an
+/// accept claims its offers before it inserts its grant, and that insert waits
+/// on an uncommitted update of the same grant, so the grant first and the
+/// offers second would close a cycle. The two supersedes then write only rows
+/// the transaction holds. Mirrors TS `query_revoke_role_grant`.
 ///
 /// Returns `None` when the grant is missing, already revoked, or
 /// belongs to a different actor — the caller raises `NotFound` either
@@ -1408,17 +1415,13 @@ pub async fn query_revoke_role_grant(
     };
     let target_role: String = target.get(0);
     let target_scope_id: Option<Uuid> = target.get(1);
-    let incoming = format!(
-        "to_account_id = (SELECT account_id FROM actor WHERE id = $1)
-           AND role = $2 AND scope_id IS NOT DISTINCT FROM $3 AND {pending}",
-        pending = offer_pending_predicate("", PENDING_JOIN_INLINE),
-    );
-    client
-        .query(
-            &format!("SELECT id FROM role_grant_offer WHERE {incoming} ORDER BY id FOR UPDATE"),
-            &[&actor_id, &target_role, &target_scope_id],
-        )
-        .await?;
+    query_role_grant_offer_lock_for_revoke(
+        client,
+        &actor_id,
+        &target_role,
+        target_scope_id.as_ref(),
+    )
+    .await?;
     let row = client
         .query_opt(
             "UPDATE role_grant
@@ -1440,6 +1443,11 @@ pub async fn query_revoke_role_grant(
     // the grantor's `account_id` for the caller's notification fan-out.
     // The pair-CHECK on `(scope_kind, scope_id)` makes matching on
     // `scope_id` alone equivalent to matching on both columns.
+    let incoming = format!(
+        "to_account_id = (SELECT account_id FROM actor WHERE id = $1)
+           AND role = $2 AND scope_id IS NOT DISTINCT FROM $3 AND {pending}",
+        pending = offer_pending_predicate("", PENDING_JOIN_INLINE),
+    );
     let supersede_sql = format!(
         "WITH updated AS (
             UPDATE role_grant_offer o
@@ -1457,8 +1465,9 @@ pub async fn query_revoke_role_grant(
             &[&actor_id, &revoked_role, &revoked_scope_id],
         )
         .await?;
-    let superseded_offers: Vec<SupersededOffer> =
+    let mut superseded_offers: Vec<SupersededOffer> =
         supersede_rows.iter().map(decode_superseded_row).collect();
+    superseded_offers.extend(query_role_grant_offer_supersede_outgoing(client, &[actor_id]).await?);
 
     Ok(Some(RevokeRoleGrantResult {
         id: revoked_id,
@@ -1474,7 +1483,7 @@ pub async fn query_revoke_role_grant(
 ///
 /// An offer carries no record of the authority it was made under, so one
 /// outliving that authority would still confer its role on accept. Revoking a
-/// grant (`role_grant_revoke`, the revokee's actor) and removing an account
+/// grant ([`query_revoke_role_grant`], the revokee's actor) and removing an account
 /// (`account_delete` / `account_purge`, every actor of the account) end the
 /// grantor's outgoing pending offers in the same transaction. Each row carries
 /// the grantor's `account_id`, as every supersede cascade's does. The caller
@@ -1594,8 +1603,8 @@ pub async fn query_role_grant_offer_lock_for_account_removal(
     Ok(())
 }
 
-/// Lock every pending offer `role_grant_revoke` supersedes, in one statement,
-/// in id order.
+/// Lock every pending offer a revoke ([`query_revoke_role_grant`]) supersedes, in
+/// one statement, in id order.
 ///
 /// Those are the revokee account's incoming offers of the revoked grant's role
 /// and scope, and every offer the revokee's actor made.

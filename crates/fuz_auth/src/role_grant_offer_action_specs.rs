@@ -22,7 +22,6 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::account_queries::query_account_lock_for_revoke;
 use crate::action_auth::AuthSpec;
 use crate::action_rate_limit::RateLimitClass;
 use crate::actor_queries::{
@@ -46,8 +45,7 @@ use crate::role_grant_offer_queries::{
     default_expiry_from_now, query_accept_offer, query_revoke_role_grant,
     query_role_grant_find_active_role_for_actor, query_role_grant_offer_create,
     query_role_grant_offer_decline, query_role_grant_offer_history_for_account,
-    query_role_grant_offer_list, query_role_grant_offer_lock_for_revoke,
-    query_role_grant_offer_retract, query_role_grant_offer_supersede_outgoing,
+    query_role_grant_offer_list, query_role_grant_offer_retract,
 };
 use futures::future::BoxFuture;
 use fuz_db::{ActionDb, action_db_dispatch};
@@ -184,6 +182,12 @@ pub struct OfferCreateAuthorizeInput {
 /// Assign — the global-admin path that confers a grant with no offer — runs
 /// it too, so a policy over which grants may exist (a role that must be
 /// scoped, a scope that must be real) holds on both paths.
+///
+/// An offer authorized by a scoped grant must stay at that grant's scope: a
+/// scope teardown
+/// ([`crate::role_grant_offer_queries::query_role_grant_revoke_for_scope`])
+/// supersedes only that scope's offers, so a revokee's offers elsewhere
+/// survive it.
 ///
 /// **Object-safe** — dispatched as `Arc<dyn OfferCreateAuthorize>` on the
 /// cold offer-create path (one DB-write request, vtable cost negligible).
@@ -500,10 +504,10 @@ pub(crate) fn queue_supersede_notifications(
     }
 }
 
-/// Emit one `role_grant_offer_supersede` audit row per pending sibling offer
-/// a cascade invalidated — the accept path (`reason: "sibling_accepted"`),
-/// the admin `role_grant_revoke` path (the revokee's incoming siblings and its
-/// own outgoing offers) and the self-service revoke path (all
+/// Emit one `role_grant_offer_supersede` audit row per pending offer a
+/// cascade invalidated — the accept path (`reason: "sibling_accepted"`),
+/// the admin `role_grant_revoke` path and the self-service revoke path (the
+/// revokee's incoming siblings and its own outgoing offers, all
 /// `"role_grant_revoked"`), and account removal (`"account_deleted"`).
 /// `cause_id` is the accepted offer id, the revoked `role_grant` id, or the
 /// removed account id respectively.
@@ -512,34 +516,34 @@ pub(crate) fn queue_supersede_notifications(
 /// caller's own `ctx.auth.actor.id` / `ctx.auth.account.id`, so two adjacent
 /// bare `Uuid` params bought nothing but a silently-compiling swap.
 ///
-/// The target pair is the *sibling's*: `to_account_id` (the recipient inbox
+/// The target pair is the *offer's*: `to_account_id` (the recipient inbox
 /// the offer was pending in) and the actor-grain `to_actor_id`, null on
 /// account-grain offers. On the accept path that target account happens to
 /// equal the acting account — the handler passes `ctx.auth.account.id` as
 /// `AcceptOfferInput.to_account_id`, and the supersede UPDATE matches
-/// siblings on exactly that column — but on the admin revoke path it is the
-/// revokee's inbox instead (self-service revokes its caller's own, where the
-/// two coincide), which is why the two pairs are sourced separately.
+/// siblings on exactly that column — but on the revoke paths it is the
+/// revokee's inbox for an incoming sibling and the recipient's for an offer
+/// the revokee made, which is why the two pairs are sourced separately.
 pub(crate) async fn emit_supersede_audits(
     ctx: &AuthenticatedActionContext<'_>,
     db: &(impl deadpool_postgres::GenericClient + ?Sized),
-    siblings: &[SupersededOffer],
+    superseded: &[SupersededOffer],
     reason: &'static str,
     cause_id: uuid::Uuid,
 ) -> Result<(), JsonrpcError> {
-    for sibling in siblings {
+    for entry in superseded {
         ctx.audit_emit(
             db,
             AuditLogInput::for_event(AuditEventType::RoleGrantOfferSupersede)
                 .actor(ctx.auth.actor.id)
                 .account(ctx.auth.account.id)
-                .target_account(sibling.offer.to_account_id)
-                .target_actor(sibling.offer.to_actor_id)
+                .target_account(entry.offer.to_account_id)
+                .target_actor(entry.offer.to_actor_id)
                 .ip(ctx.client_ip.clone())
                 .metadata(serde_json::json!({
-                    "offer_id": sibling.offer.id.to_string(),
-                    "role": sibling.offer.role,
-                    "scope_id": sibling.offer.scope_id.map(|u| u.to_string()),
+                    "offer_id": entry.offer.id.to_string(),
+                    "role": entry.offer.role,
+                    "scope_id": entry.offer.scope_id.map(|u| u.to_string()),
                     "reason": reason,
                     "cause_id": cause_id.to_string(),
                 })),
@@ -1330,17 +1334,10 @@ async fn handle_role_grant_revoke(
         }
     }
 
-    // The revokee's account row, then every offer the revoke supersedes — the
-    // revokee's incoming siblings and its outgoing offers — in one statement in
-    // id order, before the grant is touched (`query_account_lock_for_revoke` and
-    // `query_role_grant_offer_lock_for_revoke` have why). After the guard,
-    // which holds an admin revokee's row already.
-    query_account_lock_for_revoke(db, &actor_id)
-        .await
-        .map_err(|e| internal_error_with_source("revokee account lock failed", &e))?;
-    query_role_grant_offer_lock_for_revoke(db, &actor_id, &active.role, active.scope_id.as_ref())
-        .await
-        .map_err(|e| internal_error_with_source("revoke offer lock failed", &e))?;
+    // The revoke ends the revokee's incoming siblings and every offer its actor
+    // made, taking the revokee's account row and then those offers before the
+    // grant (`query_revoke_role_grant` has the order). After the guard, which
+    // holds an admin revokee's row already.
     let result = query_revoke_role_grant(
         db,
         role_grant_id,
@@ -1350,19 +1347,11 @@ async fn handle_role_grant_revoke(
     )
     .await
     .map_err(|e| internal_error_with_source("revoke_role_grant query failed", &e))?;
-    let Some(mut result) = result else {
+    let Some(result) = result else {
         // Raced with another closer or the grant was revoked between
         // the IDOR check and the UPDATE.
         return Err(not_found("role_grant", Some(ERROR_ROLE_GRANT_NOT_FOUND)));
     };
-    // The revokee's own pending offers end with the grant: an offer records
-    // no authority, so one made under this grant would still confer on
-    // accept. Every outgoing offer of the actor goes, superseded like the
-    // revokee's incoming siblings (same reason, same cause, same fan-out).
-    let outgoing = query_role_grant_offer_supersede_outgoing(db, &[actor_id])
-        .await
-        .map_err(|e| internal_error_with_source("outgoing offer supersede failed", &e))?;
-    result.superseded_offers.extend(outgoing);
 
     emit_revoke_audits(
         ctx,

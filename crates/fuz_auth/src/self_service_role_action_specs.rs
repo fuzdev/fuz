@@ -243,14 +243,13 @@ async fn handle_self_service_role_set(
     )
     .await?;
 
-    // Supersede cascade — `query_revoke_role_grant` marks any pending offers
-    // for the same `(account, role, scope)` superseded as a side effect.
-    // A self-service-only role can't be offered (offer creation gates on the
-    // role's `grant_paths`), so this is empty unless an admin-grantable role
-    // is also self-service-eligible. Each sibling gets its forensic row, and
-    // both its parties are told, as the admin revoke tells them: the recipient
-    // is the caller, but its answer lists no offers, so its other connections
-    // learn of them here.
+    // Supersede cascade — the revoke ended the caller's pending offers of the
+    // role (only a role both offerable and self-service-eligible has any) and
+    // every offer the caller's actor made, whatever its role, as the admin
+    // revoke ends them (`query_revoke_role_grant`). Each gets its forensic row,
+    // and both parties of each are told, as the admin revoke tells them: the
+    // caller is one party of every offer, but its answer lists none, so its
+    // other connections learn of them here.
     emit_supersede_audits(
         ctx,
         db,
