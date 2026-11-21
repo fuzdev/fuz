@@ -22,6 +22,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::account_queries::query_account_lock_for_revoke;
 use crate::action_auth::AuthSpec;
 use crate::action_rate_limit::RateLimitClass;
 use crate::actor_queries::{
@@ -45,8 +46,8 @@ use crate::role_grant_offer_queries::{
     default_expiry_from_now, query_accept_offer, query_revoke_role_grant,
     query_role_grant_find_active_role_for_actor, query_role_grant_offer_create,
     query_role_grant_offer_decline, query_role_grant_offer_history_for_account,
-    query_role_grant_offer_list, query_role_grant_offer_retract,
-    query_role_grant_offer_supersede_outgoing,
+    query_role_grant_offer_list, query_role_grant_offer_lock_for_revoke,
+    query_role_grant_offer_retract, query_role_grant_offer_supersede_outgoing,
 };
 use futures::future::BoxFuture;
 use fuz_db::{ActionDb, action_db_dispatch};
@@ -878,6 +879,11 @@ async fn handle_role_grant_offer_accept(
         Err(RoleGrantOfferError::BuiltinRefused { offer, refusal }) => {
             return Err(refuse_builtin_accept(ctx, db, &offer, refusal).await?);
         }
+        // The caller's own account was deleted while the request was in
+        // flight: refused as the dead credential it now is, as offer-create
+        // refuses a grantor deleted in flight, with no audit row from an
+        // account that is gone.
+        Err(RoleGrantOfferError::RecipientNotActive) => return Err(unauthenticated()),
         Err(err) => return Err(map_offer_transition_error(err, "role_grant_offer_accept")),
     };
 
@@ -1324,6 +1330,17 @@ async fn handle_role_grant_revoke(
         }
     }
 
+    // The revokee's account row, then every offer the revoke supersedes — the
+    // revokee's incoming siblings and its outgoing offers — in one statement in
+    // id order, before the grant is touched (`query_account_lock_for_revoke` and
+    // `query_role_grant_offer_lock_for_revoke` have why). After the guard,
+    // which holds an admin revokee's row already.
+    query_account_lock_for_revoke(db, &actor_id)
+        .await
+        .map_err(|e| internal_error_with_source("revokee account lock failed", &e))?;
+    query_role_grant_offer_lock_for_revoke(db, &actor_id, &active.role, active.scope_id.as_ref())
+        .await
+        .map_err(|e| internal_error_with_source("revoke offer lock failed", &e))?;
     let result = query_revoke_role_grant(
         db,
         role_grant_id,

@@ -579,9 +579,12 @@ The rules a change must keep:
   against a stale count. A server that mints a session or a token through
   its own code takes the same lock.
 - **Every writer of an account takes its row first.** A mint, a password
-  change and a delete do it through their first lock or write; a purge
-  takes `query_account_lock_for_purge` (`FOR UPDATE`, tombstoned or not)
-  right after its last-admin guard, then revokes the account's sessions and
+  change and a delete do it through their first lock or write; a revoke
+  takes its revokee's (`query_account_lock_for_revoke`); a purge takes every
+  admin's account and its own `FOR NO KEY UPDATE` in one id-ordered statement
+  (`query_account_lock_admins_for_purge`), then — for an admin target — its
+  last-admin guard, then `query_account_lock_for_purge` (`FOR UPDATE`,
+  tombstoned or not), then revokes the account's sessions and
   tokens before its `DELETE`. Every multi-row delete of `auth_session` or
   `api_token` rows (revoke-alls, cap evictions, the expiry sweep) locks them
   through an id-ordered subselect, so two of them never lock in opposite
@@ -603,8 +606,19 @@ The rules a change must keep:
   locks its rows `FOR NO KEY UPDATE` in account-id order, so no two of these
   wait on each other in opposite orders, and an insert's foreign-key key
   share on a counted row — which can only add an admin — never waits on
-  it. An accept of a builtin offer share-locks its grantor's grant before it
-  claims the offer row, the order a removal takes them. A server that
+  it. An accept locks both parties' accounts, lower id first
+  (`query_account_lock_for_offer_accept`: the recipient's `FOR NO KEY UPDATE`,
+  the grantor's `FOR SHARE` for an unscoped admin offer — every removal of a
+  global admin takes the grantor's account first: a revoke through
+  `query_account_lock_for_revoke`, a delete by writing it, a purge through
+  `query_account_lock_admins_for_purge`), then claims its offer and
+  its pending siblings in one id-ordered statement. Every transaction that
+  writes more than one offer row locks them all first, in id order
+  (`offer_rows_locked_in_id_order`; delete and purge, a revoke before its
+  grant update, scope teardown, the sweep) and writes only rows it holds:
+  accounts, then offers, then grants and actors, everywhere. A purge locks
+  every admin's account and its target's first — its cascade writes other
+  admins' grant rows — then, for an admin target, the guard. A server that
   creates offers through the query gets the rule; one that mints invites
   through `query_create_invite` for an issuer takes
   `query_account_lock_live_many` on the issuer first.

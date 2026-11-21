@@ -300,8 +300,10 @@ pub use role_grant_offer_queries::{
     ROLE_GRANT_OFFER_DEFAULT_TTL_MS, ROLE_GRANT_OFFER_SCOPE_KIND_GLOBAL_TOKEN,
     ROLE_GRANT_OFFER_SCOPE_SENTINEL_UUID, RevokeForScopeResult, RevokedGrantAtScope,
     RoleGrantOffer, RoleGrantOfferError, SupersededOffer, default_expiry_from_now,
-    query_accept_offer, query_role_grant_offer_create, query_role_grant_offer_supersede_incoming,
-    query_role_grant_offer_supersede_outgoing, query_role_grant_revoke_for_scope,
+    query_accept_offer, query_role_grant_offer_create,
+    query_role_grant_offer_lock_for_account_removal, query_role_grant_offer_lock_for_revoke,
+    query_role_grant_offer_supersede_incoming, query_role_grant_offer_supersede_outgoing,
+    query_role_grant_revoke_for_scope,
 };
 pub use role_grant_schema::{RoleGrantRow, role_grant_active_sql};
 pub use route_response::{credential_type_required_response, token_scope_surface_denied_response};

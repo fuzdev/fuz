@@ -10,9 +10,9 @@ use serde_json::Value;
 
 use crate::account_queries::{
     AccountIdentitySnapshot, AdminAccountEntry, query_account_by_email, query_account_by_id,
-    query_account_by_username, query_account_lock_for_purge, query_account_lock_live_many,
-    query_account_soft_delete, query_account_undelete, query_admin_account_list,
-    query_purge_account,
+    query_account_by_username, query_account_lock_admins_for_purge, query_account_lock_for_purge,
+    query_account_lock_live_many, query_account_soft_delete, query_account_undelete,
+    query_admin_account_list, query_purge_account,
 };
 use crate::action_auth::{AuthSpec, credential_type_required};
 use crate::action_rate_limit::RateLimitClass;
@@ -53,7 +53,8 @@ use crate::role_grant_offer_action_specs::{
     SupersedeAudience, SupersedeCause, emit_supersede_audits, queue_supersede_notifications,
 };
 use crate::role_grant_offer_queries::{
-    query_role_grant_offer_supersede_incoming, query_role_grant_offer_supersede_outgoing,
+    query_role_grant_offer_lock_for_account_removal, query_role_grant_offer_supersede_incoming,
+    query_role_grant_offer_supersede_outgoing,
 };
 use fuz_http::{
     InputShape, JsonrpcError, conflict, forbidden, internal_error_with_source,
@@ -901,6 +902,21 @@ async fn emit_actor_lifecycle_audits<'a>(
 /// removed account.
 const SUPERSEDE_REASON_ACCOUNT_DELETED: &str = "account_deleted";
 
+/// Lock every pending offer the removal supersedes, both directions, in one
+/// id-ordered statement before either supersede writes — the order every
+/// multi-row offer write takes its rows in
+/// ([`query_role_grant_offer_lock_for_account_removal`] has why).
+async fn lock_removed_account_offers(
+    db: &(impl deadpool_postgres::GenericClient + ?Sized),
+    target_account_id: &uuid::Uuid,
+    actors: &[ActorRow],
+) -> Result<(), JsonrpcError> {
+    let actor_ids: Vec<uuid::Uuid> = actors.iter().map(|a| a.id).collect();
+    query_role_grant_offer_lock_for_account_removal(db, target_account_id, &actor_ids)
+        .await
+        .map_err(|e| internal_error_with_source("removal offer lock failed", &e))
+}
+
 /// Supersede every pending offer the removed account's actors made, with its
 /// audit rows — the cascade a revoke runs on the revokee's offers. An offer
 /// records no authority, so one outliving its grantor's account would still
@@ -1072,6 +1088,7 @@ async fn handle_account_delete(
         .await);
     };
 
+    lock_removed_account_offers(db, &target_account_id, &actors).await?;
     cancel_outgoing_offers(ctx, db, target_account_id, &actors).await?;
     cancel_incoming_offers(ctx, db, target_account_id).await?;
 
@@ -1146,6 +1163,16 @@ async fn handle_account_purge(
         ));
     }
 
+    // Every admin's account row and the target's, in one id-ordered statement:
+    // the cascade writes admin rows (the grants the target's actors granted).
+    // Every other removal's guard and every other purge take those accounts
+    // first, and no other writer of an admin's grant waits on an account row
+    // while holding one, so holding the accounts orders the purge before any of
+    // them (`query_account_lock_admins_for_purge` has why). The last-admin guard
+    // then runs only for an admin target, in `guard_account_removable`.
+    query_account_lock_admins_for_purge(db, &target_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("admin account lock failed", &e))?;
     // Keeper + last-admin guards (fail-loud, before the cascade).
     guard_account_removable(ctx, db, &target_account_id, AuditEventType::AccountPurge).await?;
 
@@ -1174,6 +1201,7 @@ async fn handle_account_purge(
     // with no audit row and no notification, the ones the account made and
     // the ones made to it. After the account row: an offer create from or to
     // the account takes that row first, so it has committed or waits.
+    lock_removed_account_offers(db, &target_account_id, &actors).await?;
     cancel_outgoing_offers(ctx, db, target_account_id, &actors).await?;
     cancel_incoming_offers(ctx, db, target_account_id).await?;
     // Before the cascade too: `invite.created_by` is `ON DELETE SET NULL`, so

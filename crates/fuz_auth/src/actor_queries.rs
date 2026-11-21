@@ -577,26 +577,34 @@ pub async fn query_account_has_active_global_role(
 /// another guard, so two guards racing to remove the last two admins serialize:
 /// the second waits for the first to commit, re-reads the rows it changed, and
 /// counts one. It conflicts with every write that lowers the count — a revoke's
-/// or a soft delete's `UPDATE` of a counted row, a purge's `DELETE` — with the
-/// `FOR SHARE OF rg` an admin-offer accept takes on its grantor's grant, and
-/// with the locks a credential mint, an offer and an invite take on the account
-/// row. Run it inside the transaction that does the removal — outside one, the
-/// locks end with the statement.
+/// or a soft delete's `UPDATE` of a counted row, a purge's `DELETE` — and with
+/// the locks a credential mint, an offer, an invite and an offer accept (its
+/// recipient's row and its grantor's,
+/// [`crate::account_queries::query_account_lock_for_offer_accept`]) take on the
+/// account row. Run it inside the transaction that does the removal — outside
+/// one, the locks end with the statement.
 ///
 /// It does not conflict with a foreign key's `FOR KEY SHARE` — the lock an
 /// insert or update naming a counted row takes (an accept's new grant naming
-/// its grantor, a cell's `created_by`), and the lock that deadlocked an accept
-/// holding its grantor's grant against a guard holding the grantor's actor.
-/// Such a write only adds a reference: it never lowers the count, so the guard
-/// fails closed — what it counted is at most what will stand, and a removal it
-/// allows leaves an admin. A purge that deletes a row such a write names still
-/// takes `FOR UPDATE` and waits for it.
+/// its grantor, a cell's `created_by`). Such a write only adds a reference: it
+/// never lowers the count, so the guard fails closed — what it counted is at
+/// most what will stand, and a removal it allows leaves an admin. A purge that
+/// deletes a row such a write names still takes `FOR UPDATE` and waits for it.
+///
+/// A purge's cascade writes admin rows too — it sets null the `granted_by` of
+/// every grant the purged account's actors granted, admins' grants among them,
+/// in the order its plan walks them — so a purge takes every admin's account
+/// row first, with its own, in one id-ordered statement
+/// ([`crate::account_queries::query_account_lock_admins_for_purge`]), and runs
+/// this count after it only when its target is an admin: another guard then
+/// waits at its first account holding nothing.
 ///
 /// The rows are locked in id order — account, then actor, then grant — as the
 /// sort returns them: each account's row, its actors' and its grants' before
 /// the next account's. [`crate::account_queries::query_account_lock_live_many`]
-/// takes account rows in the same order, so an offer between two admins and an
-/// admin's removal never wait on each other's rows in opposite orders. Ids
+/// and [`crate::account_queries::query_account_lock_for_offer_accept`] take
+/// account rows in the same order, so an offer or an accept between two admins
+/// and an admin's removal never wait on each other's rows in opposite orders. Ids
 /// never change, so no concurrent update can move a row the sort has placed.
 ///
 /// `exclude_role_grant_id` leaves one grant out of the count, so a revoke asks

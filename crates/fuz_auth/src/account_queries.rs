@@ -484,8 +484,10 @@ pub async fn query_update_account_password(
 /// merely references the account waits on a login. Besides the writers it
 /// orders against, it conflicts with [`query_account_lock_live`] (the token
 /// mint, the same strength), the `FOR SHARE` of
-/// [`query_account_lock_live_many`] (an offer or invite create), and the
-/// last-admin guard's `FOR NO KEY UPDATE`. None of those waits on an account
+/// [`query_account_lock_live_many`] (an offer or invite create), an offer
+/// accept's locks ([`query_account_lock_for_offer_accept`], the recipient's at
+/// this strength, a grantor's shared), and the last-admin guard's
+/// `FOR NO KEY UPDATE`. None of those waits on an account
 /// row while holding a session row, and once a mint holds the lock it waits
 /// on nothing but the session rows its eviction deletes, so no cycle runs
 /// through it. Twin of `fuz_app`'s `query_account_lock_verified`.
@@ -512,6 +514,87 @@ pub async fn query_account_lock_verified(
     Ok(row.is_some())
 }
 
+/// Lock, for a purge, the account rows of every holder of an unrevoked global
+/// `admin` grant and the purged account's own.
+///
+/// One statement, in id order, `FOR NO KEY UPDATE`. A purge's cascade writes
+/// rows of other accounts: it sets null the `granted_by` and `revoked_by` of
+/// every grant the purged account's actors named, admins' grants among them,
+/// in whatever order the plan walks them. A last-admin guard of another removal
+/// takes admin accounts, actors and grants in account-id order. A purge reaching
+/// an admin's grant before the guard does and waiting on one the guard took
+/// could hold a row the guard waits on. Holding every admin's account first, in
+/// the order the guard and [`query_account_lock_live_many`] take account rows,
+/// another guard waits at its first account holding nothing, and two purges
+/// take turns. The purged account's row is taken in the same statement, so an
+/// offer create holding one of these rows `FOR SHARE` and waiting on another
+/// meets them in the same order. No `deleted_at` filter on either: a tombstoned
+/// admin's grant is written by the cascade as well, and a purge removes a
+/// tombstoned account. The admins are those the statement's snapshot sees; one
+/// made by a transaction that commits after it starts is not among them. Cost:
+/// a purge waits behind admins' logins, token creates and offers. Run first in
+/// the purge's transaction, before the last-admin guard (an admin target's
+/// only) and [`query_account_lock_for_purge`].
+/// Twin of `fuz_app`'s `query_account_lock_admins_for_purge`.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_account_lock_admins_for_purge(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    account_id: &uuid::Uuid,
+) -> Result<(), tokio_postgres::Error> {
+    client
+        .query(
+            "SELECT a.id FROM account a
+             WHERE a.id = $1
+                OR a.id IN (
+                  SELECT act.account_id FROM actor act
+                  JOIN role_grant rg ON rg.actor_id = act.id
+                  WHERE rg.role = $2 AND rg.scope_id IS NULL AND rg.revoked_at IS NULL)
+             ORDER BY a.id
+             FOR NO KEY UPDATE",
+            &[account_id, &crate::role::ROLE_ADMIN],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Lock the account row of a revoke's revokee, by its actor, tombstoned or
+/// not, `FOR NO KEY UPDATE`.
+///
+/// Every revoke of a grant takes it, before it locks the offers it supersedes
+/// and before it updates the grant. It keeps those offers from growing: an
+/// offer to or from the account takes the row `FOR SHARE`
+/// ([`query_account_lock_live_many`]), so none is made while the revoke runs,
+/// and an accept by the account takes it `FOR NO KEY UPDATE`
+/// ([`query_account_lock_for_offer_accept`]), so none claims one. And it is the
+/// lock an accept of an offer from the revokee is ordered by: the accept reads
+/// its grantor's authority under the grantor's account row, and a revoke of
+/// that authority takes the row here whether or not its last-admin guard ran
+/// (the guard runs only while the account holds an active global `admin`). A
+/// revoke of an admin grant takes it after the guard, which holds it already
+/// among the admins' rows in id order. Twin of `fuz_app`'s
+/// `query_account_lock_for_revoke`.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_account_lock_for_revoke(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    actor_id: &uuid::Uuid,
+) -> Result<(), tokio_postgres::Error> {
+    client
+        .query(
+            "SELECT a.id FROM actor act JOIN account a ON a.id = act.account_id
+             WHERE act.id = $1
+             FOR NO KEY UPDATE OF a",
+            &[actor_id],
+        )
+        .await?;
+    Ok(())
+}
+
 /// Lock an account row for its purge, tombstoned or not.
 ///
 /// Every writer of an account takes the account row before its other rows — a
@@ -524,11 +607,10 @@ pub async fn query_account_lock_verified(
 /// takes anyway: it conflicts with every other lock on the row, so a writer
 /// holding one is waited out, and a writer arriving later waits for the purge
 /// and then finds no row. No `deleted_at` filter — a purge removes a
-/// tombstoned account too. Run after the last-admin guard, which takes an
-/// admin target's account row among the others in id order
-/// ([`crate::actor_queries::query_count_active_accounts_with_global_role_locked`]),
-/// so the two never take the rows in opposite orders. Twin of `fuz_app`'s
-/// `query_account_lock_for_purge`.
+/// tombstoned account too. Run after [`query_account_lock_admins_for_purge`],
+/// which takes the row `FOR NO KEY UPDATE` among every admin's in id order,
+/// and, for an admin target, the last-admin guard, so this only strengthens a
+/// lock the purge already holds. Twin of `fuz_app`'s `query_account_lock_for_purge`.
 ///
 /// Returns `true` when the row is locked, `false` when there is no such
 /// account.
@@ -628,6 +710,77 @@ pub async fn query_account_lock_live_many(
         )
         .await?;
     Ok(rows.iter().map(|row| row.get(0)).collect())
+}
+
+/// Lock the account rows an offer accept is ordered by, in id order.
+///
+/// The recipient's `FOR NO KEY UPDATE`, and — when the offer confers the
+/// global `admin` its grantor must still hold — the grantor's `FOR SHARE`.
+///
+/// The recipient's lock is a credential mint's strength
+/// ([`query_account_lock_verified`]), so it conflicts with itself: two
+/// accepts by one recipient take turns, and the second claims after the first
+/// has superseded its siblings. It conflicts with a delete's or a purge's
+/// first write of the account (the soft-delete `UPDATE`,
+/// [`query_account_lock_admins_for_purge`], the last-admin guard), so a removal
+/// of the recipient waits here or is waited for whole, and never meets the
+/// accept at its offers or its actor; with a revoke's
+/// [`query_account_lock_for_revoke`], so a revoke of the recipient's grant and
+/// the accept take turns; and with [`query_account_lock_live_many`], so no
+/// offer to the recipient is made or refreshed while the accept holds it.
+/// Cost: an accept waits behind the recipient's own logins and token mints,
+/// which take the same lock.
+///
+/// The grantor's share lock is what the grantor's authority is read under (an
+/// unlocked read after this one): every write that ends a grantor's global
+/// `admin` takes the grantor's account row first — a revoke of the grant
+/// through [`query_account_lock_for_revoke`] (whether or not its last-admin
+/// guard ran), a delete through its write of the row, a purge through
+/// [`query_account_lock_admins_for_purge`] and [`query_account_lock_for_purge`]
+/// — so it either commits before the read, which sees it, or waits for the
+/// accept to commit. A share lock on the
+/// account, not on the grant, so a purge's cascade reaching the grant (its
+/// `granted_by` naming an actor of the purged account) never waits on the
+/// accept.
+///
+/// Two statements, as the two strengths can't share one locking clause, the
+/// lower id first — the order the last-admin guard
+/// ([`crate::actor_queries::query_count_active_accounts_with_global_role_locked`])
+/// and [`query_account_lock_live_many`] take account rows in — so an accept
+/// and a guard over an admin recipient and its grantor never wait on each
+/// other in opposite orders. Neither is filtered on the grantor's tombstone:
+/// the authority read judges it. Twin of `fuz_app`'s
+/// `query_account_lock_for_offer_accept`.
+///
+/// Returns `true` when the recipient's row is locked and live, `false` when
+/// it was deleted or tombstoned.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_account_lock_for_offer_accept(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    recipient_id: &uuid::Uuid,
+    grantor_id: Option<&uuid::Uuid>,
+) -> Result<bool, tokio_postgres::Error> {
+    const GRANTOR_LOCK: &str = "SELECT id FROM account WHERE id = $1 FOR SHARE";
+    if let Some(grantor_id) = grantor_id
+        && grantor_id < recipient_id
+    {
+        client.query_opt(GRANTOR_LOCK, &[grantor_id]).await?;
+    }
+    let recipient = client
+        .query_opt(
+            "SELECT id FROM account WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
+            &[recipient_id],
+        )
+        .await?;
+    if let Some(grantor_id) = grantor_id
+        && grantor_id > recipient_id
+    {
+        client.query_opt(GRANTOR_LOCK, &[grantor_id]).await?;
+    }
+    Ok(recipient.is_some())
 }
 
 /// Identifying values snapshotted into a deletion/purge audit event so
