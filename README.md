@@ -2,6 +2,9 @@
 
 > the fuz CLI, fuzd daemon, and Rust crates beneath the Fuz stack's servers 🗝 pre-alpha
 
+> ⚠️ **Not ready for production.** There is no release channel, and APIs, CLI
+> surfaces, wire protocols, and on-disk formats break without notice.
+
 This Rust workspace holds:
 
 - `fuz` - installs first-party tools as signed, blake3-pinned binaries,
@@ -15,7 +18,6 @@ This Rust workspace holds:
   content primitives) for building app servers
 
 Each crate is described in [docs/crates.md](docs/crates.md).
-APIs, CLI surfaces, wire protocols, and on-disk formats break without notice.
 
 This repo is part of the Fuz stack
 ([fuz.dev](https://www.fuz.dev/), [@fuzdev](https://github.com/fuzdev)).
