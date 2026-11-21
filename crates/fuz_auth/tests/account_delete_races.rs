@@ -594,16 +594,7 @@ async fn an_admin_offer_accept_and_a_removal_of_its_grantor_never_deadlock() {
             .await
             .unwrap();
 
-        let until_waiters = |n: i64, what: &'static str| {
-            let pool = f.pool.clone();
-            async move {
-                let deadline = Instant::now() + Duration::from_secs(2);
-                while lock_waiters(&pool).await < n {
-                    assert!(Instant::now() < deadline, "{what}");
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            }
-        };
+        let until_waiters = |n: i64, what: &'static str| until_lock_waiters(&f.pool, n, what);
         let accept = async {
             in_tx!(f.pool, |tx| async {
                 let audit = common::build_audit(f.pool.clone());

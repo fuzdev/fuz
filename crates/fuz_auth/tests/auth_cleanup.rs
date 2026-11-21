@@ -1181,3 +1181,72 @@ async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelle
         .expect("cancelling the token ends the task")
         .expect("the task ends cleanly");
 }
+
+/// The session sweep takes the sessions it deletes in id order, as every
+/// multi-row credential delete does. The order is pinned by seeding the heap
+/// order against it: the highest id inserted first. A transaction holds the
+/// lowest row, the sweep runs, then the holder takes the highest: an id-ordered
+/// sweep waits on the lowest holding neither, and both commit; any other order
+/// holds the highest and deadlocks. Twin of the TS
+/// `auth/session_sweep.order.db.test.ts`.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn the_session_sweep_takes_its_rows_in_id_order() {
+    let pool = fresh_db_pool().await;
+    let (account_id, _) = seed_account_actor(&pool, "sweep_order").await;
+    let low = "0".repeat(64);
+    let high = "f".repeat(64);
+    seed_sessions(
+        &pool,
+        &[(&high, account_id, true), (&low, account_id, true)],
+    )
+    .await;
+
+    let mut holder_client = pool.get().await.unwrap();
+    let holder = holder_client.transaction().await.unwrap();
+    holder
+        .query_one(
+            "SELECT id FROM auth_session WHERE id = $1 FOR UPDATE",
+            &[&low],
+        )
+        .await
+        .unwrap();
+    let (options, _closer) = options_with_closer(&pool);
+    let sweep = cleanup_expired_sessions(&options);
+    let take_high = async {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let waiting: i64 = pool
+                .get()
+                .await
+                .unwrap()
+                .query_one(
+                    "SELECT COUNT(*) FROM pg_stat_activity
+                     WHERE wait_event_type = 'Lock' AND datname = current_database()",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting > 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sweep waits on the lowest row"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        holder
+            .query_one(
+                "SELECT id FROM auth_session WHERE id = $1 FOR UPDATE",
+                &[&high],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("the holder takes the highest row: {e}"));
+        holder.commit().await.unwrap();
+    };
+    let (swept, ()) = tokio::join!(sweep, take_high);
+    assert_eq!(swept.expect("the sweep"), 2);
+    assert!(remaining_sessions(&pool).await.is_empty());
+}
