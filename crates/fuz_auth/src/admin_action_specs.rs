@@ -10,8 +10,9 @@ use serde_json::Value;
 
 use crate::account_queries::{
     AccountIdentitySnapshot, AdminAccountEntry, query_account_by_email, query_account_by_id,
-    query_account_by_username, query_account_lock_live, query_account_soft_delete,
-    query_account_undelete, query_admin_account_list, query_purge_account,
+    query_account_by_username, query_account_lock_for_purge, query_account_lock_live_many,
+    query_account_soft_delete, query_account_undelete, query_admin_account_list,
+    query_purge_account,
 };
 use crate::action_auth::{AuthSpec, credential_type_required};
 use crate::action_rate_limit::RateLimitClass;
@@ -562,9 +563,10 @@ async fn handle_invite_create(
     // is, as `account_token_create` refuses it — and one still to commit waits
     // on this lock, then deletes the invite with the account's other unclaimed
     // ones: a delete writes its tombstone first. Twin of the TS handler's.
-    if !query_account_lock_live(db, &ctx.auth.account.id)
+    if !query_account_lock_live_many(db, &[ctx.auth.account.id])
         .await
         .map_err(|e| internal_error_with_source("invite issuer lock failed", &e))?
+        .contains(&ctx.auth.account.id)
     {
         return Err(unauthenticated());
     }
@@ -1117,6 +1119,22 @@ async fn handle_account_purge(
     // Keeper + last-admin guards (fail-loud, before the cascade).
     guard_account_removable(ctx, db, &target_account_id, AuditEventType::AccountPurge).await?;
 
+    // The account row before any write, as every writer of the account takes
+    // it — `query_account_lock_for_purge` has why.
+    let locked = query_account_lock_for_purge(db, &target_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("account lock failed", &e))?;
+    if !locked {
+        return Err(deny_account_not_found(
+            ctx,
+            db,
+            &target_account_id,
+            AuditEventType::AccountPurge,
+            Some(admin_actor_id),
+        )
+        .await);
+    }
+
     // Snapshot actors before the cascade removes them.
     let actors = query_actors_by_account(db, &target_account_id)
         .await
@@ -1128,6 +1146,15 @@ async fn handle_account_purge(
     // Before the cascade too: `invite.created_by` is `ON DELETE SET NULL`, so
     // the cascade would leave the account's unclaimed invites usable.
     void_unclaimed_invites(ctx, db, &actors).await?;
+    // Before the cascade as well: it would delete the account's sessions and
+    // tokens in its own plan's order, against a revoke or a sweep of the same
+    // rows taking them in id order — the order these take them in.
+    query_session_revoke_all_for_account(db, &target_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("session revoke failed", &e))?;
+    query_revoke_all_api_tokens_for_account(db, &target_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("token revoke failed", &e))?;
 
     let Some(snapshot) = query_purge_account(db, &target_account_id)
         .await

@@ -568,14 +568,24 @@ The rules a change must keep:
 - `create_capped_session` is the only production session minter
   (`fuz_testing`'s fixtures insert uncapped rows directly).
 - **A credential is minted under the account's row lock.** Login and
-  `account_token_create` run first, in their mint transaction, a `FOR SHARE`
-  re-check of the account (`query_account_lock_verified`: live and still the
+  `account_token_create` run first, in their mint transaction, a
+  `FOR NO KEY UPDATE` re-check of the account (`query_account_lock_verified`: live and still the
   hash that was verified; `query_account_lock_live`, then
   `query_session_is_live` for the session that authorized the token). A
   password change and a delete write the account row before they revoke, so
   a mint in flight across either waits and is refused — the login exactly as
-  a wrong password is — or commits first and is revoked. A server that mints
-  a session or a token through its own code takes the same lock.
+  a wrong password is — or commits first and is revoked. Two mints of one
+  account take turns on the lock, so a cap's count and eviction never run
+  against a stale count. A server that mints a session or a token through
+  its own code takes the same lock.
+- **Every writer of an account takes its row first.** A mint, a password
+  change and a delete do it through their first lock or write; a purge
+  takes `query_account_lock_for_purge` (`FOR UPDATE`, tombstoned or not)
+  right after its last-admin guard, then revokes the account's sessions and
+  tokens before its `DELETE`. Every multi-row delete of `auth_session` or
+  `api_token` rows (revoke-alls, cap evictions, the expiry sweep) locks them
+  through an id-ordered subselect, so two of them never lock in opposite
+  orders, whatever plan the database picks.
 - **An offer and an invite are created under their principals' locks too.**
   `query_role_grant_offer_create` takes `FOR SHARE` on its recipient's and
   its grantor's accounts in one statement, in id order

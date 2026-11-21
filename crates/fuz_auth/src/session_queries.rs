@@ -250,14 +250,14 @@ impl CappedSession {
 /// `ConnectionCloser`); a site that mints for an account created in the same
 /// transaction can evict nothing, since no other session can reference it.
 ///
-/// A caller minting for an existing account takes its row lock first in the
-/// same transaction ([`query_account_lock_verified`] after a password verify,
-/// [`query_account_lock_live`] otherwise) and refuses on `false`, so a
-/// password change or a delete in flight is ordered against the mint. A site
-/// minting for an account created in its own transaction needs none.
+/// A caller minting for an existing account first takes its row lock in the
+/// same transaction ([`query_account_lock_verified`]) and refuses on `false`:
+/// a password change or a delete in flight is ordered against the mint, and
+/// the account's mints take turns, which the cap counts on
+/// ([`query_session_enforce_limit`]). A site minting for an account created
+/// in its own transaction needs none.
 ///
 /// [`query_account_lock_verified`]: crate::account_queries::query_account_lock_verified
-/// [`query_account_lock_live`]: crate::account_queries::query_account_lock_live
 ///
 /// # Errors
 ///
@@ -319,6 +319,12 @@ async fn query_create_session(
 /// Expired-but-unreaped rows count toward the cap (the predicate is
 /// `account_id` alone), matching the TS twin.
 ///
+/// The victims are locked in id order before the delete (`ORDER BY id FOR
+/// UPDATE`), as every multi-row delete of `auth_session` rows locks them: a
+/// revoke-all or the expiry sweep reaching the same rows waits on the
+/// eviction, or the eviction on it, instead of the two deadlocking in
+/// whatever orders their plans walk ([`query_session_revoke_all_for_account`]).
+///
 /// # Race safety
 ///
 /// Caller must wrap this and the preceding INSERT in one transaction. **A
@@ -326,11 +332,14 @@ async fn query_create_session(
 /// INSERT + evict pair atomic; it does not serialize concurrent creators.
 /// Under Read Committed two transactions cannot see each other's uncommitted
 /// session row, so each computes its `OFFSET` against a stale count, each
-/// preserves its own row, and both commit above `max_sessions`. Closing that
-/// needs one serialization point per `(account_id, credential_kind)` — a
-/// locked parent row or a transaction-scoped advisory lock — taken before
-/// count/evict/insert. This function does not close it, and neither does the
-/// TS twin.
+/// preserves its own row, and both commit above `max_sessions` — and their
+/// two `DELETE`s lock the same old rows in orders the plan picks, so they can
+/// deadlock. A creator for an existing account first takes its account row
+/// `FOR NO KEY UPDATE`
+/// ([`query_account_lock_verified`](crate::account_queries::query_account_lock_verified)),
+/// which makes the creators of one account take turns, each counting the rows
+/// the one before committed. A creator for an account its own transaction
+/// just made needs none — no other can reach the account.
 ///
 /// [`query_api_token_enforce_limit`]: crate::api_token_queries::query_api_token_enforce_limit
 ///
@@ -347,9 +356,14 @@ pub async fn query_session_enforce_limit(
             "DELETE FROM auth_session
              WHERE id IN (
                SELECT id FROM auth_session
-               WHERE account_id = $1
-               ORDER BY created_at DESC, id DESC
-               OFFSET $2
+               WHERE id IN (
+                 SELECT id FROM auth_session
+                 WHERE account_id = $1
+                 ORDER BY created_at DESC, id DESC
+                 OFFSET $2
+               )
+               ORDER BY id
+               FOR UPDATE
              )
              RETURNING id",
             &[account_id, &max_sessions],
@@ -413,7 +427,9 @@ pub async fn query_session_revoke_for_account(
 /// caller above does, so the ids are read before the delete commits — on an
 /// autocommit client a connection lost on the response leaves the rows
 /// deleted and their ids unread. Served by
-/// `idx_auth_session_expires`.
+/// `idx_auth_session_expires`. The rows are locked in id order before the
+/// delete, as every multi-row delete of `auth_session` rows locks them
+/// ([`query_session_revoke_all_for_account`]).
 ///
 /// # Errors
 ///
@@ -425,7 +441,9 @@ pub async fn query_session_cleanup_expired(
 ) -> Result<Vec<String>, tokio_postgres::Error> {
     let rows = client
         .query(
-            "DELETE FROM auth_session WHERE expires_at <= NOW() RETURNING id",
+            "DELETE FROM auth_session
+             WHERE id IN (SELECT id FROM auth_session WHERE expires_at <= NOW() ORDER BY id FOR UPDATE)
+             RETURNING id",
             &[],
         )
         .await?;
@@ -433,6 +451,13 @@ pub async fn query_session_cleanup_expired(
 }
 
 /// Delete all sessions for an account, returning the deletion count.
+///
+/// Locks its rows in id order before it deletes them (`ORDER BY id FOR
+/// UPDATE`), as every multi-row delete of `auth_session` rows does — the
+/// cap's eviction, the expiry sweep, the revoke-all — so two of them reaching
+/// the same rows wait one on the other instead of deadlocking in the opposite
+/// orders their plans would otherwise walk. Twin of `fuz_app`'s
+/// `query_session_revoke_all_for_account`.
 ///
 /// # Errors
 ///
@@ -443,7 +468,8 @@ pub async fn query_session_revoke_all_for_account(
 ) -> Result<u64, tokio_postgres::Error> {
     client
         .execute(
-            "DELETE FROM auth_session WHERE account_id = $1",
+            "DELETE FROM auth_session
+             WHERE id IN (SELECT id FROM auth_session WHERE account_id = $1 ORDER BY id FOR UPDATE)",
             &[account_id],
         )
         .await

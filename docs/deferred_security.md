@@ -216,14 +216,6 @@ network, or `audit_log` needs pruning.
 
 ### Browser sessions
 
-- **Serializing concurrent session creators** — the cap's count / evict / insert
-  runs in one transaction but under Read Committed two creators each evict
-  against a stale count and both commit above the cap (same for the token cap;
-  both queries document it). Needs one lock per `(account, credential kind)`;
-  the oracle is a barrier-based Postgres test.
-- **A login across a password change** — `/login` doesn't re-read the hash it
-  verified before minting, so a verify overlapping a `/password` commit can mint
-  a session on the old password. Needs the insert to re-check the hash in-tx.
 - **A `__Host-` cookie prefix** — the default `fuz_session` name has none, so a
   sibling subdomain can plant one; the name is the consumer's to pass, and the
   default is a wire value both twins share.

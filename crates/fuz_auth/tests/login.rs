@@ -892,9 +892,8 @@ async fn login_beyond_the_cap_evicts_the_oldest_sessions() {
     //
     // Each login is its own transaction, so the `created_at` values are distinct and
     // the `id DESC` tie-breaker never engages here — this pins the cap, not the
-    // tie-break. It does **not** pin the concurrent-creator race: two simultaneous
-    // logins can each evict against a stale count and both commit, which a sequential
-    // test cannot observe (see `query_session_enforce_limit`'s race note).
+    // tie-break, nor concurrent logins, which take turns on the account row
+    // (`credential_mint_race.rs` pins that).
     //
     // The evicted session is also *closed*: the handler hands its hash to the
     // `ConnectionCloser` (and no other), so the connections it opened end with the

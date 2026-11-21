@@ -317,7 +317,11 @@ pub async fn query_api_token_list_for_account(
 /// caveat, as the session twin — see
 /// [`query_session_enforce_limit`](crate::session_queries::query_session_enforce_limit)
 /// for what it does and does not buy, and for why the transaction is
-/// necessary but not sufficient against concurrent creators.
+/// necessary but not sufficient against concurrent creators: the handler
+/// serializes them first, taking the account row `FOR NO KEY UPDATE`
+/// ([`query_account_lock_live`](crate::account_queries::query_account_lock_live)).
+/// The victims are locked in id order before the delete, as the revoke-all
+/// ([`query_revoke_all_api_tokens_for_account`]) locks its rows.
 ///
 /// # Errors
 ///
@@ -332,9 +336,14 @@ pub async fn query_api_token_enforce_limit(
             "DELETE FROM api_token
              WHERE id IN (
                SELECT id FROM api_token
-               WHERE account_id = $1
-               ORDER BY created_at DESC, id DESC
-               OFFSET $2
+               WHERE id IN (
+                 SELECT id FROM api_token
+                 WHERE account_id = $1
+                 ORDER BY created_at DESC, id DESC
+                 OFFSET $2
+               )
+               ORDER BY id
+               FOR UPDATE
              )
              RETURNING id",
             &[account_id, &max_tokens],
@@ -367,6 +376,12 @@ pub async fn query_revoke_api_token_for_account(
 
 /// Delete all API tokens for an account.
 ///
+/// Locks its rows in id order before it deletes them (`ORDER BY id FOR
+/// UPDATE`), as the cap's eviction ([`query_api_token_enforce_limit`]) does,
+/// so the two reaching the same rows wait one on the other instead of
+/// deadlocking in the opposite orders their plans would otherwise walk. Twin
+/// of `fuz_app`'s `query_revoke_all_api_tokens_for_account`.
+///
 /// # Errors
 ///
 /// Propagates `tokio_postgres::Error` from the underlying client.
@@ -375,7 +390,11 @@ pub async fn query_revoke_all_api_tokens_for_account(
     account_id: &uuid::Uuid,
 ) -> Result<u64, tokio_postgres::Error> {
     let count = client
-        .execute("DELETE FROM api_token WHERE account_id = $1", &[account_id])
+        .execute(
+            "DELETE FROM api_token
+             WHERE id IN (SELECT id FROM api_token WHERE account_id = $1 ORDER BY id FOR UPDATE)",
+            &[account_id],
+        )
         .await?;
     Ok(count)
 }

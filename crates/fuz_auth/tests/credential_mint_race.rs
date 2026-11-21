@@ -14,7 +14,9 @@
 //! with the credential revoked. And the lock is shown to serialize: a mint
 //! waits on an uncommitted change's row lock, and a change waits on an
 //! uncommitted mint's — so the change's revoke, which runs after its account
-//! write, reaches the session the mint inserted.
+//! write, reaches the session the mint inserted. Two mints of one account at
+//! its cap take turns: the second waits on the first's commit and then counts
+//! the first's row, so the account ends at the cap, not one over.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/credential_mint_race.db.test.ts`.
 //!
@@ -39,15 +41,16 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header::CONTENT_TYPE, header::COOKIE};
 use axum::response::Response;
 use futures::future::{BoxFuture, FutureExt};
+use fuz_auth::account_action_specs::DEFAULT_MAX_TOKENS;
 use fuz_auth::account_queries::{query_account_lock_verified, query_account_soft_delete};
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::role::ROLE_ADMIN;
 use fuz_auth::role_grant_schema::RoleGrantRow;
 use fuz_auth::{
     AccountActionContext, AccountActionSpecs, AccountRouteState, AccountRow, AuditEmitter,
-    ConnectionCloser, CredentialType, HashedPassword, NoopAuditPostCommit, NoopConnectionCloser,
-    PasswordHashError, PasswordHasher, RequestContext, create_capped_session, hash_session_token,
-    login_handler, password_handler,
+    ConnectionCloser, CredentialType, DEFAULT_MAX_SESSIONS, HashedPassword, NoopAuditPostCommit,
+    NoopConnectionCloser, PasswordHashError, PasswordHasher, RequestContext, create_capped_session,
+    hash_session_token, login_handler, password_handler,
 };
 use fuz_db::Pool;
 use serde_json::{Value, json};
@@ -284,10 +287,12 @@ async fn seed_session(pool: &Pool, account_id: &uuid::Uuid) -> String {
     hash_session_token(&session.token).as_str().to_owned()
 }
 
-/// Run `account_token_create` for `account_id` in a transaction of its own, as
-/// the dispatcher does once `session_hash`'s session has authorized it.
-async fn token_create(
+/// Run `account_token_create` for `account_id` in `tx`, as the dispatcher does
+/// once `session_hash`'s session has authorized it, leaving the commit to the
+/// caller.
+async fn token_create_in(
     pool: &Pool,
+    tx: &deadpool_postgres::Transaction<'_>,
     account_id: uuid::Uuid,
     session_hash: &str,
 ) -> Result<Value, fuz_http::JsonrpcError> {
@@ -311,9 +316,19 @@ async fn token_create(
     };
     let params =
         json!({ "name": "race", "scope": {"kind": "full"}, "lifetime": {"kind": "eternal"} });
+    AccountActionSpecs::dispatch("account_token_create", &params, &ctx, tx).await
+}
+
+/// Run `account_token_create` for `account_id` in a transaction of its own,
+/// committed when it succeeds.
+async fn token_create(
+    pool: &Pool,
+    account_id: uuid::Uuid,
+    session_hash: &str,
+) -> Result<Value, fuz_http::JsonrpcError> {
     let mut client = pool.get().await.unwrap();
     let tx = client.transaction().await.unwrap();
-    let result = AccountActionSpecs::dispatch("account_token_create", &params, &ctx, &tx).await;
+    let result = token_create_in(pool, &tx, account_id, session_hash).await;
     if result.is_ok() {
         tx.commit().await.unwrap();
     }
@@ -583,6 +598,40 @@ async fn a_delete_waits_on_an_uncommitted_mint_and_then_revokes_it() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_login_at_the_cap_waits_on_an_uncommitted_mint_and_then_evicts_past_it() {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
+    while session_count(&pool, &account_id).await < DEFAULT_MAX_SESSIONS {
+        seed_session(&pool, &account_id).await;
+    }
+
+    // a login's mint at the cap, uncommitted: the lock taken, its session
+    // inserted, the oldest evicted
+    let mut client = pool.get().await.unwrap();
+    let tx = client.transaction().await.unwrap();
+    assert!(
+        query_account_lock_verified(&tx, &account_id, &stored_hash(OLD_PASSWORD))
+            .await
+            .unwrap()
+    );
+    let minted = create_capped_session(&tx, &account_id).await.unwrap();
+    assert_eq!(minted.evicted.len(), 1, "the held mint evicts the oldest");
+    let (raced, waited) = race_against_commit(login(&state, "victim", OLD_PASSWORD), async {
+        tx.commit().await.unwrap();
+    })
+    .await;
+    assert!(waited, "the login's mint waits on the held mint's lock");
+    assert_eq!(raced.status, StatusCode::OK, "{:?}", raced.body);
+    assert_eq!(
+        session_count(&pool, &account_id).await,
+        DEFAULT_MAX_SESSIONS,
+        "the second mint's eviction counts the first's session"
+    );
+}
+
 // -- account_token_create -------------------------------------------------------
 
 fn assert_unauthenticated(result: Result<Value, fuz_http::JsonrpcError>, label: &str) {
@@ -769,5 +818,38 @@ async fn a_token_minted_by_a_session_later_logged_out_keeps_working() {
         token_count(&pool, &account_id).await,
         1,
         "the token outlives the logout"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_token_create_at_the_cap_waits_on_an_uncommitted_token_create_and_then_evicts_past_it() {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let session_hash = seed_session(&pool, &account_id).await;
+    while token_count(&pool, &account_id).await < DEFAULT_MAX_TOKENS {
+        token_create(&pool, account_id, &session_hash)
+            .await
+            .unwrap();
+    }
+
+    // a token mint at the cap, uncommitted: the lock taken, its token
+    // inserted, the oldest evicted
+    let mut client = pool.get().await.unwrap();
+    let tx = client.transaction().await.unwrap();
+    token_create_in(&pool, &tx, account_id, &session_hash)
+        .await
+        .unwrap();
+    let (result, waited) =
+        race_against_commit(token_create(&pool, account_id, &session_hash), async {
+            tx.commit().await.unwrap();
+        })
+        .await;
+    assert!(waited, "the token mint waits on the held mint's lock");
+    result.expect("the token create that waited mints");
+    assert_eq!(
+        token_count(&pool, &account_id).await,
+        DEFAULT_MAX_TOKENS,
+        "the second mint's eviction counts the first's token"
     );
 }
