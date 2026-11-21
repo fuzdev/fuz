@@ -601,27 +601,24 @@ The rules a change must keep:
   notifying each offer's live party (`queue_supersede_notifications` with
   its `SupersedeAudience`), and deletes the unclaimed invites its actors
   issued. Role grants are kept and come back with the undelete; superseded
-  offers, deleted invites and revoked credentials stay ended. The
-  last-admin guard (`query_count_active_accounts_with_global_role_locked`)
-  locks its rows `FOR NO KEY UPDATE` in account-id order, so no two of these
-  wait on each other in opposite orders, and an insert's foreign-key key
-  share on a counted row — which can only add an admin — never waits on
-  it. An accept locks both parties' accounts, lower id first
-  (`query_account_lock_for_offer_accept`: the recipient's `FOR NO KEY UPDATE`,
-  the grantor's `FOR SHARE` for an unscoped admin offer — every removal of a
-  global admin takes the grantor's account first: a revoke through
-  `query_account_lock_for_revoke`, a delete by writing it, a purge through
-  `query_account_lock_admins_for_purge`), then claims its offer and
-  its pending siblings in one id-ordered statement. Every transaction that
-  writes more than one offer row locks them all first, in id order
-  (`offer_rows_locked_in_id_order`; delete and purge, a revoke before its
-  grant update, scope teardown, the sweep) and writes only rows it holds:
-  accounts, then offers, then grants and actors, everywhere. A purge locks
-  every admin's account and its target's first — its cascade writes other
-  admins' grant rows — then, for an admin target, the guard. A server that
+  offers, deleted invites and revoked credentials stay ended. A server that
   creates offers through the query gets the rule; one that mints invites
   through `query_create_invite` for an issuer takes
   `query_account_lock_live_many` on the issuer first.
+- **One class order: accounts, then offers, then grants and actors**, each
+  in id order. The last-admin guard
+  (`query_count_active_accounts_with_global_role_locked`) locks its rows
+  `FOR NO KEY UPDATE` in account-id order, never blocking an insert's
+  foreign-key key share on a counted row (which can only add an admin). An
+  accept locks both parties' accounts, lower id first
+  (`query_account_lock_for_offer_accept`: the recipient's `FOR NO KEY UPDATE`,
+  and for an unscoped admin offer the grantor's `FOR SHARE`, under which it
+  reads the grantor's authority — every removal of a global admin takes that
+  row first), then claims its offer and its pending siblings in one
+  id-ordered statement. Every transaction that writes more than one offer
+  row locks them all first, in id order (`offer_rows_locked_in_id_order`:
+  delete and purge, a revoke before its grant update, scope teardown, the
+  sweep), and writes only rows it holds.
 - Every rate-limited attempt reserves its slot before it runs, and an attempt
   abandoned after its Argon2 work started is still charged.
 - `AuditEventType` is the spine-wide closed registry (auth and cell events);

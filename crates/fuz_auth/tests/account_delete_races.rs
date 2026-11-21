@@ -475,7 +475,7 @@ async fn lock_waiters(pool: &Pool) -> i64 {
 
 /// An offer between two admins and a third admin's delete never deadlock.
 ///
-/// Another holder of the recipient's row (a login's `FOR SHARE`) makes the
+/// Another holder of the recipient's row (an offer create's `FOR SHARE`) makes the
 /// guard of the third admin's delete stop at that row while holding the rows it
 /// locked before it — the grantor's, when it reaches the grantor first. The
 /// offer then runs into the guard. Locked in the guard's order, it waits holding
