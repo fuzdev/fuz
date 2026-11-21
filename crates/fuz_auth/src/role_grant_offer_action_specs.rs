@@ -403,8 +403,7 @@ async fn dispatch_method(
 /// on the post-commit drain (same seam as the audit fan-out) so a
 /// rolled-back tx never leaks a notification. The send itself is a
 /// non-blocking channel push; `Noop` when the consumer has no WS
-/// surface. Mirrors the TS `notification_sender.send_to_account` calls
-/// queued via `emit_after_commit` in `role_grant_offer_actions.ts`.
+/// surface. Twin of the TS `queue_offer_notification`.
 fn queue_offer_notification(
     ctx: &AuthenticatedActionContext<'_>,
     recipient: uuid::Uuid,
