@@ -132,9 +132,11 @@ recipe can both be green with a cell handler broken.
 `fuz_http`'s `request_header_conformance.json` and
 `request_target_conformance.json`, like `fuz_testing`'s
 `credential_conformance.json`, are byte-identical copies of fuz_app's tables,
-run here by each module's unit test. fuz_app's `conformance_table_copies`
-cross test, in the parity project, fails when a copy differs, so a row is
-edited in both repos; the nightly `cross-contract` workflow runs it.
+run here by each module's unit test. `fuz_testing`'s `db_invariants.sql` is a
+byte-identical copy too, generated in fuz_app and never edited here. fuz_app's
+`conformance_table_copies` cross test, in the parity project, fails when a
+copy differs, so a table row is edited in both repos; the nightly
+`cross-contract` workflow runs it.
 
 ## Known flakes
 

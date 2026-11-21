@@ -861,13 +861,21 @@ not a `fuz_auth` feature, so unification can't route it into production.
   the two copies differ, so a row is edited in both. `TESTING_DAEMON_TOKEN`,
   like any daemon token a test presents, is 43 base64url characters — the
   daemon leg discards any other shape before its compare.
+- `_testing_db_invariants` (`testing_db_invariants`) runs fuz_app's
+  database-invariant statement — the auth schema's end-state and
+  `audit_log` history checks — on a pooled client and answers the violating
+  rows, read-only and unaudited, so fuz_app's harness checks a spawned
+  backend after every test. `db_invariants.sql` beside it is generated in
+  fuz_app and copied here byte for byte (`include_str!`); edit it there,
+  never here.
 - The shared `#[ignore]` Postgres harness (./testing.md § Postgres suites),
   including `TestingTableLock` for driving races deterministically, and
   `assert_expected_schema_fixture`, a server's `/ready` fixture drift guard.
 - A `testing_*` server's toolkit wiring: `testing_backend_options` (the test
   hasher, limiters off, `startup_reset_hook`, in-flight audit tracking),
-  `require_daemon_token_from_env`, `testing_reset_specs` (`_testing_reset` +
-  `_testing_drain_effects`, over the runtime's daemon-token state) over
+  `require_daemon_token_from_env`, `testing_reset_specs` (`_testing_reset`,
+  `_testing_drain_effects` and `_testing_db_invariants`, over the runtime's
+  daemon-token state) over
   `truncate_reset_state` — the spine's `fuz_cell::CELL_DROP_TABLES` /
   `fuz_fact::FACT_DROP_TABLES` joined with the server's own tables — and
   `inert_app_backend` for router tests without a database. Each spine table

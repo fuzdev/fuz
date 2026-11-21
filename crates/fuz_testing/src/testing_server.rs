@@ -3,8 +3,8 @@
 //! For `fuz_actions::server`: the test backend options (the test hasher,
 //! limiters off, the startup schema reset as a pre-migration hook, in-flight
 //! audit tracking), the daemon-token credential it can't run without, and the
-//! `_testing_reset` + `_testing_drain_effects` pair with the domain truncate
-//! the reset runs.
+//! harness's backdoors — `_testing_reset`, `_testing_drain_effects` and
+//! `_testing_db_invariants` — with the domain truncate the reset runs.
 
 use std::sync::Arc;
 
@@ -46,14 +46,16 @@ pub fn testing_backend_options(daemon_token_state: SharedDaemonTokenState) -> Sp
     }
 }
 
-/// `_testing_reset` and `_testing_drain_effects`, the pair every `testing_*`
-/// server's extra specs start with.
+/// `_testing_reset`, `_testing_drain_effects` and `_testing_db_invariants`,
+/// the backdoors every `testing_*` server's extra specs start with — what
+/// `fuz_app`'s cross-process setups call around each test.
 ///
 /// The reset wipes the auth tables and seeds a fresh keeper as the runtime's
 /// daemon-token state, running `reset_state` (the server's domain state —
 /// [`truncate_reset_state`] over its tables) on the same transaction; the
 /// drain awaits the emitter's in-flight writes, a barrier under
-/// [`testing_backend_options`]' tracking.
+/// [`testing_backend_options`]' tracking; the invariants read answers the rows
+/// breaking a database invariant, which the setup checks after each test.
 ///
 /// # Errors
 ///
@@ -80,6 +82,7 @@ pub fn testing_reset_specs(
             reset_state,
         }),
         crate::create_testing_drain_effects_action_spec(Arc::clone(&runtime.audit_emitter)),
+        crate::create_testing_db_invariants_action_spec(),
     ])
 }
 

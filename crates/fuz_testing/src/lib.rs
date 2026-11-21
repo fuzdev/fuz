@@ -40,6 +40,7 @@ pub mod seed;
 pub mod table_lock;
 pub mod testing_action_manifest;
 pub mod testing_credential_read;
+pub mod testing_db_invariants;
 pub mod testing_drain;
 pub mod testing_flood_notifications;
 pub mod testing_migration_tracker;
@@ -76,6 +77,7 @@ pub use testing_credential_read::{
     TESTING_CREDENTIAL_READ_LINES_MAX, create_testing_credential_read_action_spec,
     run_testing_credential_read,
 };
+pub use testing_db_invariants::{DB_INVARIANTS_SQL, create_testing_db_invariants_action_spec};
 pub use testing_drain::create_testing_drain_effects_action_spec;
 pub use testing_flood_notifications::{
     TESTING_FLOOD_NOTIFICATION_METHOD, create_testing_flood_notifications_action_spec,
@@ -116,7 +118,8 @@ mod auth_gate_tests {
     use super::{
         TESTING_ACTION_AUTH, TestingArgon2idHasher, TestingResetOptions,
         create_testing_action_manifest_action_spec, create_testing_credential_read_action_spec,
-        create_testing_drain_effects_action_spec, create_testing_flood_notifications_action_spec,
+        create_testing_db_invariants_action_spec, create_testing_drain_effects_action_spec,
+        create_testing_flood_notifications_action_spec,
         create_testing_migration_tracker_action_spec, create_testing_mint_session_action_spec,
         create_testing_origin_check_action_spec, create_testing_put_fact_action_spec,
         create_testing_reset_action_spec, create_testing_room_evict_action_spec,
@@ -165,6 +168,7 @@ mod auth_gate_tests {
             create_testing_put_fact_action_spec(),
             create_testing_schema_snapshot_action_spec(),
             create_testing_migration_tracker_action_spec(),
+            create_testing_db_invariants_action_spec(),
             create_testing_flood_notifications_action_spec(),
             create_testing_origin_check_action_spec(),
             create_testing_credential_read_action_spec(test_keyring(), "fuz_session"),
@@ -193,7 +197,7 @@ mod auth_gate_tests {
     #[test]
     fn every_testing_spec_carries_the_daemon_token_gate() {
         let specs = all_testing_specs();
-        assert_eq!(specs.len(), 12, "every _testing_* spec must be covered");
+        assert_eq!(specs.len(), 13, "every _testing_* spec must be covered");
         for spec in &specs {
             assert!(
                 spec.method.starts_with("_testing_"),
@@ -214,7 +218,11 @@ mod auth_gate_tests {
     #[test]
     fn parameterless_reads_declare_a_void_input() {
         let specs = all_testing_specs();
-        for method in ["_testing_migration_tracker", "_testing_action_manifest"] {
+        for method in [
+            "_testing_migration_tracker",
+            "_testing_db_invariants",
+            "_testing_action_manifest",
+        ] {
             let spec = specs
                 .iter()
                 .find(|s| s.method == method)

@@ -733,8 +733,8 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // fact table on the reset's own transaction (before the auth-table wipe +
     // fresh-keeper re-seed), so a test never sees another test's cells or
     // facts — the set the TS spine binary empties — and dropping every room,
-    // silently, so no seat or watch outlives its test; and
-    // `_testing_drain_effects`.
+    // silently, so no seat or watch outlives its test; `_testing_drain_effects`;
+    // and `_testing_db_invariants`, the per-test invariant read.
     let truncate = fuz_testing::truncate_reset_state(
         &[fuz_cell::CELL_DROP_TABLES, fuz_fact::FACT_DROP_TABLES].concat(),
     );
