@@ -1,0 +1,121 @@
+# Checks the TS<->Rust wire contract: fuz_app's cross-backend suites run
+# against the Rust spine's test binary built from this checkout.
+#
+# `cross-contract` — checks out the public fuzdev/fuz_app at `main`, builds
+# `testing_spine_stub` from this repo, and runs fuz_app's
+# `cross_backend_rust_spine_stub`, `cross_backend_parity` and
+# `cross_backend_security` projects against it. Parity also byte-compares the
+# twin conformance tables (`conformance_table_copies`), so this workflow is that
+# check's gate too.
+#
+# Nightly and by hand, not on push or pull_request: that is a deliberate call
+# about Actions cost. A red run means fuz or fuz_app `main` drifted from the
+# other — re-run both sides locally to find which. The fuz_app ref is `main`, so
+# a change that spans both repos lands in fuz_app first.
+#
+# Run it by hand from the Actions tab with `workflow_dispatch`.
+
+name: cross-contract
+
+on:
+  schedule:
+    # Daily 05:43 UTC
+    - cron: '43 5 * * *'
+  # Allow running it by hand from the Actions tab.
+  workflow_dispatch:
+
+# Least privilege: the run only reads the repos.
+permissions:
+  contents: read
+
+jobs:
+  cross-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fuz_test
+          POSTGRES_PASSWORD: fuz_test
+          POSTGRES_DB: fuz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # The suites default to the workspace at ~/dev/fuz; point them at this
+    # checkout. Parity derives its two databases from the stub database URL, and
+    # setup creates them with `createdb` from PATH (the service user is a
+    # superuser).
+    env:
+      FUZ_RUST_SPINE_STUB_WORKSPACE_DIR: ${{ github.workspace }}/fuz
+      FUZ_TESTING_RUST_SPINE_STUB_DATABASE_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_app_test_rust_spine_stub
+
+    steps:
+      # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          path: fuz
+          persist-credentials: false
+
+      # Public, so no token is needed.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: fuzdev/fuz_app
+          ref: main
+          path: fuz_app
+          persist-credentials: false
+
+      # Installs the toolchain pinned in rust-toolchain.toml (see `check.yml`).
+      - name: Install Rust
+        working-directory: fuz
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          cargo --version
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuz
+
+      - name: Use Node.js 24.14
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24.14'
+          cache: npm
+          cache-dependency-path: fuz_app/package-lock.json
+
+      # Prebuilt with `--locked` so a stale Cargo.lock fails loud here; the
+      # suites' own setup then rebuilds as a no-op.
+      - name: Build the spine test binary
+        working-directory: fuz
+        run: cargo build --locked -p testing_spine_stub --bin testing_spine_stub --profile cross-test
+
+      - name: Install fuz_app dependencies
+        working-directory: fuz_app
+        run: npm ci
+
+      - name: Sync SvelteKit
+        working-directory: fuz_app
+        run: npx svelte-kit sync
+
+      # The three runs are sequential steps, never parallel jobs: the spine
+      # binaries bind fixed ports (1177, 1181 and 1182), so concurrent runs
+      # would collide. `npm run` puts `node_modules/.bin` on PATH: the TS leg
+      # spawns `gro run`.
+      - name: Rust spine stub suite
+        working-directory: fuz_app
+        run: npm run test:cross:rust-spine-stub
+
+      - name: Parity suite
+        working-directory: fuz_app
+        run: npm run test:cross:parity
+
+      - name: Security suite
+        working-directory: fuz_app
+        run: npm run test:cross:security

@@ -30,6 +30,14 @@ manual dispatch:
 - `install-test` — `scripts/install-test.sh` and its mutation gate
   `scripts/install-test-mutants.sh` (`scripts/install-test/README.md`).
 
+`.github/workflows/cross-contract.yml` runs nightly and by manual dispatch,
+never on a push: it checks out fuz_app's `main` beside this checkout, builds
+`testing_spine_stub` with `--locked`, and runs fuz_app's
+`test:cross:rust-spine-stub`, `test:cross:parity` and `test:cross:security`
+against a `postgres:18` service (§ Cross-backend suite). A red run means fuz
+or fuz_app `main` drifted from the other; a change spanning both repos lands
+in fuz_app first.
+
 `fuz_eval`'s `#[ignore]` real-fgro suites run in no CI job: they need an
 `fgro` snapshot build, which CI has no way to get yet. Locally:
 `FUZ_EVAL_TEST_FGRO=/abs/path/to/fgro cargo test -p fuz_eval --test real_fgro -- --ignored`
@@ -125,7 +133,8 @@ recipe can both be green with a cell handler broken.
 `request_target_conformance.json`, like `fuz_testing`'s
 `credential_conformance.json`, are byte-identical copies of fuz_app's tables,
 run here by each module's unit test. fuz_app's `conformance_table_copies`
-cross test fails when a copy differs, so a row is edited in both repos.
+cross test, in the parity project, fails when a copy differs, so a row is
+edited in both repos; the nightly `cross-contract` workflow runs it.
 
 ## Known flakes
 
