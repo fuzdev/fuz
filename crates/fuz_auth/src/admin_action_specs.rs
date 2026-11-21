@@ -49,7 +49,9 @@ use crate::params_helpers::{
     require_text_len,
 };
 use crate::role::{ROLE_ADMIN, ROLE_KEEPER, RoleRegistry};
-use crate::role_grant_offer_action_specs::emit_supersede_audits;
+use crate::role_grant_offer_action_specs::{
+    SupersedeAudience, SupersedeCause, emit_supersede_audits, queue_supersede_notifications,
+};
 use crate::role_grant_offer_queries::{
     query_role_grant_offer_supersede_incoming, query_role_grant_offer_supersede_outgoing,
 };
@@ -895,14 +897,17 @@ async fn emit_actor_lifecycle_audits<'a>(
 }
 
 /// The `role_grant_offer_supersede` reason when an account's removal ends a
-/// pending offer it made or one made to it; `cause_id` is the removed account.
+/// pending offer it made or one made to it; the audit row's `cause_id` is the
+/// removed account.
 const SUPERSEDE_REASON_ACCOUNT_DELETED: &str = "account_deleted";
 
 /// Supersede every pending offer the removed account's actors made, with its
 /// audit rows — the cascade a revoke runs on the revokee's offers. An offer
 /// records no authority, so one outliving its grantor's account would still
-/// confer on accept. No supersede notification: a cascade notifies the
-/// grantor, and the grantor's connections close with its account.
+/// confer on accept. Each recipient is told, sent its grantor's actor as
+/// `cause_id` — an id it already holds, where the audit row's is the removed
+/// account's; the grantor is the removed account, whose connections close with
+/// it.
 async fn cancel_outgoing_offers(
     ctx: &AuthenticatedActionContext<'_>,
     db: &(impl deadpool_postgres::GenericClient + ?Sized),
@@ -920,13 +925,25 @@ async fn cancel_outgoing_offers(
         SUPERSEDE_REASON_ACCOUNT_DELETED,
         target_account_id,
     )
-    .await
+    .await?;
+    queue_supersede_notifications(
+        ctx,
+        &superseded,
+        SUPERSEDE_REASON_ACCOUNT_DELETED,
+        SupersedeAudience {
+            grantor: None,
+            recipient: Some(SupersedeCause::FromActor),
+        },
+    );
+    Ok(())
 }
 
-/// Supersede every pending offer made to the deleted account, account- or
-/// actor-addressed, audited as the outgoing cascade is and, like it, with no
-/// notification. An undelete restores the account, so an offer left pending
-/// through the delete would come back with it and could be accepted.
+/// Supersede every pending offer made to the removed account, account- or
+/// actor-addressed, audited as the outgoing cascade is, each grantor told,
+/// sent the removed account as `cause_id` (the offer's `to_account_id`). An
+/// undelete restores a deleted account, so an offer left pending through the
+/// delete would come back with it and could be accepted; a purge's cascade
+/// would take the offers with no audit row and no word to their grantors.
 async fn cancel_incoming_offers(
     ctx: &AuthenticatedActionContext<'_>,
     db: &(impl deadpool_postgres::GenericClient + ?Sized),
@@ -942,7 +959,17 @@ async fn cancel_incoming_offers(
         SUPERSEDE_REASON_ACCOUNT_DELETED,
         target_account_id,
     )
-    .await
+    .await?;
+    queue_supersede_notifications(
+        ctx,
+        &superseded,
+        SUPERSEDE_REASON_ACCOUNT_DELETED,
+        SupersedeAudience {
+            grantor: Some(SupersedeCause::Id(target_account_id)),
+            recipient: None,
+        },
+    );
+    Ok(())
 }
 
 /// Delete the unclaimed invites the removed account's actors issued, each
@@ -988,7 +1015,8 @@ async fn void_unclaimed_invites(
 /// `credential_type_required` 403, ahead of the keeper / last-admin guards, so
 /// a leaked token can't end the account it belongs to. Tombstones
 /// the account + its actor(s), supersedes the pending offers its actors made
-/// and the ones made to it, revokes all sessions/tokens, deletes the unclaimed
+/// and the ones made to it (each offer's other party told), revokes all
+/// sessions/tokens, deletes the unclaimed
 /// invites its actors issued, closes live
 /// sockets, and emits `account_delete` plus one `actor_delete` per
 /// soft-deleted actor — each carrying its identity snapshot. Auth
@@ -1090,9 +1118,11 @@ async fn handle_account_delete(
 }
 
 /// Hard-purge an account (keeper-gated, irreversible). Fail-loud:
-/// requires `confirm: true` and emits a WARN. Supersedes the pending offers
-/// its actors made, audited, and deletes the unclaimed invites they issued,
-/// before the cascade deletes the one and orphans the other. Snapshots identity into
+/// requires `confirm: true` and emits a WARN. Supersedes the account's pending
+/// offers both ways, audited and each offer's other party told, as a delete
+/// does, and deletes the unclaimed invites its actors issued, before the
+/// cascade deletes the one and orphans the other — the audit rows and the
+/// notifications are what remain of the offers. Snapshots identity into
 /// `account_purge` + per-actor `actor_purge` before the cascading delete
 /// removes the rows — the `audit_log` identity columns carry no FK, so
 /// the purged ids survive on historical rows and the snapshots name them.
@@ -1141,8 +1171,11 @@ async fn handle_account_purge(
         .map_err(|e| internal_error_with_source("actor list failed", &e))?;
 
     // Before the cascade, whose `ON DELETE CASCADE` would take the offers
-    // with no audit row.
+    // with no audit row and no notification, the ones the account made and
+    // the ones made to it. After the account row: an offer create from or to
+    // the account takes that row first, so it has committed or waits.
     cancel_outgoing_offers(ctx, db, target_account_id, &actors).await?;
+    cancel_incoming_offers(ctx, db, target_account_id).await?;
     // Before the cascade too: `invite.created_by` is `ON DELETE SET NULL`, so
     // the cascade would leave the account's unclaimed invites usable.
     void_unclaimed_invites(ctx, db, &actors).await?;

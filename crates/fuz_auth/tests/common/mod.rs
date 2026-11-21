@@ -35,8 +35,8 @@ use std::sync::Arc;
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::{
     AUTH_MIGRATIONS, AccountRow, ActorRow, AuditEmitter, AuthenticatedActionContext,
-    ConnectionCloser, CredentialType, NoopAuditPostCommit, NoopConnectionCloser,
-    NoopNotificationSender, NotificationSender,
+    CollectingAuditPostCommit, ConnectionCloser, CredentialType, NoopAuditPostCommit,
+    NoopConnectionCloser, NoopNotificationSender, NotificationSender,
 };
 use fuz_db::Pool;
 use fuz_testing::{TestingDbOptions, fresh_test_db_pool};
@@ -267,6 +267,50 @@ pub fn ctx<'a>(
 pub fn noop_notification_sender() -> &'static Arc<dyn NotificationSender> {
     static SENDER: std::sync::OnceLock<Arc<dyn NotificationSender>> = std::sync::OnceLock::new();
     SENDER.get_or_init(|| Arc::new(NoopNotificationSender))
+}
+
+/// A [`NotificationSender`] that records every send — the target account and
+/// the frame parsed back to JSON — so a test reads what a handler's post-commit
+/// drain sent, in order.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+#[derive(Debug, Default)]
+pub struct RecordingNotificationSender {
+    sent: parking_lot::Mutex<Vec<(uuid::Uuid, Value)>>,
+}
+
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+impl RecordingNotificationSender {
+    /// Take every send recorded so far, in order, leaving none.
+    pub fn take(&self) -> Vec<(uuid::Uuid, Value)> {
+        std::mem::take(&mut *self.sent.lock())
+    }
+}
+
+impl NotificationSender for RecordingNotificationSender {
+    fn send_to_account(&self, account_id: uuid::Uuid, message: &str) -> usize {
+        let frame = serde_json::from_str(message).expect("a notification frame is JSON");
+        self.sent.lock().push((account_id, frame));
+        1
+    }
+}
+
+/// [`ctx`] with a post-commit that collects the handler's queued effects and
+/// a sender of the test's own — a test that observes fan-out runs the
+/// handler, drains `post_commit` as the dispatcher would after its commit,
+/// then reads the sender.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+pub fn ctx_observed<'a>(
+    auth: &'a RequestActorContext,
+    audit: &'a Arc<AuditEmitter>,
+    closer: &'a Arc<dyn ConnectionCloser>,
+    post_commit: &'a CollectingAuditPostCommit,
+    notification_sender: &'a Arc<dyn NotificationSender>,
+) -> AuthenticatedActionContext<'a> {
+    AuthenticatedActionContext {
+        post_commit,
+        notification_sender,
+        ..ctx(auth, audit, closer)
+    }
 }
 
 /// [`fuz_testing::budgeted_pool`] on the suite's database: `checkouts`

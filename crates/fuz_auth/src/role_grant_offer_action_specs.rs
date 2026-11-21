@@ -68,9 +68,10 @@ use fuz_http::{
 /// scope_kind, scope_id, reason }` for revoked.
 ///
 /// `received` → recipient on create; `retracted` → recipient; `accepted`
-/// / `declined` → grantor; `supersede` (one per superseded sibling) →
-/// each sibling's grantor; `revoked` → revokee, sent by the admin
-/// `role_grant_revoke` action, whose method it doesn't share.
+/// / `declined` → grantor; `supersede` → each live party of an offer a
+/// cascade ended but the one its answer or socket close covers
+/// (`queue_supersede_notifications`); `revoked` → revokee, sent by the
+/// admin `role_grant_revoke` action, whose method it doesn't share.
 pub const ROLE_GRANT_OFFER_RECEIVED_METHOD: &str = "role_grant_offer_received";
 pub const ROLE_GRANT_OFFER_RETRACTED_METHOD: &str = "role_grant_offer_retracted";
 pub const ROLE_GRANT_OFFER_ACCEPTED_METHOD: &str = "role_grant_offer_accepted";
@@ -424,34 +425,77 @@ fn queue_offer_notification(
     }));
 }
 
-/// Fan out a `role_grant_offer_supersede` notification to each superseded
-/// sibling's *grantor* (`sibling.from_account_id` off the query
-/// RETURNING — never the audit `target_account`). `reason` is
-/// `"sibling_accepted"` (accept path) or `"role_grant_revoked"` (revoke
-/// path); `cause_id` is the accepted offer id or the revoked `role_grant`
-/// id respectively.
+/// The `cause_id` a party of a superseded offer is sent: an id the cascade
+/// names (`Id` — the accepted offer, the revoked `role_grant`, the removed
+/// account), or the offer's own grantor actor (`FromActor`, an id its
+/// recipient already holds). Twin of the TS `SupersedeCause`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SupersedeCause {
+    /// An id the cascade names.
+    Id(uuid::Uuid),
+    /// The superseded offer's `from_actor_id`.
+    FromActor,
+}
+
+impl SupersedeCause {
+    const fn cause_id(self, offer: &SupersededOffer) -> uuid::Uuid {
+        match self {
+            Self::Id(id) => id,
+            Self::FromActor => offer.offer.from_actor_id,
+        }
+    }
+}
+
+/// Which parties of a superseded offer a cascade tells, and the `cause_id`
+/// each is sent; `None` leaves that party out. A party the cascade's own
+/// answer covers (the accepting recipient) or whose account it removes (its
+/// connections close) is left out by the call site, which knows which side
+/// that party is on. A recipient told of its grantor's account removal is
+/// sent the grantor's actor, never the account id, which no recipient sees
+/// otherwise. Twin of the TS `SupersedeAudience`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SupersedeAudience {
+    /// The grantor's cause (`from_account_id` is told), or `None`.
+    pub(crate) grantor: Option<SupersedeCause>,
+    /// The recipient's cause (`to_account_id` is told), or `None`.
+    pub(crate) recipient: Option<SupersedeCause>,
+}
+
+/// Fan out a `role_grant_offer_supersede` notification to the parties of
+/// each superseded offer `audience` names, each with its own `cause_id` —
+/// the grantor (`from_account_id` off the query RETURNING) and the
+/// recipient (`offer.to_account_id`). Sent in the cascade's row order,
+/// which is the order of its audit rows, each offer's parties together and
+/// its grantor ahead of its recipient — one fixed order, so both spines send
+/// a cascade's frames alike. `reason` is `"sibling_accepted"`,
+/// `"role_grant_revoked"`, or `"account_deleted"`. Twin of the TS
+/// `queue_supersede_notifications`.
 ///
 /// `pub(crate)` as the notification half of the supersede fan-out pair —
-/// [`emit_supersede_audits`] is the audit half. Wiring it into
-/// `self_service_role_action_specs`'s revoke cascade is a deliberate
-/// open decision, not a reachability problem (see the TODO there).
+/// [`emit_supersede_audits`] is the audit half.
 pub(crate) fn queue_supersede_notifications(
     ctx: &AuthenticatedActionContext<'_>,
-    siblings: &[SupersededOffer],
+    superseded: &[SupersededOffer],
     reason: &'static str,
-    cause_id: uuid::Uuid,
+    audience: SupersedeAudience,
 ) {
-    for sibling in siblings {
-        queue_offer_notification(
-            ctx,
-            sibling.from_account_id,
-            ROLE_GRANT_OFFER_SUPERSEDE_METHOD,
-            &serde_json::json!({
-                "offer": &sibling.offer,
-                "reason": reason,
-                "cause_id": cause_id,
-            }),
-        );
+    for offer in superseded {
+        for (party, cause) in [
+            (offer.from_account_id, audience.grantor),
+            (offer.offer.to_account_id, audience.recipient),
+        ] {
+            let Some(cause) = cause else { continue };
+            queue_offer_notification(
+                ctx,
+                party,
+                ROLE_GRANT_OFFER_SUPERSEDE_METHOD,
+                &serde_json::json!({
+                    "offer": &offer.offer,
+                    "reason": reason,
+                    "cause_id": cause.cause_id(offer),
+                }),
+            );
+        }
     }
 }
 
@@ -977,7 +1021,8 @@ async fn emit_accept_audits(
     // the accepted offer). Recipient ids ride on the query RETURNING —
     // `result.from_account_id` (lead grantor) and each
     // `sibling.from_account_id` (sibling grantor) — never the audit
-    // `target_account` (which is the accepting account).
+    // `target_account` (which is the accepting account). The siblings'
+    // recipient is the caller, whose answer lists `superseded_offer_ids`.
     queue_offer_notification(
         ctx,
         result.from_account_id,
@@ -988,7 +1033,10 @@ async fn emit_accept_audits(
         ctx,
         &result.superseded_offers,
         "sibling_accepted",
-        result.offer.id,
+        SupersedeAudience {
+            grantor: Some(SupersedeCause::Id(result.offer.id)),
+            recipient: None,
+        },
     );
     Ok(())
 }
@@ -1369,9 +1417,11 @@ async fn emit_revoke_audits(
     // global grant, every key present), and the
     // closer (`revoked_by`) is deliberately omitted (the revokee
     // doesn't need the admin's identity; the account is implicit in the
-    // send target). Each superseded sibling's *grantor* learns their
-    // pending offer was obsoleted (`reason: 'role_grant_revoked'`,
-    // `cause_id` = the revoked role_grant).
+    // send target). Both parties of each superseded offer learn it was
+    // obsoleted (`reason: 'role_grant_revoked'`, `cause_id` = the revoked
+    // role_grant): the revokee is the recipient of its incoming siblings and
+    // the grantor of its outgoing offers, and the other party of each is
+    // told as well.
     queue_offer_notification(
         ctx,
         target_account_id,
@@ -1384,11 +1434,15 @@ async fn emit_revoke_audits(
             "reason": reason,
         }),
     );
+    let revoked_grant = Some(SupersedeCause::Id(result.id));
     queue_supersede_notifications(
         ctx,
         &result.superseded_offers,
         "role_grant_revoked",
-        result.id,
+        SupersedeAudience {
+            grantor: revoked_grant,
+            recipient: revoked_grant,
+        },
     );
     Ok(())
 }

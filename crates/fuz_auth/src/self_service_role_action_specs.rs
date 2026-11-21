@@ -38,7 +38,9 @@ use crate::credential_type::CredentialGate;
 use crate::name_schema::is_valid_name;
 use crate::params_helpers::parse_role_param;
 use crate::role::{RoleRegistryError, is_builtin_role};
-use crate::role_grant_offer_action_specs::emit_supersede_audits;
+use crate::role_grant_offer_action_specs::{
+    SupersedeAudience, SupersedeCause, emit_supersede_audits, queue_supersede_notifications,
+};
 use crate::role_grant_offer_queries::query_revoke_role_grant;
 use fuz_http::{
     InputShape, JsonrpcError, forbidden, internal_error_with_source, invalid_input_params,
@@ -244,14 +246,11 @@ async fn handle_self_service_role_set(
     // Supersede cascade — `query_revoke_role_grant` marks any pending offers
     // for the same `(account, role, scope)` superseded as a side effect.
     // A self-service-only role can't be offered (offer creation gates on the
-    // role's `grant_paths`), so this is empty in practice; emit the forensic
-    // audit per sibling for completeness when an admin-grantable role is also
-    // self-service-eligible.
-    //
-    // TODO: the WS supersede notification (grantor inbox push) is omitted —
-    // a self-service global role realistically has no pending offers, and
-    // superseded siblings surface on the grantor's next refresh.
-    // `queue_supersede_notifications` is `pub(crate)` if that changes.
+    // role's `grant_paths`), so this is empty unless an admin-grantable role
+    // is also self-service-eligible. Each sibling gets its forensic row, and
+    // both its parties are told, as the admin revoke tells them: the recipient
+    // is the caller, but its answer lists no offers, so its other connections
+    // learn of them here.
     emit_supersede_audits(
         ctx,
         db,
@@ -260,6 +259,16 @@ async fn handle_self_service_role_set(
         result.id,
     )
     .await?;
+    let revoked_grant = Some(SupersedeCause::Id(result.id));
+    queue_supersede_notifications(
+        ctx,
+        &result.superseded_offers,
+        "role_grant_revoked",
+        SupersedeAudience {
+            grantor: revoked_grant,
+            recipient: revoked_grant,
+        },
+    );
 
     Ok(serde_json::json!({"ok": true, "enabled": false, "changed": true}))
 }

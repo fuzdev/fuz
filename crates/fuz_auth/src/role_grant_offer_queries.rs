@@ -1370,8 +1370,9 @@ pub async fn query_revoke_role_grant(
 /// (`account_delete` / `account_purge`, every actor of the account) end the
 /// grantor's outgoing pending offers in the same transaction. Each row carries
 /// the grantor's `account_id`, as every supersede cascade's does. The caller
-/// emits a `role_grant_offer_supersede` audit per entry, and the revoke caller
-/// also sends the supersede notification. Mirrors TS `query_role_grant_offer_supersede_outgoing`.
+/// emits a `role_grant_offer_supersede` audit per entry and queues its
+/// notifications (`queue_supersede_notifications`). Mirrors TS
+/// `query_role_grant_offer_supersede_outgoing`.
 ///
 /// # Errors
 ///
@@ -1400,7 +1401,7 @@ pub async fn query_role_grant_offer_supersede_outgoing(
 }
 
 /// Supersede every pending offer **made to** `to_account_id` — the
-/// recipient-side cascade of an account delete.
+/// recipient-side cascade of an account delete or purge.
 ///
 /// An undelete restores the account, so an offer left pending through the
 /// delete would come back with it and could then be accepted; superseding it
@@ -1408,7 +1409,8 @@ pub async fn query_role_grant_offer_supersede_outgoing(
 /// `to_account_id` alone covers the actor-addressed offers too: an offer's
 /// `to_actor_id` is bound to its `to_account_id` at create. Each row carries
 /// the grantor's `account_id`, as every supersede cascade's does; the caller
-/// emits a `role_grant_offer_supersede` audit per entry. Mirrors TS
+/// emits a `role_grant_offer_supersede` audit per entry and queues its
+/// notifications (`queue_supersede_notifications`). Mirrors TS
 /// `query_role_grant_offer_supersede_incoming`.
 ///
 /// # Errors
@@ -1455,9 +1457,10 @@ pub struct RevokeForScopeResult {
     /// One entry per `role_grant` revoked at the scope. Empty when none were active.
     pub revoked: Vec<RevokedGrantAtScope>,
     /// Every pending offer at the scope, superseded in the same cascade. Each
-    /// carries its grantor's `from_account_id` for supersede-notification
-    /// fan-out. The caller emits a `role_grant_offer_supersede` audit per entry
-    /// (`reason: 'scope_destroyed'`, `cause_id: <destroyed scope row id>`).
+    /// carries its grantor's `from_account_id`, as every supersede cascade's
+    /// does. The caller emits a `role_grant_offer_supersede` audit per entry
+    /// (`reason: 'scope_destroyed'`, `cause_id: <destroyed scope row id>`); no
+    /// notification carries that reason, so a scope teardown tells no one.
     pub superseded_offers: Vec<SupersededOffer>,
 }
 

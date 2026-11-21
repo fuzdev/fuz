@@ -594,9 +594,10 @@ The rules a change must keep:
   `GrantorNotActive`) — a deleted recipient is refused exactly as a missing
   one; `invite_create` locks its issuer before its insert. An account
   delete, and a purge, supersedes the pending offers made by the account
-  and deletes the unclaimed invites its actors issued; a delete also
-  supersedes the pending offers made to it (a purge's cascade removes
-  those). Role grants are kept and come back with the undelete; superseded
+  and those made to it — a purge before its cascade, so each is audited —
+  notifying each offer's live party (`queue_supersede_notifications` with
+  its `SupersedeAudience`), and deletes the unclaimed invites its actors
+  issued. Role grants are kept and come back with the undelete; superseded
   offers, deleted invites and revoked credentials stay ended. The
   last-admin guard (`query_count_active_accounts_with_global_role_locked`)
   locks its rows `FOR NO KEY UPDATE` in account-id order, so no two of these
