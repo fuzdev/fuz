@@ -328,7 +328,8 @@ impl AuditEmitter {
     /// effect fan-outs of every dispatch built over this emitter.
     ///
     /// A listener or post-commit effect must never await this drain: it runs
-    /// on a tracked task, so it would wait on itself.
+    /// on a tracked task, where the drain returns at once, so it would wait
+    /// for nothing.
     ///
     /// Waits until no tracked write is outstanding, so a write that starts
     /// while the drain is waiting (an emit from a post-commit effect) is

@@ -76,7 +76,7 @@ impl Harness {
         Self::start_with(
             registry,
             identity,
-            crate::ws_endpoint::WsLoopOptions::default(),
+            crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
             build_dispatch,
         )
     }
@@ -263,7 +263,7 @@ fn start_with_receive_timeout(receive_timeout: Option<Duration>) -> Harness {
         crate::ConnectionIdentity::default(),
         crate::ws_endpoint::WsLoopOptions {
             receive_timeout,
-            ..crate::ws_endpoint::WsLoopOptions::default()
+            ..crate::ws_endpoint::WsLoopOptions::new(Arc::default())
         },
         |_, _| streaming_dispatch(None),
     )
@@ -410,7 +410,7 @@ async fn an_expired_credential_closes_with_4001_credential_expired() {
         },
         crate::ws_endpoint::WsLoopOptions {
             credential_deadline: Some(std::time::Instant::now() + Duration::from_millis(300)),
-            ..crate::ws_endpoint::WsLoopOptions::default()
+            ..crate::ws_endpoint::WsLoopOptions::new(Arc::default())
         },
         |_, id| {
             conn_id = Some(id);

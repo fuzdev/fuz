@@ -39,7 +39,9 @@ use serde_json::Value;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio_util::sync::CancellationToken;
 
-use fuz_http::{Classified, SHUTDOWN_CLOSE_TIMEOUT, classify, error_response, jsonrpc_error};
+use fuz_http::{
+    BackgroundWrites, Classified, SHUTDOWN_CLOSE_TIMEOUT, classify, error_response, jsonrpc_error,
+};
 
 use crate::connection::{CloseReason, Connection, ConnectionReceiver, NotAdmitted};
 use crate::connection_registry::ConnectionRegistry;
@@ -909,10 +911,13 @@ impl std::fmt::Debug for WsDispatchInput<'_> {
 /// What ends one connection's loop besides its client and the registry —
 /// the per-connection argument to [`run_ws_connection`].
 ///
-/// [`Default`] ends it on neither: no credential deadline and no receive
-/// timeout. `fuz_actions::register_action_ws` builds one per socket, with the
-/// router's receive timeout (60 s unless the consumer sets its own).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// The tracker is required — a dispatch let go past its commit finishes on
+/// it, so it must be the one the server drains. [`Self::new`] ends the loop on
+/// neither of the others: no credential deadline and no receive timeout.
+/// `fuz_actions::register_action_ws` builds one per socket, with the router's
+/// receive timeout (60 s unless the consumer sets its own) and the server's
+/// tracker.
+#[derive(Debug, Clone)]
 pub struct WsLoopOptions {
     /// When the credential the socket was opened with expires
     /// ([`fuz_auth::ResolvedAuth::credential_deadline`]). The loop closes the
@@ -937,6 +942,26 @@ pub struct WsLoopOptions {
     /// on a tick of half the timeout (at least 100 ms), so a silent socket
     /// closes between one and one and a half timeouts in. `None` never closes.
     pub receive_timeout: Option<Duration>,
+    /// The server's tracker of detached writes. Each dispatch runs wrapped
+    /// over it ([`BackgroundWrites::finish_past_commit`]), so a dispatch the
+    /// loop lets go of once its commit has started — the loop ending for any
+    /// reason — finishes on it instead: its post-commit effects run and the
+    /// shutdown drain waits for them. One dropped before its first commit
+    /// rolls back.
+    pub background_writes: Arc<BackgroundWrites>,
+}
+
+impl WsLoopOptions {
+    /// Options over `background_writes` — the server's tracker — with no
+    /// credential deadline and no receive timeout.
+    #[must_use]
+    pub const fn new(background_writes: Arc<BackgroundWrites>) -> Self {
+        Self {
+            credential_deadline: None,
+            receive_timeout: None,
+            background_writes,
+        }
+    }
 }
 
 /// The receive-silence check of [`WsLoopOptions::receive_timeout`]: when the
@@ -1106,7 +1131,9 @@ async fn receive_silence_expired(silence: &mut Option<ReceiveSilence>) {
 /// - Final `signal.cancel()` + `remove_connection` + `drain_connection`
 ///   on exit, on every path — any still-pending server-initiated request on
 ///   this socket resolves `PeerError::ConnectionGone`, and the in-flight
-///   dispatches are dropped before the close frame is written.
+///   dispatches are let go before the close frame is written: one before its
+///   first commit is dropped and rolls back, one whose commit has started
+///   finishes on [`WsLoopOptions::background_writes`].
 /// - **The credential deadline** ([`WsLoopOptions::credential_deadline`]) —
 ///   when it passes, the loop ends and closes the socket with 4001 and
 ///   [`WS_CLOSE_CREDENTIAL_EXPIRED_REASON`]; the teardown above runs as for
@@ -1242,9 +1269,12 @@ async fn run_ws_loop<S, R>(
     // future pushed here and polled as a third `select!` arm, so dispatches
     // run concurrently per socket — the natural interleaving the TS event
     // loop already gives the twin. The set is dropped on loop exit, so an
-    // in-flight handler is cancelled with the socket (no detached task) and
-    // its transaction rolls back — at shutdown too, where the TS twin instead
-    // waits for an in-flight WS handler and refuses its reply.
+    // in-flight handler is cancelled with the socket and its transaction
+    // rolls back — at shutdown too, where the TS twin instead waits for an
+    // in-flight WS handler and refuses its reply. A dispatch whose commit has
+    // started is the exception: each runs wrapped over the server's tracker
+    // (`BackgroundWrites::finish_past_commit`), so dropping it there hands it
+    // to the tracker to finish, its post-commit effects included.
     //
     // Each future yields a [`DispatchDone`] — the id lets the completion arm
     // drop the request's entry from `signals` (so a late `cancel` for a
@@ -1434,7 +1464,7 @@ async fn run_ws_loop<S, R>(
                         let params = params.clone();
                         let reply_owed = Arc::new(ReplyOwed::default());
                         owed.push(Arc::clone(&reply_owed));
-                        inflight.push(Box::pin(async move {
+                        inflight.push(Box::pin(options.background_writes.finish_past_commit(async move {
                             let notify_closure = ws_notify_for_connection(registry, conn_id);
                             let input = WsDispatchInput {
                                 method: &method,
@@ -1446,7 +1476,7 @@ async fn run_ws_loop<S, R>(
                             };
                             let response = dispatch(input).await;
                             DispatchDone { request_id: id, response, reply_owed }
-                        }));
+                        })));
                     }
                     Classified::Response { id, outcome } => {
                         // Inbound reply to a server-initiated request.
@@ -1513,7 +1543,9 @@ async fn run_ws_loop<S, R>(
     pending.drain_connection(conn_id);
     // The in-flight dispatches go now, not when this function returns: none
     // is polled again, and what one holds (a pooled client) must not wait
-    // out the close write and its linger.
+    // out the close write and its linger. One before its first commit is
+    // cancelled and rolls back; one whose commit has started finishes on the
+    // server's tracker (`WsLoopOptions::background_writes`).
     drop(inflight);
     // best-effort, both — the client may already be gone, and past a
     // deadline the socket drops without the frame

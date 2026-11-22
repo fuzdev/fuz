@@ -121,7 +121,7 @@ impl Harness {
                     notify_rx,
                     pending,
                     dispatch,
-                    crate::ws_endpoint::WsLoopOptions::default(),
+                    crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
                 )
                 .await;
                 drop(guard);

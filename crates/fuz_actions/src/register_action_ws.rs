@@ -673,6 +673,7 @@ async fn ws_handler(
         let loop_options = WsLoopOptions {
             credential_deadline: resolved.credential_deadline,
             receive_timeout,
+            background_writes: Arc::clone(route.dispatch.audit.background_writes()),
         };
 
         // Build the per-socket dispatch closure.

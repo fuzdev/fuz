@@ -77,7 +77,7 @@ pub mod simple_request;
 // === detached writes, drained at shutdown ===
 pub mod background_writes;
 
-pub use background_writes::BackgroundWrites;
+pub use background_writes::{BackgroundWrites, FinishPastCommit};
 
 // === JSON-RPC envelope + errors ===
 pub mod jsonrpc;

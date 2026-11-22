@@ -205,6 +205,10 @@ pub(crate) fn pool_config(database_url: &str) -> Result<Config, DbError> {
 /// A deliberate recovery — `ROLLBACK TO SAVEPOINT` after a failed statement —
 /// leaves the transaction healthy, so the probe passes and the commit runs.
 ///
+/// It marks the [`crate::CommitWatch`] in scope as it starts, so a request
+/// dropped from here on is finished rather than cancelled by whoever owns
+/// the drop (`crate::commit_watch`'s module doc).
+///
 /// # Errors
 ///
 /// - [`DbError::TransactionAborted`] when the transaction was aborted; it has
@@ -215,6 +219,9 @@ pub(crate) fn pool_config(database_url: &str) -> Result<Config, DbError> {
 ///   a deferred constraint or a serialization failure, which `PostgreSQL`
 ///   reports as an error.
 pub async fn commit_checked(tx: deadpool_postgres::Transaction<'_>) -> Result<(), DbError> {
+    // from here a drop no longer rolls the transaction back for certain: the
+    // owner of a scoped request finishes it instead (`crate::commit_watch`)
+    crate::commit_watch::mark_commit_started();
     if let Err(probe_err) = tx.batch_execute("SELECT 1").await {
         if let Err(rollback_err) = tx.rollback().await {
             let error: &(dyn std::error::Error + 'static) = &rollback_err;

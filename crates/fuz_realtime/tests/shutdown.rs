@@ -743,7 +743,7 @@ fn ws_router(
                         notify_rx,
                         Arc::new(PendingPeerRequests::new(8)),
                         noop_dispatch(),
-                        fuz_realtime::WsLoopOptions::default(),
+                        fuz_realtime::WsLoopOptions::new(Arc::default()),
                     )
                     .await;
                 })

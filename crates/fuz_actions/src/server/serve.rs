@@ -251,11 +251,13 @@ pub struct ServeOptions {
 ///
 /// 1. Every live WebSocket closed with 1001 and every SSE stream ended, every
 ///    HTTP request already dispatched answered, and every connection
-///    finished closing. A WebSocket's in-flight dispatches are dropped with
-///    its loop: one dropped in its handler rolls back, and one whose commit
-///    has returned has its post-commit effects on the backend's tracker. The
-///    TS twin differs here — it waits for an in-flight WS handler at
-///    shutdown and refuses its reply; here it is dropped and rolls back.
+///    finished closing. A WebSocket's in-flight dispatches are let go with
+///    its loop: one dropped before its first commit rolls back, and one whose
+///    commit has started finishes on the backend's tracker — its post-commit
+///    effects and any later work run to completion — which step 3 waits for.
+///    The TS twin differs for the first — it waits for an in-flight WS
+///    handler at shutdown and refuses its reply; here a dispatch before its
+///    first commit is dropped and rolls back, and one past it finishes.
 /// 2. The upkeep joined. The spine's auth cleanup stops on the token at once;
 ///    a consumer's own task ([`UpkeepOptions::extra`]) should too, and one
 ///    still running at the bound is aborted.

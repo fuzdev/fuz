@@ -57,7 +57,7 @@ async fn frames_after_read_error(error: tungstenite::Error) -> (Vec<Message>, Du
         notify_rx,
         Arc::new(PendingPeerRequests::new(8)),
         unreachable_dispatch(),
-        crate::ws_endpoint::WsLoopOptions::default(),
+        crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
     ));
     let started = tokio::time::Instant::now();
     client_tx
@@ -156,7 +156,7 @@ pub(super) async fn serve(
                         notify_rx,
                         Arc::new(PendingPeerRequests::new(8)),
                         unreachable_dispatch(),
-                        crate::ws_endpoint::WsLoopOptions::default(),
+                        crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
                     )
                     .await;
                 })

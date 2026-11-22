@@ -583,8 +583,11 @@ The rules a change must keep:
   answered and the upkeep has stopped, so it sees the writes those spawned,
   all within one drain timeout from when the serve sees the signal, logging
   the requests, connections, closes, upkeep tasks and writes it gives up on.
-  An in-flight WS dispatch is dropped with its socket at shutdown and rolls
-  back; the TS twin waits for an in-flight WS handler and refuses its reply.
+  An in-flight WS dispatch still before its first commit is dropped with its
+  socket at shutdown and rolls back; the TS twin waits for an in-flight WS
+  handler and refuses its reply. One whose commit has started finishes on the
+  tracker, its later work included — as does any request or dispatch dropped
+  past its first commit (below).
   `testing_spine_stub` also settles them before each HTTP answer
   (`await_background_writes_layer`), as the TS test binary does with
   `await_pending_effects`.
@@ -988,9 +991,23 @@ Wire twins of fuz_app's (`fuz_realtime::ws_close_codes`):
   row names it, `metadata.session_id`, and declares `RevocationScope::Session`)
   — the account's other sessions and tokens stay valid; `/password` closes
   the account.
-- A request dropped between a commit and its close leaves the write committed
-  and the connections open — on `/password`, `/logout`, `/login`'s eviction
-  close, and the dispatcher's post-commit drain alike.
+- A request dropped once its commit has started finishes rather than being
+  cancelled, so a committed revocation always closes: `fuz_db::commit_checked`
+  marks the `CommitWatch` in scope, and the owners of the drop — the serve
+  loop for every HTTP request (`/password`, `/logout`, `/login`'s eviction
+  close, an RPC dispatch), the WebSocket loop for every dispatch — wrap each
+  in `BackgroundWrites::finish_past_commit`, which hands a request dropped
+  past that mark to the tracker to finish (the shutdown drain waits for it),
+  everything after its first commit included. One dropped before its first
+  commit rolls back. The TS twin never cancels a request, so both finish
+  there; served outside `serve_with_shutdown` or with no shutdown duties,
+  nothing wraps the request. The mark is seen only by `commit_checked` on the
+  request's own task: a commit in a task the request spawns is not marked
+  (keep the post-commit tail on the request's task, as the bootstrap does),
+  and a pooled client's autocommit writes never are. Work running after a
+  commit within a request is tracked work once handed off, and a
+  `BackgroundWrites::drain` called inside the tracker's own work returns at
+  once — there is no barrier there.
 - The revocation guard (WS and SSE alike) dispatches on `AUDIT_EVENT_SPECS`'
   `RevocationScope` and fires only on a written audit row. A global
   `role_grant_revoke` closes the account's connections gated on the role (WS

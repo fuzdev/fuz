@@ -81,7 +81,7 @@ where
             notify_rx,
             Arc::new(PendingPeerRequests::new(8)),
             unreachable_dispatch(),
-            crate::ws_endpoint::WsLoopOptions::default(),
+            crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
         )
         .await;
         drop(guard);
@@ -386,7 +386,7 @@ async fn nothing_is_written_after_a_cut_off_response() {
                 notify_rx,
                 Arc::new(PendingPeerRequests::new(8)),
                 dispatch,
-                crate::ws_endpoint::WsLoopOptions::default(),
+                crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
             )
             .await;
             drop(guard);

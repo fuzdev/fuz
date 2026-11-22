@@ -930,7 +930,10 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
 /// production server mounts it. It waits on the whole tracker
 /// (`AppBackend::background_writes`), a concurrent request's writes
 /// included, which a test binary can afford. A WebSocket's frames are
-/// untouched — only the upgrade's answer waits — as on the TS binary.
+/// untouched — only the upgrade's answer waits — as on the TS binary. A
+/// request dropped past its commit finishes on that tracker, this layer with
+/// it, so its drain runs inside a tracked write and returns at once — no
+/// barrier there, which is harmless: that request's client is gone.
 async fn await_background_writes_layer(
     axum::extract::State(background_writes): axum::extract::State<Arc<fuz_http::BackgroundWrites>>,
     request: axum::extract::Request,

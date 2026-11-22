@@ -33,6 +33,7 @@
 
 pub mod action_db;
 pub mod column_projections;
+pub mod commit_watch;
 pub mod error;
 pub mod migration;
 pub mod migration_schema;
@@ -50,6 +51,7 @@ pub use column_projections::{
     ColumnProjections, DB_COLUMN_PROJECTIONS, column_projection_mismatches,
     column_projection_mismatches_merged, columns_not_in,
 };
+pub use commit_watch::CommitWatch;
 pub use error::{DbError, MigrationError};
 pub use migration::{assert_migration_namespaces, baseline, run_migrations};
 pub use migration_schema::{Migration, MigrationNamespace, MigrationResult, RESERVED_NAMESPACES};

@@ -126,6 +126,7 @@
 //! # }
 //! ```
 
+use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -367,6 +368,11 @@ impl std::fmt::Debug for ShutdownDuties {
 /// reset) is skipped, and any other — running out of file descriptors —
 /// pauses the loop a second before it accepts again; neither ends it.
 ///
+/// Each request runs wrapped over the duties' tracker
+/// ([`BackgroundWrites::finish_past_commit`]): one dropped once its commit has
+/// started — its client gone, its connection cut — finishes on the tracker,
+/// post-commit work included, rather than committing with that work lost.
+///
 /// A connection whose client stops taking bytes while a write is waiting is
 /// dropped after [`WRITE_PROGRESS_TIMEOUT`] with none accepted (module docs,
 /// "A write that makes no progress ends its connection") — at any time, not
@@ -447,7 +453,9 @@ pub struct ServeShutdown {
     /// loop still writing its close frame, say.
     pub closes_given_up: bool,
     /// Handlers still running — requests dispatched before the token fired,
-    /// or on a connection the drain was still finishing.
+    /// or on a connection the drain was still finishing. A request dropped
+    /// past its commit and handed to the tracker is counted under
+    /// [`Self::writes_given_up`] instead.
     pub requests_given_up: usize,
     /// Connections still open, an idle or streaming one included; each
     /// handler counted above holds one of them.
@@ -474,9 +482,13 @@ async fn serve_with_timeouts(
     // every handler running on any connection, so a drain that runs out can
     // count the requests it gives up on
     let requests = Arc::new(AtomicUsize::new(0));
+    let handling = Handling {
+        router,
+        writes: duties.map(|duties| Arc::clone(&duties.writes)),
+    };
     accept_until_cancelled(
         &listener,
-        &router,
+        &handling,
         &token,
         &cut,
         &connections,
@@ -588,11 +600,39 @@ async fn drain_writes(writes: &BackgroundWrites, deadline: tokio::time::Instant)
     given_up
 }
 
+/// How the serve loop answers a request: the router, and the tracker a
+/// request dropped past its commit finishes on.
+#[derive(Clone)]
+struct Handling {
+    router: Router,
+    /// The router's duties' writes; `None` for a router with no duties,
+    /// which has no database to commit to.
+    writes: Option<Arc<BackgroundWrites>>,
+}
+
+/// The future answering one request.
+type ResponseFuture =
+    Pin<Box<dyn Future<Output = Result<axum::response::Response, Infallible>> + Send>>;
+
+impl Handling {
+    /// Answer `request` through the router — wrapped, when the router has a
+    /// tracker, so a request dropped once its commit has started (its client
+    /// gone, its connection cut) finishes on the tracker instead
+    /// ([`BackgroundWrites::finish_past_commit`]).
+    fn call(&self, request: axum::http::Request<Incoming>) -> ResponseFuture {
+        let response = self.router.clone().call(request);
+        match &self.writes {
+            Some(writes) => Box::pin(writes.finish_past_commit(response)),
+            None => Box::pin(response),
+        }
+    }
+}
+
 /// Accept connections and serve each on its own task in `connections` until
 /// `token` fires.
 async fn accept_until_cancelled(
     listener: &TcpListener,
-    router: &Router,
+    handling: &Handling,
     token: &CancellationToken,
     cut: &CancellationToken,
     connections: &TaskTracker,
@@ -610,7 +650,7 @@ async fn accept_until_cancelled(
                 connections.spawn(serve_connection(
                     stream,
                     peer,
-                    router.clone(),
+                    handling.clone(),
                     token.clone(),
                     cut.clone(),
                     Arc::clone(requests),
@@ -651,7 +691,7 @@ fn is_connection_error(error: &std::io::Error) -> bool {
 async fn serve_connection(
     stream: TcpStream,
     peer: SocketAddr,
-    router: Router,
+    handling: Handling,
     token: CancellationToken,
     cut: CancellationToken,
     requests: Arc<AtomicUsize>,
@@ -670,7 +710,7 @@ async fn serve_connection(
                 HandlerRunning::start(&handlers),
                 HandlerRunning::start(&requests),
             );
-            let response = router.clone().call(request);
+            let response = handling.call(request);
             async move {
                 let response = response.await;
                 drop(running);

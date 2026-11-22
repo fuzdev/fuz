@@ -75,7 +75,7 @@ impl Harness {
             notify_rx,
             Arc::new(PendingPeerRequests::new(8)),
             dispatch,
-            crate::ws_endpoint::WsLoopOptions::default(),
+            crate::ws_endpoint::WsLoopOptions::new(Arc::default()),
         ));
         Self {
             client_tx,

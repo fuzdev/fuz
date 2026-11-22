@@ -37,9 +37,12 @@
 //! dispatching future — an HTTP client that disconnects, a socket whose
 //! in-flight dispatches are torn down — can't cancel effects whose
 //! transaction already committed (a lost socket close would leave a revoked
-//! session's socket open). The remaining window is the `COMMIT` round trip
-//! itself: a future dropped there loses its effects whether or not the commit
-//! landed.
+//! session's socket open). Nor can a drop during the `COMMIT` round trip
+//! itself: the owners of the drop — the serve loop for an HTTP request, the
+//! WebSocket loop for a dispatch — wrap each in
+//! `fuz_http::BackgroundWrites::finish_past_commit`, so a dispatch dropped
+//! once `fuz_db::commit_checked` has started finishes on the tracker, its
+//! drain included, rather than committing with its effects lost.
 //!
 //! The task is spawned through the queue's [`BackgroundWrites`] — the
 //! server's one tracker, which the dispatcher takes from its audit emitter —
@@ -146,8 +149,8 @@ impl PostCommitEffects {
     /// pushing. Dropping the returned future doesn't cancel the effects, and
     /// the tracker counts them until they end (see the module doc); a
     /// panicking effect is logged, not propagated. An effect must never await
-    /// the tracker's drain: it runs on a tracked task, so it would wait on
-    /// itself.
+    /// the tracker's drain: it runs on a tracked task, where a drain returns at
+    /// once (`BackgroundWrites::drain`), so it would wait for nothing.
     pub async fn drain_all(&self) {
         let drained = {
             let Ok(mut q) = self.queue.lock() else {
