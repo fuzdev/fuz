@@ -9,10 +9,7 @@
 //! suite uses in place of a poll/sleep before asserting on audit rows or
 //! `api_token.last_used_at`.
 //!
-//! The action answers `{"ok": true, "tracked": true}`. `tracked` is a
-//! constant on both spines — every drain waits on what it covers — kept until
-//! consumers are on a `fuz_app` release whose `cross_drain_effects` no longer
-//! reads it.
+//! The action answers `{"ok": true}`, as the TS twin does.
 //!
 //! Gated on the daemon-token credential — effectively keeper-only without
 //! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
@@ -52,10 +49,10 @@ pub fn create_testing_drain_effects_action_spec(
 }
 
 /// The action's body: await `background_writes.drain()`, then answer
-/// `{"ok": true, "tracked": true}`.
+/// `{"ok": true}`.
 async fn drain_effects(background_writes: &BackgroundWrites) -> Value {
     background_writes.drain().await;
-    json!({ "ok": true, "tracked": true })
+    json!({ "ok": true })
 }
 
 #[cfg(test)]
@@ -79,10 +76,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_drain_answers_tracked_true() {
+    async fn the_drain_answers_ok() {
         assert_eq!(
             drain_effects(&BackgroundWrites::default()).await,
-            json!({ "ok": true, "tracked": true }),
+            json!({ "ok": true }),
         );
     }
 
@@ -105,7 +102,7 @@ mod tests {
             write.is_finished(),
             "the drain answered before the write settled"
         );
-        assert_eq!(answer, json!({ "ok": true, "tracked": true }));
+        assert_eq!(answer, json!({ "ok": true }));
     }
 
     /// A token touch in flight on the tracker holds the drain the same way:
@@ -130,6 +127,6 @@ mod tests {
             touch.is_finished(),
             "the drain answered before the touch settled"
         );
-        assert_eq!(answer, json!({ "ok": true, "tracked": true }));
+        assert_eq!(answer, json!({ "ok": true }));
     }
 }
