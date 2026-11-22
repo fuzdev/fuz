@@ -50,11 +50,9 @@
 //!    unbalances the string scan;
 //!  - a workspace member outside `crates/<name>/`, which is neither scanned
 //!    nor config-checked;
-//!  - a workspace that doesn't run it — the spine, zzz and
-//!    visionesdelcaribe.org do; the other spine consumers don't: `fuz_forge`'s
-//!    `Path` reads and `url::form_urlencoded` query parsing await it, once
-//!    they move to the strict readers, and the rest read nothing leniently
-//!    today.
+//!  - a workspace that doesn't run it — the spine, zzz,
+//!    visionesdelcaribe.org and `fuz_forge` do; the other spine consumers
+//!    read nothing leniently today.
 
 #![expect(
     clippy::panic,
