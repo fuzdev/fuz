@@ -30,6 +30,15 @@ pub enum SignupError {
     /// found the transaction aborted and rolled it back.
     #[error("commit error: {0}")]
     Commit(#[source] fuz_db::DbError),
+
+    /// The session cookie could not be written, so the signup rolled back.
+    #[error("session cookie error")]
+    SessionCookie(#[source] crate::session_cookie::SessionCookieError),
+
+    /// The `signup` success row could not be written in the transaction, so
+    /// the signup rolled back.
+    #[error("audit write error")]
+    Audit(#[source] fuz_http::JsonrpcError),
 }
 
 /// Errors from [`bootstrap_handler`](crate::bootstrap::bootstrap_handler).
@@ -65,6 +74,11 @@ pub enum BootstrapError {
     /// before its token was burned.
     #[error("session cookie error")]
     SessionCookie(#[source] crate::session_cookie::SessionCookieError),
+
+    /// The `bootstrap` success row could not be written in the transaction,
+    /// so the bootstrap rolled back before its token was burned.
+    #[error("audit write error")]
+    Audit(#[source] fuz_http::JsonrpcError),
 
     /// The task the write phase runs on panicked or was cancelled.
     #[error("bootstrap write task failed")]

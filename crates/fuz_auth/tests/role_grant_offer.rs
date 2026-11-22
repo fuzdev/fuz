@@ -2135,7 +2135,7 @@ async fn accepting_a_builtin_offer_rechecks_the_grantor() {
     .await
     .expect("pending global admin offer");
 
-    let audit = std::sync::Arc::new(AuditEmitter::new_with_inflight_tracking(pool.clone()));
+    let audit = std::sync::Arc::new(AuditEmitter::new(pool.clone()));
     let closer = closer();
     let ctx = ctx(&recipient, &audit, &closer);
     let err = offer_dispatch(
@@ -2206,7 +2206,7 @@ async fn accept_refuses_a_keeper_offer_even_from_a_global_admin() {
         }
     ));
 
-    let audit = std::sync::Arc::new(AuditEmitter::new_with_inflight_tracking(pool.clone()));
+    let audit = std::sync::Arc::new(AuditEmitter::new(pool.clone()));
     let closer = closer();
     let ctx = ctx(&recipient, &audit, &closer);
     let err = offer_dispatch(
@@ -2375,7 +2375,7 @@ async fn an_off_grammar_role_is_invalid_params_and_is_not_audited() {
     let caller = seed_actor_context(&pool, "caller").await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let (recipient_account, _) = seed_account_actor(&pool, "recipient").await;
-    let audit = std::sync::Arc::new(AuditEmitter::new_with_inflight_tracking(pool.clone()));
+    let audit = std::sync::Arc::new(AuditEmitter::new(pool.clone()));
     let closer = closer();
     let caller_ctx = ctx(&caller, &audit, &closer);
     let admin_ctx = ctx(&admin, &audit, &closer);

@@ -22,7 +22,7 @@
 //! [`fuz_db::DEFAULT_AUDIT_CHECKOUT_TIMEOUT`], 30 s) — longer than a request's
 //! (`FUZ_DB_CHECKOUT_TIMEOUT_MS`, 5 s), so a pool saturated enough to shed
 //! requests with a 503 does not also drop the failure rows recording them.
-//! A failed login awaits its row, so it can wait up to this bound.
+//! No spine handler awaits a pool write, so no response waits on this bound.
 //! An in-transaction write ([`AuditEmitter::emit_in_tx`]) checks nothing out.
 
 use std::sync::Arc;
@@ -243,12 +243,13 @@ impl AuditLogInput {
     }
 }
 
-/// Test-only in-flight tracker for fire-and-forget `emit` writes.
+/// In-flight tracker for fire-and-forget `emit` writes.
 ///
 /// Counts outstanding pool-routed audit tasks so [`AuditEmitter::drain_inflight`]
-/// can await them — the deterministic barrier behind the
-/// `_testing_drain_effects` test action, replacing poll/sleep before a
-/// post-mutation `audit_log_list` read. `None` on the emitter in production.
+/// can await them — what a server's graceful shutdown waits on so a spawned
+/// failure row lands before the runtime drops its task, and the deterministic
+/// barrier behind the `_testing_drain_effects` test action. Always on: an
+/// atomic increment and decrement per pool write.
 #[derive(Debug, Default)]
 struct InflightAuditWrites {
     pending: AtomicUsize,
@@ -268,21 +269,19 @@ struct InflightWriteGuard {
 }
 
 impl InflightWriteGuard {
-    /// Count one write in flight; `None` when `emitter` doesn't track them.
-    fn acquire(emitter: &Arc<AuditEmitter>) -> Option<Self> {
-        let inflight = emitter.inflight.as_ref()?;
-        inflight.pending.fetch_add(1, Ordering::SeqCst);
-        Some(Self {
+    /// Count one write in flight.
+    fn acquire(emitter: &Arc<AuditEmitter>) -> Self {
+        emitter.inflight.pending.fetch_add(1, Ordering::SeqCst);
+        Self {
             emitter: Arc::clone(emitter),
-        })
+        }
     }
 }
 
 impl Drop for InflightWriteGuard {
     fn drop(&mut self) {
-        if let Some(inflight) = &self.emitter.inflight
-            && inflight.pending.fetch_sub(1, Ordering::SeqCst) == 1
-        {
+        let inflight = &self.emitter.inflight;
+        if inflight.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
             inflight.drain_notify.notify_waiters();
         }
     }
@@ -305,11 +304,9 @@ pub struct AuditEmitter {
     /// lets [`Self::remove_listener`] take out one registration of a
     /// listener registered twice.
     listeners: RwLock<Vec<(AuditListenerId, AuditListenerFn)>>,
-    /// `Some` only on test binaries built via
-    /// [`Self::new_with_inflight_tracking`]; `None` in production. Stored
-    /// by value — each tracked write's [`InflightWriteGuard`] reaches it
-    /// through an `Arc<Self>`, cloned only when tracking is on.
-    inflight: Option<InflightAuditWrites>,
+    /// The pool writes in flight. Stored by value — each write's
+    /// [`InflightWriteGuard`] reaches it through an `Arc<Self>`.
+    inflight: InflightAuditWrites,
 }
 
 impl std::fmt::Debug for AuditEmitter {
@@ -328,7 +325,7 @@ impl AuditEmitter {
             pool,
             checkout_timeout: fuz_db::DEFAULT_AUDIT_CHECKOUT_TIMEOUT,
             listeners: RwLock::new(Vec::new()),
-            inflight: None,
+            inflight: InflightAuditWrites::default(),
         }
     }
 
@@ -349,35 +346,11 @@ impl AuditEmitter {
         self.checkout_timeout
     }
 
-    /// Like [`Self::new`] but tracks in-flight fire-and-forget `emit`
-    /// writes so [`Self::drain_inflight`] can await them.
-    ///
-    /// **Test binaries only.** The counter is pure overhead in production,
-    /// and production never calls the `_testing_drain_effects` action that
-    /// drains it. The cross-backend conformance suite uses the drain as the
-    /// deterministic barrier before reading `audit_log_list` (no poll/sleep).
+    /// How many [`Self::emit`] writes are in flight — spawned and not yet
+    /// ended. What a shutdown whose drain bound ran out reports as given up.
     #[must_use]
-    pub fn new_with_inflight_tracking(pool: Pool) -> Self {
-        Self {
-            pool,
-            checkout_timeout: fuz_db::DEFAULT_AUDIT_CHECKOUT_TIMEOUT,
-            listeners: RwLock::new(Vec::new()),
-            inflight: Some(InflightAuditWrites::default()),
-        }
-    }
-
-    /// Whether this emitter tracks its in-flight [`Self::emit`] writes —
-    /// `true` only when built via [`Self::new_with_inflight_tracking`]. When
-    /// `false`, [`Self::drain_inflight`] returns at once and waits on nothing.
-    ///
-    /// The `_testing_drain_effects` action reports it as `tracked`, and the
-    /// `list_audit_events` reads refuse `false`: a test binary built over
-    /// [`Self::new`] would answer the drain at once and its audit reads would
-    /// race the writes. Twin of the TS `AuditEmitter.is_tracking_inflight` in
-    /// `fuz_app`.
-    #[must_use]
-    pub const fn is_tracking_inflight(&self) -> bool {
-        self.inflight.is_some()
+    pub fn inflight_count(&self) -> usize {
+        self.inflight.pending.load(Ordering::SeqCst)
     }
 
     /// Await every fire-and-forget [`Self::emit`] write in flight.
@@ -393,14 +366,14 @@ impl AuditEmitter {
     /// [`Self::emit_in_tx`] is not tracked: its row commits with the
     /// caller's transaction, and its fan-out runs from the post-commit drain.
     ///
-    /// No-op unless the emitter was built via
-    /// [`Self::new_with_inflight_tracking`]. Twin of the TS
-    /// `AuditEmitter.drain_inflight` in `fuz_app`, which also waits for zero
-    /// rather than for a snapshot.
+    /// A server's graceful shutdown awaits it, bounded, so a failure row
+    /// spawned just before the signal lands before the runtime drops its task
+    /// (`fuz_actions::server::serve_until_shutdown`); the
+    /// `_testing_drain_effects` test action awaits it before an audit read.
+    /// Twin of the TS `AuditEmitter.drain_inflight` in `fuz_app`, which also
+    /// waits for zero rather than for a snapshot.
     pub async fn drain_inflight(&self) {
-        let Some(inflight) = &self.inflight else {
-            return;
-        };
+        let inflight = &self.inflight;
         loop {
             // Arm the waiter before re-checking the count so a `notify_waiters`
             // between the load and the await can't be missed.
@@ -465,16 +438,17 @@ impl AuditEmitter {
     /// [`Self::emit_in_tx`] instead. See [`crate::AUDIT_EVENT_SPECS`]
     /// for the per-event routing policy.
     ///
-    /// Returns a `JoinHandle<()>` the caller can await to keep the row
-    /// observable by response time (integration tests rely on this for
-    /// post-response DB queries). The write runs on a detached tokio
-    /// task — a dropped awaiting future doesn't cancel the spawned
-    /// task, so the audit row still lands.
+    /// The write runs on a detached tokio task, counted in flight until it
+    /// ends; no spine handler awaits the returned `JoinHandle<()>`, so the
+    /// row never holds a response. Dropping the handle doesn't cancel the
+    /// task, but the runtime shutting down does — mid-checkout or mid-INSERT,
+    /// with nothing logged — so a server's shutdown awaits
+    /// [`Self::drain_inflight`], bounded, before it lets the runtime go. A
+    /// reader that must see the row (a test) drains the same way.
     pub fn emit(self: &Arc<Self>, input: AuditLogInput) -> JoinHandle<()> {
         let emitter = Arc::clone(self);
         // Register the in-flight write BEFORE spawning so a concurrent
-        // `drain_inflight` can never observe a count that omits it. `None`
-        // in production — zero overhead on the hot path.
+        // `drain_inflight` can never observe a count that omits it.
         let inflight = InflightWriteGuard::acquire(self);
         tokio::spawn(async move {
             // held for the task's life: the count settles when the task ends
@@ -633,6 +607,26 @@ where
             .await
             .map_err(|e| internal_error_with_source("audit emit failed", &e)),
     }
+}
+
+/// Write a REST handler's failure row: spawned on the pool, never awaited, so
+/// it never holds the refusal.
+///
+/// For the handlers that hold no client to pass [`route_audit_emit`] — login,
+/// password, bootstrap, signup refuse after their connection is back in the
+/// pool or their transaction rolled back. The routing table still decides:
+/// a failure row of an event whose [`AUDIT_EVENT_SPECS`](crate::AUDIT_EVENT_SPECS)
+/// row stopped routing failures to the pool fails this assertion in debug
+/// builds, rather than being written the old way unnoticed.
+pub(crate) fn emit_failure_row(audit: &Arc<AuditEmitter>, input: AuditLogInput) {
+    debug_assert_eq!(input.outcome, Some(AuditOutcome::Failure));
+    debug_assert_eq!(
+        input.event_type.routing_for(AuditOutcome::Failure),
+        AuditRouting::Pool,
+        "{} failure rows no longer route to the pool",
+        input.event_type.as_str()
+    );
+    drop(audit.emit(input));
 }
 
 /// Build a `metadata.credential_type` JSON value for credential-gated
@@ -1078,19 +1072,6 @@ mod drain_tests {
     use super::{AuditEmitter, AuditLogInput};
     use crate::audit_event_type::AuditEventType;
 
-    #[test]
-    fn is_tracking_inflight_reports_the_construction() {
-        let pool = || {
-            fuz_db::create_pool(
-                "postgres://u:p@localhost:5432/unused",
-                &fuz_db::PoolOptions::default(),
-            )
-            .expect("a lazily-built pool needs no server")
-        };
-        assert!(AuditEmitter::new_with_inflight_tracking(pool()).is_tracking_inflight());
-        assert!(!AuditEmitter::new(pool()).is_tracking_inflight());
-    }
-
     #[tokio::test]
     async fn an_aborted_write_still_settles_the_drain() {
         let pool = fuz_db::create_pool(
@@ -1098,7 +1079,7 @@ mod drain_tests {
             &fuz_db::PoolOptions::default(),
         )
         .expect("a lazily-built pool needs no server");
-        let emitter = Arc::new(AuditEmitter::new_with_inflight_tracking(pool));
+        let emitter = Arc::new(AuditEmitter::new(pool));
         // the current-thread test runtime doesn't run the task until this
         // test yields, so the abort lands before its first poll
         let handle = emitter.emit(AuditLogInput::for_event(AuditEventType::Login));

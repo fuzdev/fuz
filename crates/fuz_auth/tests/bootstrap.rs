@@ -203,7 +203,7 @@ impl BootstrapKeeperResolved for RecordingKeeper {
 }
 
 /// Assemble `BootstrapOptions` from the supplied token store + availability
-/// flag, with a real Argon2id hasher and a pool-routed audit emitter.
+/// flag, with a real Argon2id hasher.
 fn build_options(
     pool: Pool,
     token_store: Option<Arc<dyn BootstrapTokenStore>>,
@@ -214,12 +214,12 @@ fn build_options(
     BootstrapOptions {
         pool: pool.clone(),
         password_hasher,
-        // Inflight tracking so `drain_inflight` is a real barrier — `emit`
-        // spawns a detached write, so asserting on `audit_log` without draining
-        // races the spawn. That race is benign for a positive assertion (it
-        // usually wins) and fatal for a negative one, which is what
-        // `bootstrap_probe_after_success_writes_no_audit_row` needs.
-        audit: Arc::new(AuditEmitter::new_with_inflight_tracking(pool)),
+        // A failure row is a spawned write, so asserting on `audit_log`
+        // without `drain_inflight` races the spawn. That race is benign for a
+        // positive assertion (it usually wins) and fatal for a negative one,
+        // which is what `bootstrap_probe_after_success_writes_no_audit_row`
+        // needs.
+        audit: Arc::new(AuditEmitter::new(pool)),
         bootstrap_available,
         token_store,
         on_keeper_resolved,
@@ -264,9 +264,12 @@ async fn bootstrap_failure_count(pool: &Pool) -> i64 {
         .get(0)
 }
 
-/// Read the latest `bootstrap` failure audit row's `metadata.error`.
-async fn latest_bootstrap_failure_error(pool: &Pool) -> String {
-    let client = pool.get().await.expect("pool.get");
+/// Read the latest `bootstrap` failure audit row's `metadata.error`, once
+/// every failure row in flight has landed — a failure row is spawned, never
+/// awaited by the handler.
+async fn latest_bootstrap_failure_error(options: &BootstrapOptions) -> String {
+    options.audit.drain_inflight().await;
+    let client = options.pool.get().await.expect("pool.get");
     let row = client
         .query_one(
             "SELECT metadata::text FROM audit_log
@@ -315,7 +318,10 @@ async fn bootstrap_rejects_invalid_token() {
             kind: BootstrapErrorKind::InvalidToken
         }
     ));
-    assert_eq!(latest_bootstrap_failure_error(&pool).await, "invalid_token");
+    assert_eq!(
+        latest_bootstrap_failure_error(&options).await,
+        "invalid_token"
+    );
     assert_eq!(
         account_count(&pool).await,
         0,
@@ -670,7 +676,7 @@ async fn bootstrap_token_file_missing() {
         }
     ));
     assert_eq!(
-        latest_bootstrap_failure_error(&pool).await,
+        latest_bootstrap_failure_error(&options).await,
         "token_file_missing"
     );
     assert_eq!(account_count(&pool).await, 0);
@@ -788,6 +794,8 @@ async fn a_token_under_the_minimum_length_reads_as_missing() {
         );
         assert!(!burned.load(Ordering::SeqCst), "{stored:?} stays on disk");
         assert_eq!(account_count(&pool).await, 0);
+        // the failure row lands before the next case resets the schema
+        options.audit.drain_inflight().await;
     }
 
     let pool = fresh_db_pool().await;
@@ -932,7 +940,10 @@ async fn bootstrap_refuses_a_token_past_its_maximum_as_invalid_input() {
         }
     ));
     options.audit.drain_inflight().await;
-    assert_eq!(latest_bootstrap_failure_error(&pool).await, "invalid_token");
+    assert_eq!(
+        latest_bootstrap_failure_error(&options).await,
+        "invalid_token"
+    );
     assert_eq!(account_count(&pool).await, 0);
 
     // The shape gate runs before the window check: with the window closed, a
@@ -1143,7 +1154,7 @@ async fn a_failed_burn_rolls_the_bootstrap_back_and_leaves_the_window_open() {
     assert!(available.load(Ordering::SeqCst), "the window stays open");
     options.audit.drain_inflight().await;
     assert_eq!(
-        latest_bootstrap_failure_error(&pool).await,
+        latest_bootstrap_failure_error(&options).await,
         "token_file_undeletable"
     );
 
@@ -1879,7 +1890,7 @@ async fn a_token_file_with_a_second_hard_link_is_refused() {
     );
     options.audit.drain_inflight().await;
     assert_eq!(
-        latest_bootstrap_failure_error(&pool).await,
+        latest_bootstrap_failure_error(&options).await,
         "token_file_missing"
     );
     assert_eq!(account_count(&pool).await, 0);

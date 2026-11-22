@@ -10,7 +10,7 @@ use axum::Router;
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use fuz_auth::ConnectionCloser;
+use fuz_auth::{AuditEmitter, ConnectionCloser};
 use fuz_http::{
     BaseServerEnv, BodyCap, CancellationToken, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, RouteGroup,
     StackOptions, compose_stack,
@@ -226,22 +226,59 @@ pub struct ServeOptions {
     pub drain_timeout: Duration,
     /// The process's shutdown token (`fuz_http::shutdown_token`).
     pub shutdown: CancellationToken,
+    /// What the server serves over: its closer, its audit emitter, its
+    /// upkeep (`AppBackend::serve_backend`). `None` in boot-only mode, which
+    /// mounts nothing live, writes no audit row, and runs no upkeep.
+    pub backend: Option<ServeBackend>,
+}
+
+/// The backend half of [`ServeOptions`], built by `AppBackend::serve_backend`
+/// so the closer and the emitter are always the backend's own.
+#[expect(
+    missing_debug_implementations,
+    reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
+)]
+pub struct ServeBackend {
     /// The closer over every live transport, which shutdown closes them
-    /// through (`AppBackend::connection_closer`). `None` in boot-only mode, which
-    /// mounts nothing live.
-    pub connection_closer: Option<Arc<dyn ConnectionCloser>>,
-    /// The upkeep to run beside the server. `None` in boot-only mode.
-    pub upkeep: Option<UpkeepOptions>,
+    /// through.
+    connection_closer: Arc<dyn ConnectionCloser>,
+    /// The emitter whose spawned pool writes — the failure rows, which no
+    /// handler awaits — shutdown waits on before the runtime goes.
+    audit_emitter: Arc<AuditEmitter>,
+    /// The upkeep to run beside the server.
+    upkeep: Option<UpkeepOptions>,
+}
+
+impl ServeBackend {
+    /// The backend half of [`ServeOptions`] — `pub(crate)` so only
+    /// `AppBackend::serve_backend` builds one.
+    pub(crate) fn new(
+        connection_closer: Arc<dyn ConnectionCloser>,
+        audit_emitter: Arc<AuditEmitter>,
+        upkeep: Option<UpkeepOptions>,
+    ) -> Self {
+        Self {
+            connection_closer,
+            audit_emitter,
+            upkeep,
+        }
+    }
 }
 
 /// Bind, start the upkeep, serve until the shutdown token fires, then join
-/// the upkeep.
+/// the upkeep and drain the audit writes in flight.
 ///
 /// On the token, `fuz_http::serve_with_shutdown` closes every live WebSocket
 /// with 1001 and ends every SSE stream through the closer, then drains
 /// in-flight requests, bounded by the drain timeout. It returns only once the
-/// token has fired, so the upkeep is already stopping. Two `eprintln!`
-/// sentinels, which no log filter suppresses, mark the bind and the end.
+/// token has fired, so the upkeep is already stopping. Then the audit
+/// emitter's spawned pool writes are awaited, bounded by the drain timeout
+/// again: a failure row spawned by a request that just answered lands rather
+/// than dying with the runtime, and the rows given up on past the bound are
+/// counted in the log. A request still running past the request drain may
+/// spawn a row after this drain resolves; that row is lost, uncounted. Two
+/// `eprintln!` sentinels, which no log filter suppresses, mark the bind and
+/// the end.
 ///
 /// # Errors
 ///
@@ -256,12 +293,19 @@ pub async fn serve_until_shutdown(
         addr,
         drain_timeout,
         shutdown,
-        connection_closer,
-        upkeep,
+        backend,
     } = options;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
+    let (connection_closer, audit_emitter, upkeep) = match backend {
+        Some(ServeBackend {
+            connection_closer,
+            audit_emitter,
+            upkeep,
+        }) => (Some(connection_closer), Some(audit_emitter), upkeep),
+        None => (None, None, None),
+    };
     let upkeep = upkeep.map(|upkeep| spawn_upkeep(upkeep, &shutdown));
 
     eprintln!("{server_name} listening on http://{addr}");
@@ -278,10 +322,41 @@ pub async fn serve_until_shutdown(
             tracing::warn!(error = %fuz_sys::cli::format_error_chain(&e), "an upkeep task failed");
         }
     }
+    if let Some(emitter) = &audit_emitter {
+        drain_audit_writes(emitter, drain_timeout).await;
+    }
     served.map_err(StartupError::Serve)?;
 
     eprintln!("{server_name} shutdown complete");
     Ok(())
+}
+
+/// Await `emitter`'s pool writes in flight, for at most `bound`, and return
+/// how many were still in flight when the bound ran out (`0` when every one
+/// ended).
+///
+/// A write still in flight past the bound dies with the runtime — its task
+/// cancelled mid-checkout or mid-INSERT, with no dropped-row line of its own
+/// — so the count given up on is logged at `error` and as an `eprintln!`
+/// sentinel.
+async fn drain_audit_writes(emitter: &AuditEmitter, bound: Duration) -> usize {
+    if tokio::time::timeout(bound, emitter.drain_inflight())
+        .await
+        .is_ok()
+    {
+        return 0;
+    }
+    // the last write may have ended between the timeout and this read
+    let given_up = emitter.inflight_count();
+    if given_up == 0 {
+        return 0;
+    }
+    tracing::error!(
+        rows = given_up,
+        "shutdown gave up on audit rows still being written past the drain timeout"
+    );
+    eprintln!("Audit drain timeout: gave up on {given_up} audit row(s) still being written");
+    given_up
 }
 
 #[cfg(test)]
@@ -526,8 +601,7 @@ mod tests {
                 addr,
                 drain_timeout: Duration::from_secs(1),
                 shutdown: CancellationToken::new(),
-                connection_closer: None,
-                upkeep: None,
+                backend: None,
             },
         )
         .await
@@ -555,13 +629,45 @@ mod tests {
                     addr: "127.0.0.1:0".parse().expect("addr"),
                     drain_timeout: Duration::from_secs(1),
                     shutdown,
-                    connection_closer: None,
-                    upkeep: None,
+                    backend: None,
                 },
             ),
         )
         .await
         .expect("the serve ends")
         .expect("a clean end");
+    }
+
+    /// A write still in flight when the bound runs out is given up on and
+    /// counted: here one stuck dialing a server that accepts the connection
+    /// and never answers.
+    #[tokio::test]
+    async fn the_audit_drain_counts_the_writes_it_gives_up_on() {
+        use fuz_auth::{AuditEventType, AuditLogInput};
+
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let pool = fuz_db::create_pool(
+            &format!(
+                "postgres://spine:spine@{}/spine_unused",
+                silent.local_addr().expect("has an address")
+            ),
+            &fuz_db::PoolOptions::default(),
+        )
+        .expect("a lazily-built pool");
+        let emitter = Arc::new(AuditEmitter::new(pool));
+        let write = emitter.emit(AuditLogInput::for_event(AuditEventType::Login).failure());
+
+        assert_eq!(
+            drain_audit_writes(&emitter, Duration::from_millis(100)).await,
+            1
+        );
+        write.abort();
+        assert_eq!(
+            drain_audit_writes(&emitter, Duration::from_secs(5)).await,
+            0,
+            "nothing left once the write ends"
+        );
     }
 }

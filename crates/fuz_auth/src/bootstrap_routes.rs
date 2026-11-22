@@ -140,6 +140,7 @@ async fn bootstrap_route(
             | BootstrapError::PasswordHash(_)
             | BootstrapError::Commit(_)
             | BootstrapError::SessionCookie(_)
+            | BootstrapError::Audit(_)
             | BootstrapError::Task(_)),
         ) => internal_error_response_with_source("bootstrap failed", &e),
     }

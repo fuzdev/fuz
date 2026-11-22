@@ -7,19 +7,15 @@
 //! cross-backend conformance suite uses in place of a poll/sleep before
 //! asserting on audit rows.
 //!
-//! The emitter must have been built via
-//! [`fuz_auth::AuditEmitter::new_with_inflight_tracking`]; otherwise the
-//! drain is a no-op (nothing is tracked). The action answers
-//! `{"ok": true, "tracked": <bool>}`, `tracked` read from
-//! [`fuz_auth::AuditEmitter::is_tracking_inflight`], and `fuz_app`'s
-//! `list_audit_events` reads refuse `tracked: false` — so a test binary built
-//! over an untracked emitter fails its first audit read instead of racing it.
+//! Every emitter on both spines tracks its pool writes, so the drain is always
+//! a real barrier and the action answers `{"ok": true, "tracked": true}` — a
+//! constant on both spines, which `fuz_app`'s `list_audit_events` reads still
+//! require.
 //!
 //! Gated on the daemon-token credential — effectively keeper-only without
 //! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
 //! Mirrors `fuz_app`'s TS `_testing_drain_effects`, which does the same
-//! await — `AuditEmitter.drain_inflight` over an emitter built with
-//! `track_inflight: true`, the twin of `new_with_inflight_tracking` here.
+//! await — `AuditEmitter.drain_inflight`.
 
 use std::sync::Arc;
 
@@ -50,10 +46,10 @@ pub fn create_testing_drain_effects_action_spec(emitter: Arc<AuditEmitter>) -> A
 }
 
 /// The action's body: await `emitter.drain_inflight()`, then answer
-/// `{"ok": true, "tracked": <emitter.is_tracking_inflight()>}`.
+/// `{"ok": true, "tracked": true}`.
 async fn drain_effects(emitter: &AuditEmitter) -> Value {
     emitter.drain_inflight().await;
-    json!({ "ok": true, "tracked": emitter.is_tracking_inflight() })
+    json!({ "ok": true, "tracked": true })
 }
 
 #[cfg(test)]
@@ -77,20 +73,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_tracking_emitter_answers_tracked_true() {
-        let emitter = AuditEmitter::new_with_inflight_tracking(unused_pool());
-        assert_eq!(
-            drain_effects(&emitter).await,
-            json!({ "ok": true, "tracked": true }),
-        );
-    }
-
-    #[tokio::test]
-    async fn an_untracked_emitter_answers_tracked_false() {
+    async fn the_drain_answers_tracked_true() {
         let emitter = AuditEmitter::new(unused_pool());
         assert_eq!(
             drain_effects(&emitter).await,
-            json!({ "ok": true, "tracked": false }),
+            json!({ "ok": true, "tracked": true }),
         );
     }
 
@@ -98,14 +85,14 @@ mod tests {
     /// runtime the write's task hasn't run when `drain_effects` is called, so
     /// only a drain that yields until the write settles sees it finished.
     #[tokio::test]
-    async fn the_drain_waits_for_a_tracked_write() {
+    async fn the_drain_waits_for_a_write() {
         // refused at once, so the write settles fast without a server
         let pool = fuz_db::create_pool(
             "postgres://nobody@127.0.0.1:1/nothing",
             &fuz_db::PoolOptions::default(),
         )
         .expect("lazy pool builds");
-        let emitter = Arc::new(AuditEmitter::new_with_inflight_tracking(pool));
+        let emitter = Arc::new(AuditEmitter::new(pool));
         let write = emitter.emit(AuditLogInput::for_event(AuditEventType::Login));
         assert!(
             !write.is_finished(),

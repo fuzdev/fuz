@@ -27,13 +27,11 @@
 //!   token × SSE credential deadline, carried from the resolve into
 //!   [`fuz_realtime::SseSubscription::credential_deadline`].
 //!
-//! - **a revocation whose audit write fails still closes the stream**: REST
-//!   `/logout` and `/password` write their audit row on the pool, fail-open,
-//!   so the revocation listener — which fires only on a written row — never
-//!   sees a failed one. With the audit INSERT refused by a `CHECK`, the
-//!   stream must still end, closed by the handler through the consumer's
-//!   [`fuz_realtime::RealtimeCloser`]. A WS-only closer leaves it open for
-//!   its lifetime.
+//! - **a revocation whose audit row is refused ends nothing**: REST
+//!   `/logout` and `/password` write their audit row in the revocation's
+//!   transaction, so with the INSERT refused by a `CHECK` the revocation
+//!   rolls back, answers 500, and the stream — its credential still live —
+//!   stays open.
 //!
 //! - **a login past the session cap closes the evicted session's
 //!   connections**: the cap deletes the oldest session row, and the login
@@ -828,45 +826,43 @@ async fn post_account(h: &RevocationHarness, path: &str, cookie: &str, body: Bod
         .unwrap()
 }
 
-/// **`/logout` with a failing audit write still closes the stream.**
+/// **`/logout` with a refused audit row ends nothing.**
 ///
-/// The handler awaits its pool-routed audit write, so by the response the
-/// INSERT has been refused and the revocation listener has had its only
-/// chance — and had nothing to react to. The stream ending is the handler's own close.
+/// The `logout` row is written in the revocation's transaction, so a refused
+/// INSERT rolls the session delete back: the flat 500, and the stream — whose
+/// credential is still live — stays open. Nothing committed, so nothing closed.
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
-async fn logout_closes_the_stream_when_its_audit_write_fails() {
+async fn logout_with_a_refused_audit_row_leaves_the_stream_open() {
     let pool = fresh_db_pool().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_logout_refused").await;
     let h = revocation_harness(pool, &keyring);
-    let body = open_stream(&h, &admin.cookie).await;
+    let _body = open_stream(&h, &admin.cookie).await;
     refuse_audit_rows(&h.pool, &["logout"]).await;
 
     let response = post_account(&h, "/logout", &admin.cookie, Body::empty()).await;
-    assert_eq!(response.status(), StatusCode::OK, "logout is fail-open");
     assert_eq!(
-        audit_row_count(&h.pool, "logout").await,
-        0,
-        "the audit write was refused, so no listener saw a row"
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the refused row fails the logout"
     );
-
-    assert_body_ends(body, "logout with a refused audit write").await;
-    assert_eq!(h.registry.count(), 0);
+    assert_eq!(audit_row_count(&h.pool, "logout").await, 0);
+    assert_eq!(h.registry.count(), 1, "the stream stays open");
 }
 
-/// **`/password` with a failing audit write still closes the stream** — the
-/// same contract on the other pool-routed revocation, which also deletes every
-/// session and token on the account.
+/// **`/password` with a refused audit row ends nothing** — the same contract
+/// on the other account-wide REST revocation: the change rolls back, every
+/// session and token stays, and the stream stays open.
 #[tokio::test]
 #[ignore = "requires PostgreSQL"]
-async fn password_change_closes_the_stream_when_its_audit_write_fails() {
+async fn password_change_with_a_refused_audit_row_leaves_the_stream_open() {
     let pool = fresh_db_pool().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_password_refused").await;
     set_current_password(&pool, admin.account_id).await;
     let h = revocation_harness(pool, &keyring);
-    let body = open_stream(&h, &admin.cookie).await;
+    let _body = open_stream(&h, &admin.cookie).await;
     refuse_audit_rows(&h.pool, &["password_change"]).await;
 
     let input = json!({
@@ -882,17 +878,11 @@ async fn password_change_closes_the_stream_when_its_audit_write_fails() {
     .await;
     assert_eq!(
         response.status(),
-        StatusCode::OK,
-        "the password change is fail-open"
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the refused row fails the change"
     );
-    assert_eq!(
-        audit_row_count(&h.pool, "password_change").await,
-        0,
-        "the audit write was refused, so no listener saw a row"
-    );
-
-    assert_body_ends(body, "password change with a refused audit write").await;
-    assert_eq!(h.registry.count(), 0);
+    assert_eq!(audit_row_count(&h.pool, "password_change").await, 0);
+    assert_eq!(h.registry.count(), 1, "the stream stays open");
 }
 
 // -- The session cap closes what it evicts ------------------------------------

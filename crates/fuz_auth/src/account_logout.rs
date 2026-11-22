@@ -1,9 +1,14 @@
 //! `POST /api/account/logout` — invalidate session, close live connections.
+//!
+//! The session delete and the `logout` success row are one transaction, so a
+//! refused row ends no session and closes nothing; the account's live
+//! connections close once it commits.
 
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use fuz_db::commit_checked;
 use fuz_http::{
     db_unavailable_response_with_source, internal_error_response,
     internal_error_response_with_source,
@@ -11,7 +16,7 @@ use fuz_http::{
 use serde::Serialize;
 
 use crate::account_route_state::AccountRouteState;
-use crate::audit_emitter::AuditLogInput;
+use crate::audit_emitter::{AuditLogInput, CollectingAuditPostCommit, route_audit_emit};
 use crate::audit_event_type::AuditEventType;
 use crate::auth_gate::OriginChecked;
 use crate::connection_closer::ConnectionCloseTarget;
@@ -78,38 +83,52 @@ async fn logout_inner(
         internal_error_response()
     })?;
 
-    let client = state
+    // Built before the transaction, so a header that can't be written answers
+    // the 500 with nothing changed — never for a committed logout.
+    let response_headers = clear_session_cookie_header(state.gate.session_cookie_name)?;
+
+    let mut client = state
         .gate
         .pool
         .get()
         .await
         .map_err(|e| db_unavailable_response_with_source("logout: db pool error", &e))?;
+    // every early return drops `tx`, which rolls it back
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| internal_error_response_with_source("logout: transaction begin failed", &e))?;
 
-    query_session_revoke_by_hash_unscoped(&client, session_hash)
+    query_session_revoke_by_hash_unscoped(&tx, session_hash)
         .await
         .map_err(|e| internal_error_response_with_source("logout: session deletion failed", &e))?;
 
-    // Eager account-wide close — matches `fuz_app`'s widening logout to
-    // account-wide invalidation. The audit write below is pool-routed and
-    // fail-open, so this close is the one that must land: the audit listeners
-    // run only on a written row, and an SSE stream never rechecks its
-    // credential. It reaches every transport the consumer's closer covers
-    // (WS and SSE with `fuz_realtime`'s fan-out). The listeners repeat it on
-    // the materialized row (idempotent).
+    // The success row, last before the commit: a refused INSERT rolls the
+    // delete back, so the session — and every connection it opened — lives on.
+    let post_commit = CollectingAuditPostCommit::default();
+    route_audit_emit(
+        &state.audit,
+        &post_commit,
+        &tx,
+        AuditLogInput::for_event(AuditEventType::Logout)
+            .account(resolved.account.id)
+            .ip(Some(client_ip)),
+    )
+    .await
+    .map_err(|_| internal_error_response())?;
+    commit_checked(tx)
+        .await
+        .map_err(|e| internal_error_response_with_source("logout: commit failed", &e))?;
+
+    // Eager account-wide close once the delete has committed — matches
+    // `fuz_app`'s widening logout to account-wide invalidation. It reaches
+    // every transport the consumer's closer covers (WS and SSE with
+    // `fuz_realtime`'s fan-out); an SSE stream never rechecks its credential.
+    // The row's listeners, drained next, repeat it (idempotent).
     state
         .connection_closer
         .close_connections(&ConnectionCloseTarget::Account(resolved.account.id));
-
-    let _ = state
-        .audit
-        .emit(
-            AuditLogInput::for_event(AuditEventType::Logout)
-                .account(resolved.account.id)
-                .ip(Some(client_ip)),
-        )
-        .await;
-
-    let response_headers = clear_session_cookie_header(state.gate.session_cookie_name)?;
+    post_commit.drain().await;
 
     tracing::info!(username = %resolved.account.username, "logout successful");
 

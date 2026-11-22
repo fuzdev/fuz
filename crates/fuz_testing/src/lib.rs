@@ -161,9 +161,7 @@ mod auth_gate_tests {
                 session_cookie_name: "fuz_session",
                 reset_state: None,
             }),
-            create_testing_drain_effects_action_spec(Arc::new(
-                AuditEmitter::new_with_inflight_tracking(unused_pool()),
-            )),
+            create_testing_drain_effects_action_spec(Arc::new(AuditEmitter::new(unused_pool()))),
             create_testing_mint_session_action_spec(test_keyring(), "fuz_session"),
             create_testing_put_fact_action_spec(),
             create_testing_schema_snapshot_action_spec(),

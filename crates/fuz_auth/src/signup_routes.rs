@@ -1,8 +1,9 @@
 //! `POST /signup` axum handler.
 //!
 //! Thin wrapper around [`crate::signup::signup_handler`]: origin gate,
-//! JSON decode, signs the session cookie via the keyring, maps the
-//! typed [`SignupErrorKind`] discriminants to HTTP status codes.
+//! JSON decode, sets the session cookie the handler signed in its
+//! transaction, maps the typed [`SignupErrorKind`] discriminants to HTTP
+//! status codes.
 
 use std::sync::Arc;
 
@@ -17,7 +18,6 @@ use serde_json::json;
 
 use crate::auth_gate::AuthGate;
 use crate::error::{SignupError, SignupErrorKind};
-use crate::route_helpers::session_cookie_header;
 use crate::route_response::rate_limit_exceeded;
 use crate::signup::{SignupInput, SignupOptions, signup_handler};
 use crate::timing::{FailFloor, warn_if_fail_floor_disabled};
@@ -27,9 +27,10 @@ use fuz_http::ClientIp;
 #[derive(Clone)]
 pub struct SignupRouteState {
     pub options: Arc<SignupOptions>,
-    /// The origin check this route runs, and the keyring and session cookie
-    /// name (default [`crate::SESSION_COOKIE_NAME`]) the session cookie it issues is
-    /// signed with.
+    /// The origin check this route runs. The session cookie is signed by the
+    /// handler, with [`SignupOptions::keyring`] under
+    /// [`SignupOptions::session_cookie_name`] — the spine wires both from
+    /// this gate.
     pub gate: AuthGate,
 }
 
@@ -82,13 +83,21 @@ async fn signup_route(
 
     match signup_handler(&state.options, client_ip_str, input).await {
         Ok(success) => {
-            let response_headers = match session_cookie_header(
-                &state.gate.keyring,
-                &success.session_token,
-                state.gate.session_cookie_name,
-            ) {
-                Ok(headers) => headers,
-                Err(response) => return response,
+            // the cookie was signed inside the signup transaction; a line the
+            // grammar already admitted is visible ASCII, which every
+            // `HeaderValue` holds
+            let response_headers = match axum::http::HeaderValue::try_from(success.set_cookie) {
+                Ok(value) => {
+                    let mut headers = HeaderMap::new();
+                    headers.insert(axum::http::header::SET_COOKIE, value);
+                    headers
+                }
+                Err(e) => {
+                    return internal_error_response_with_source(
+                        "signup: session cookie header",
+                        &e,
+                    );
+                }
             };
             // Wire shape matches fuz_app's TS `SignupOutput`:
             // `{ok, account: {id, username}, actor: {id}}`.
@@ -129,7 +138,11 @@ async fn signup_route(
             fuz_http::db_unavailable_response_with_source("signup failed: db pool checkout", &e)
         }
         Err(
-            e @ (SignupError::Query(_) | SignupError::PasswordHash(_) | SignupError::Commit(_)),
+            e @ (SignupError::Query(_)
+            | SignupError::PasswordHash(_)
+            | SignupError::Commit(_)
+            | SignupError::SessionCookie(_)
+            | SignupError::Audit(_)),
         ) => internal_error_response_with_source("signup failed", &e),
     }
 }

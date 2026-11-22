@@ -1,25 +1,24 @@
 //! `POST /api/account/password` — change password, revoke sessions+tokens.
 //!
 //! The change is one transaction: the conditional hash update, the session
-//! revocation, and the API-token revocation commit together or not at all, so
-//! a failed statement or a commit the server refused answers the 500 with the
-//! old password, sessions, and tokens all still in place. Mirrors `fuz_app`'s
-//! `/password` route, which opens the same transaction around the same three
-//! statements.
+//! revocation, the API-token revocation, and the `password_change` success
+//! row commit together or not at all, so a failed statement, a refused audit
+//! row, or a commit the server refused answers the 500 with the old password,
+//! sessions, and tokens all still in place. Mirrors `fuz_app`'s `/password`
+//! route, which opens the same transaction around the same statements.
 //!
-//! The transaction covers those three statements only. The current-password
+//! The transaction covers those statements only. The current-password
 //! verify and the new hash — the two Argon2 runs — happen before it opens,
 //! on no connection at all: the account read's connection goes back to the
 //! pool first.
 //!
-//! The account's live connections are closed after the commit and before the
-//! fail-open audit write, so a change that rolled back closes nothing and a
-//! committed one closes as soon as its commit is answered, whatever becomes of
-//! its audit row. A commit whose answer never arrives is the gap: a
-//! connection lost mid-commit answers the 500 and closes nothing, and a
-//! request dropped while the commit is in flight (its client disconnected)
-//! reaches neither the close nor the audit write, though the change may have
-//! landed.
+//! The account's live connections are closed after the commit, so a change
+//! that rolled back closes nothing and a committed one closes as soon as its
+//! commit is answered; the row's listener fan-out (the revocation guard's
+//! repeat of that close) runs after. A commit whose answer never arrives is
+//! the gap: a connection lost mid-commit answers the 500 and closes nothing,
+//! and a request dropped while the commit is in flight (its client
+//! disconnected) reaches no close, though the change may have landed.
 // TODO: shield the commit-to-close edge from request cancellation (spawn the
 // commit and the close as one task) — the same edge exists in `/logout`,
 // `/login`'s eviction, and the action dispatcher's post-commit drain
@@ -29,7 +28,7 @@ use axum::body::Bytes;
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use fuz_db::{Pool, commit_checked};
+use fuz_db::commit_checked;
 use fuz_http::{
     db_unavailable_response_with_source, internal_error_response,
     internal_error_response_with_source,
@@ -43,7 +42,10 @@ use crate::account_queries::{
 };
 use crate::account_route_state::AccountRouteState;
 use crate::api_token_queries::query_revoke_all_api_tokens_for_account;
-use crate::audit_emitter::{AuditLogInput, credential_type_value};
+use crate::audit_emitter::{
+    AuditLogInput, CollectingAuditPostCommit, credential_type_value, emit_failure_row,
+    route_audit_emit,
+};
 use crate::audit_event_type::AuditEventType;
 use crate::auth_gate::OriginChecked;
 use crate::connection_closer::ConnectionCloseTarget;
@@ -218,16 +220,14 @@ async fn password_inner(
     if !current_password_valid {
         ip_reservation.record();
         account_reservation.record();
-        let _ = state
-            .audit
-            .emit(
-                AuditLogInput::for_event(AuditEventType::PasswordChange)
-                    .failure()
-                    .account(account_id)
-                    .ip(Some(client_ip.clone()))
-                    .metadata(json!({"credential_type": credential_type_meta})),
-            )
-            .await;
+        emit_failure_row(
+            &state.audit,
+            AuditLogInput::for_event(AuditEventType::PasswordChange)
+                .failure()
+                .account(account_id)
+                .ip(Some(client_ip.clone()))
+                .metadata(json!({"credential_type": credential_type_meta})),
+        );
         return Err(fuz_http::rest_error_response(
             StatusCode::UNAUTHORIZED,
             "invalid_credentials",
@@ -246,11 +246,21 @@ async fn password_inner(
             internal_error_response()
         })?;
 
+    // Built before the transaction, so a header that can't be written answers
+    // the 500 with nothing changed — never for a committed change.
+    let response_headers = clear_session_cookie_header(state.gate.session_cookie_name)?;
+
+    let post_commit = CollectingAuditPostCommit::default();
     let change = change_password(
-        &state.gate.pool,
-        &account_id,
-        new_hash.as_str(),
-        &verified_hash,
+        state,
+        &post_commit,
+        ChangeRequest {
+            account_id,
+            new_hash: new_hash.as_str(),
+            verified_hash: &verified_hash,
+            client_ip: &client_ip,
+            credential_type_meta: &credential_type_meta,
+        },
     )
     .await?;
 
@@ -272,53 +282,35 @@ async fn password_inner(
     else {
         ip_reservation.record();
         account_reservation.record();
-        let _ = state
-            .audit
-            .emit(
-                AuditLogInput::for_event(AuditEventType::PasswordChange)
-                    .failure()
-                    .account(account_id)
-                    .ip(Some(client_ip.clone()))
-                    .metadata(json!({
-                        "reason": "concurrent_change",
-                        "credential_type": credential_type_meta,
-                    })),
-            )
-            .await;
+        emit_failure_row(
+            &state.audit,
+            AuditLogInput::for_event(AuditEventType::PasswordChange)
+                .failure()
+                .account(account_id)
+                .ip(Some(client_ip.clone()))
+                .metadata(json!({
+                    "reason": "concurrent_change",
+                    "credential_type": credential_type_meta,
+                })),
+        );
         return Err(fuz_http::rest_error_response(
             StatusCode::UNAUTHORIZED,
             "invalid_credentials",
         ));
     };
 
-    // The change has committed, so close — and before the audit write, not
-    // from its listener: the write below is pool-routed and fail-open, so a
-    // failed INSERT must not leave the account's connections — an SSE stream
-    // above all, which never rechecks — running on credentials just revoked.
-    // No await sits between the commit's answer and this close. See
+    // The change — and its audit row — has committed, so close, through the
+    // closer that reaches every transport (an SSE stream never rechecks). No
+    // await sits between the commit's answer and this close. The row's
+    // listener fan-out runs after it and repeats it (idempotent). See
     // `account_logout`.
     state
         .connection_closer
         .close_connections(&ConnectionCloseTarget::Account(account_id));
+    post_commit.drain().await;
     // A success records nothing on either bucket.
     ip_reservation.release();
     account_reservation.release();
-
-    let _ = state
-        .audit
-        .emit(
-            AuditLogInput::for_event(AuditEventType::PasswordChange)
-                .account(account_id)
-                .ip(Some(client_ip))
-                .metadata(json!({
-                    "sessions_revoked": sessions_revoked,
-                    "tokens_revoked": tokens_revoked,
-                    "credential_type": credential_type_meta,
-                })),
-        )
-        .await;
-
-    let response_headers = clear_session_cookie_header(state.gate.session_cookie_name)?;
 
     tracing::info!(username = %resolved.account.username, "password changed");
 
@@ -347,33 +339,53 @@ enum PasswordChange {
     Superseded,
 }
 
-/// Replace the account's password hash and revoke its sessions and API tokens
-/// in one transaction.
+/// What [`change_password`] changes, and what its audit row records.
+struct ChangeRequest<'a> {
+    account_id: Uuid,
+    new_hash: &'a str,
+    verified_hash: &'a str,
+    client_ip: &'a str,
+    credential_type_meta: &'a serde_json::Value,
+}
+
+/// Replace the account's password hash, revoke its sessions and API tokens,
+/// and write the `password_change` success row, in one transaction.
 ///
 /// The update is conditional on `verified_hash`, which closes the verify-write
 /// race with a concurrent change; when it matches no row the transaction is
 /// rolled back with nothing written and the answer is
-/// `PasswordChange::Superseded`. The commit is [`commit_checked`], so
+/// `PasswordChange::Superseded`. The audit row is the last statement before
+/// the commit, its listener fan-out queued on `post_commit` for the caller to
+/// drain after the commit. The commit is [`commit_checked`], so
 /// `PasswordChange::Committed` is returned only for a commit the server
 /// acknowledged — never for a transaction a failed statement aborted.
 ///
 /// # Errors
 ///
-/// The flat 500 for a pool checkout, the `BEGIN`, any of the three statements,
-/// or the commit. The transaction is rolled back, so the hash, the sessions,
-/// and the tokens are all as they were — unless the commit's answer was lost
-/// in transit, when the change may have landed.
+/// The 503 for a pool checkout; the flat 500 for the `BEGIN`, any of the
+/// statements, the audit row, or the commit. The transaction is rolled back,
+/// so the hash, the sessions, and the tokens are all as they were — unless the
+/// commit's answer was lost in transit, when the change may have landed.
 #[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]
 async fn change_password(
-    pool: &Pool,
-    account_id: &Uuid,
-    new_hash: &str,
-    verified_hash: &str,
+    state: &AccountRouteState,
+    post_commit: &CollectingAuditPostCommit,
+    request: ChangeRequest<'_>,
 ) -> Result<PasswordChange, Response> {
-    let mut client = pool
+    let ChangeRequest {
+        account_id,
+        new_hash,
+        verified_hash,
+        client_ip,
+        credential_type_meta,
+    } = request;
+    let account_id = &account_id;
+    let mut client = state
+        .gate
+        .pool
         .get()
         .await
         .map_err(|e| db_unavailable_response_with_source("password: db pool error", &e))?;
@@ -398,6 +410,21 @@ async fn change_password(
             .map_err(|e| {
                 internal_error_response_with_source("password: token revocation failed", &e)
             })?;
+        route_audit_emit(
+            &state.audit,
+            post_commit,
+            &tx,
+            AuditLogInput::for_event(AuditEventType::PasswordChange)
+                .account(*account_id)
+                .ip(Some(client_ip.to_owned()))
+                .metadata(json!({
+                    "sessions_revoked": sessions_revoked,
+                    "tokens_revoked": tokens_revoked,
+                    "credential_type": credential_type_meta,
+                })),
+        )
+        .await
+        .map_err(|_| internal_error_response())?;
         Ok::<_, Response>(Some((sessions_revoked, tokens_revoked)))
     }
     .await;

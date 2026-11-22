@@ -355,16 +355,21 @@ impl AuditEventSpec {
 ///
 /// Conventions encoded here:
 ///
-/// - **Action-spec success audits** that pair with a state mutation
-///   route `InTx` on success (the state row + audit row land
-///   atomically). Failure audits on the same events route `Pool` so
-///   the forensic record survives the rollback that discards the
-///   attempted state change.
-/// - **REST-handler events** (`Login`, `Logout`, `Signup`,
-///   `PasswordChange`, `Bootstrap`) route `Pool` on both outcomes —
-///   they don't dispatch through the action transaction-wrap today.
-///   When REST handlers are lifted into the action-dispatch model, the
-///   table flips to `InTx` on success.
+/// - **Every success row routes `InTx`** — action specs and the REST
+///   handlers (`Login`, `Logout`, `Signup`, `PasswordChange`, `Bootstrap`,
+///   `DbAdminRowDelete`) alike. The row is written in the request's
+///   transaction, last before its commit, so it is visible exactly when the
+///   change is: a refused INSERT rolls the change back and fails the request.
+///   A REST handler that owns its transaction passes a
+///   [`CollectingAuditPostCommit`](crate::CollectingAuditPostCommit) to
+///   [`route_audit_emit`](crate::route_audit_emit) and drains it after the
+///   commit. `seq` is taken at the INSERT, so it follows INSERT order, not
+///   commit order: a reader can see a higher `seq` commit before a lower one.
+///   `created_at` (`DEFAULT NOW()`) is the transaction's start, the same
+///   instant as the rows the transaction wrote before it.
+/// - **Every failure row routes `Pool`**, so the forensic record survives the
+///   rollback that discards the attempted change. A failure row never holds
+///   the response: the write is spawned, not awaited.
 /// - **[`RevocationScope`]** is [`None`](RevocationScope::None) unless the
 ///   event's success *invalidates a live connection's credential or access*.
 ///   Nine rows are not: `Logout` / `PasswordChange` / `SessionRevokeAll` /
@@ -379,40 +384,40 @@ impl AuditEventSpec {
 /// Add a new event by extending [`AuditEventType`] and appending a row
 /// here. The order isn't load-bearing.
 pub static AUDIT_EVENT_SPECS: &[AuditEventSpec] = &[
-    // --- REST handlers — pool-routed everywhere (no dispatcher tx today) ---
+    // --- REST handlers — success in the handler's own transaction ---
     AuditEventSpec {
         event_type: AuditEventType::Login,
-        success_routing: AuditRouting::Pool,
+        success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
         revocation_scope: RevocationScope::None,
     },
     AuditEventSpec {
         event_type: AuditEventType::Logout,
-        success_routing: AuditRouting::Pool,
+        success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
         revocation_scope: RevocationScope::Account,
     },
     AuditEventSpec {
         event_type: AuditEventType::Signup,
-        success_routing: AuditRouting::Pool,
+        success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
         revocation_scope: RevocationScope::None,
     },
     AuditEventSpec {
         event_type: AuditEventType::PasswordChange,
-        success_routing: AuditRouting::Pool,
+        success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
         revocation_scope: RevocationScope::Account,
     },
     AuditEventSpec {
         event_type: AuditEventType::Bootstrap,
-        success_routing: AuditRouting::Pool,
+        success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
         revocation_scope: RevocationScope::None,
     },
     AuditEventSpec {
         event_type: AuditEventType::DbAdminRowDelete,
-        success_routing: AuditRouting::Pool,
+        success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
         revocation_scope: RevocationScope::None,
     },
@@ -1037,20 +1042,44 @@ mod tests {
         assert_eq!(spec.routing_for(AuditOutcome::Failure), AuditRouting::Pool);
     }
 
+    /// The REST handlers' rows route as the action specs' do: success in the
+    /// request's transaction, failure on the pool.
     #[test]
-    fn rest_handler_events_are_pool_on_both_outcomes() {
+    fn rest_handler_events_are_in_tx_on_success_and_pool_on_failure() {
         for et in [
             AuditEventType::Login,
             AuditEventType::Logout,
             AuditEventType::Signup,
             AuditEventType::PasswordChange,
             AuditEventType::Bootstrap,
+            AuditEventType::DbAdminRowDelete,
         ] {
             let spec = audit_event_spec(et);
             assert_eq!(
                 spec.success_routing,
+                AuditRouting::InTx,
+                "{et:?} success should be InTx"
+            );
+            assert_eq!(
+                spec.failure_routing,
                 AuditRouting::Pool,
-                "{et:?} success should be Pool (no dispatcher tx)"
+                "{et:?} failure should be Pool"
+            );
+        }
+    }
+
+    /// **Every spine success row is written in its request's transaction**,
+    /// and every failure row on the pool. Driven off `ALL`, so a new event
+    /// can't land with a success row that outlives a rolled-back change, or
+    /// a failure row that dies with one.
+    #[test]
+    fn every_spine_success_row_is_in_tx_and_every_failure_row_pool() {
+        for et in AuditEventType::ALL {
+            let spec = audit_event_spec(*et);
+            assert_eq!(
+                spec.success_routing,
+                AuditRouting::InTx,
+                "{et:?} success should be InTx"
             );
             assert_eq!(
                 spec.failure_routing,
@@ -1119,25 +1148,22 @@ mod tests {
         }
     }
 
-    /// **A pool-routed revocation is closed by its handler, not the listener.**
+    /// **No revocation is pool-routed.**
     ///
-    /// A pool-routed success audit is fail-open: the revocation commits whether
-    /// or not the audit INSERT lands, and the revocation guard fires only on
-    /// a written row. So for these events the handler's direct
-    /// `ConnectionCloser` close is the only close guaranteed to run — which is
-    /// why it closes account-wide before the audit write, through a closer
-    /// that reaches SSE as well as WS. An in-tx revocation needs no such care:
-    /// a failed INSERT fails the handler and rolls the revocation back.
+    /// A pool-routed success row could fail after its revocation committed,
+    /// and the revocation guard fires only on a written row — so the
+    /// handler's own close would be the only one guaranteed to run. Every
+    /// revocation's row is written in its transaction instead: a refused
+    /// INSERT rolls the revocation back, and a committed one has its row.
+    /// A `Role` revocation leans on this outright — no handler closes a
+    /// `ConnectionCloseTarget::Role`, which only the audit listener reaches.
     ///
-    /// Pins the set exactly. A new pool-routed closer — or one of these
-    /// moving to another scope — fails here, and the question it raises is
-    /// whether its handler closes directly on every transport. A pool-routed
-    /// `Role` revocation in particular has no direct-close path today: no
-    /// handler closes a `ConnectionCloseTarget::Role`, which only the audit
-    /// listener reaches.
+    /// Pins the set empty. A revocation moved to the pool fails here, and the
+    /// question it raises is whether its handler closes directly on every
+    /// transport.
     #[test]
-    fn the_pool_routed_revocations_are_logout_and_password_change() {
-        let mut pool_routed: Vec<(AuditEventType, RevocationScope)> = AUDIT_EVENT_SPECS
+    fn no_revocation_is_pool_routed() {
+        let pool_routed: Vec<(AuditEventType, RevocationScope)> = AUDIT_EVENT_SPECS
             .iter()
             .filter(|spec| {
                 spec.revocation_scope != RevocationScope::None
@@ -1145,14 +1171,9 @@ mod tests {
             })
             .map(|spec| (spec.event_type, spec.revocation_scope))
             .collect();
-        // The table's row order isn't load-bearing, so neither is this one's.
-        pool_routed.sort_by_key(|(event_type, _)| event_type.as_str());
         assert_eq!(
             pool_routed,
-            [
-                (AuditEventType::Logout, RevocationScope::Account),
-                (AuditEventType::PasswordChange, RevocationScope::Account),
-            ],
+            [],
             "a pool-routed revocation's close must not depend on its audit \
              write — confirm its handler closes directly on every transport",
         );

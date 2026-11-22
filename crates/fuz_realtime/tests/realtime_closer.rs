@@ -1,12 +1,13 @@
 //! [`fuz_realtime::RealtimeCloser`] — each `ConnectionCloser` close reaches
 //! **both** registries, WS and SSE.
 //!
-//! **The gap this closes.** A revocation handler's direct close is the only
-//! close guaranteed to run on the REST `/logout` / `/password` paths, whose
-//! audit write is pool-routed and fail-open — the audit listeners fire only on
-//! a written row. A closer over the WS registry alone skips SSE there, so a
-//! failed audit INSERT would leave the account's audit streams open for their
-//! lifetime (a stream never rechecks its credential).
+//! **The gap this closes.** Some closes have no audit listener to repeat them:
+//! a login's session-cap eviction (the `login` row revokes nothing) and the
+//! scheduled session sweep (which writes no row) close only through the
+//! closer they hold. A closer over the WS registry alone skips SSE there, so
+//! the evicted or expired session's audit streams would stay open for their
+//! lifetime (a stream never rechecks its credential). The revocation handlers'
+//! own closes, which run before the listeners' repeat, reach SSE the same way.
 //!
 //! Each case opens one matching and one non-matching connection on each
 //! transport, closes through the fan-out, and asserts the matching pair ended

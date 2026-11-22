@@ -31,13 +31,17 @@
 //! They pin those answers as this spine gives them; whether each reason is
 //! the TS twin's is not their claim.
 //!
-//! `/password` writes three things — the hash, the session revocation, the
-//! API-token revocation — so its failures have a second half: what they leave
-//! behind. The `/password is one transaction` cases read the account's
-//! [`Credentials`] back over their own connection and record every close the
-//! route asks its [`ConnectionCloser`] for: a failed change leaves the hash, the
-//! sessions, and the tokens as seeded and closes nothing, and a committed one
-//! closes once, after the commit, whatever becomes of its audit row. One more
+//! `/password` writes four things — the hash, the session revocation, the
+//! API-token revocation, its audit row — so its failures have a second half:
+//! what they leave behind. The `/password is one transaction` cases read the
+//! account's [`Credentials`] back over their own connection and record every
+//! close the route asks its [`ConnectionCloser`] for: a failed change — a
+//! refused audit row included — leaves the hash, the sessions, and the tokens
+//! as seeded and closes nothing, and a committed one closes once, after the
+//! commit.
+//!
+//! Every REST success row is written in its request's transaction, so the
+//! last section refuses each route's row and finds nothing changed. One more
 //! case watches the pool from inside the hasher: the verify and the hash run
 //! with no connection checked out.
 //!
@@ -552,9 +556,11 @@ fn token_store(read_fails: bool) -> Arc<dyn BootstrapTokenStore> {
 /// Signup-router state over `pool`: a stub hasher, no rate limiters, and no
 /// denial floor.
 fn signup_state(pool: Pool) -> SignupRouteState {
+    let gate = fuz_testing::testing_auth_gate(pool.clone());
     SignupRouteState {
-        gate: fuz_testing::testing_auth_gate(pool.clone()),
         options: Arc::new(SignupOptions {
+            keyring: Arc::clone(&gate.keyring),
+            session_cookie_name: gate.session_cookie_name,
             audit: Arc::new(AuditEmitter::new(pool.clone())),
             pool,
             password_hasher: StubHasher::accepting(),
@@ -563,6 +569,7 @@ fn signup_state(pool: Pool) -> SignupRouteState {
             signup_fail_floor_ms: 0,
             signup_fail_jitter_ms: 0,
         }),
+        gate,
     }
 }
 
@@ -1140,11 +1147,12 @@ async fn password_committed_change_closes_once_after_the_commit() {
     );
 }
 
-/// The audit write is fail-open: with every `password_change` row refused,
-/// the committed change still answers its success and still closes.
+/// The success row is written in the change's transaction: with every
+/// `password_change` row refused, the change rolls back — the flat 500, the
+/// hash, sessions, and tokens as seeded, and nothing closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-async fn password_failed_audit_write_still_answers_and_closes() {
+async fn password_refused_audit_row_changes_nothing_and_closes_nothing() {
     let pool = fresh_db_pool().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_audit_refused").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
@@ -1152,28 +1160,13 @@ async fn password_failed_audit_write_still_answers_and_closes() {
 
     let reply = post_password(router, &cookie).await;
 
-    assert_json(
-        &reply,
-        StatusCode::OK,
-        r#"{"ok":true,"sessions_revoked":1,"tokens_revoked":1}"#,
-    );
+    assert_flat_500(&reply);
     assert_eq!(
-        closer.closes(),
-        [(account_id, Credentials::changed())],
-        "the close does not wait on the audit row"
+        Credentials::read(&pool, account_id).await,
+        Credentials::seeded()
     );
-    let audited: i64 = pool
-        .get()
-        .await
-        .expect("pool.get")
-        .query_one(
-            "SELECT count(*) FROM audit_log WHERE event_type = 'password_change'",
-            &[],
-        )
-        .await
-        .expect("audit count")
-        .get(0);
-    assert_eq!(audited, 0, "the audit write was refused");
+    assert_eq!(closer.closes(), [], "a rolled-back change closes nothing");
+    assert_eq!(audit_rows(&pool, "password_change").await, 0);
 }
 
 /// The two Argon2 runs — the verify and the hash — happen with no connection
@@ -1209,15 +1202,20 @@ async fn password_verifies_and_hashes_holding_no_connection() {
 async fn password_superseded_change_answers_the_401_and_writes_nothing() {
     let pool = fresh_db_pool().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_superseded").await;
-    let (router, closer) = probed_routes(
-        &pool,
+    let closer = ProbingCloser::new(pool.clone());
+    let mut state = account_state(
+        pool.clone(),
         Arc::new(SupersedingHasher {
             pool: pool.clone(),
             account_id,
         }),
     );
+    state.connection_closer = Arc::<ProbingCloser>::clone(&closer);
+    let audit = Arc::clone(&state.audit);
 
-    let reply = post_password(router, &cookie).await;
+    let reply = post_password(account_router(state), &cookie).await;
+    // the failure row is spawned, never awaited by the route
+    audit.drain_inflight().await;
 
     assert_json(
         &reply,
@@ -1281,9 +1279,11 @@ const SIGNUP_CLIENT_IP: &str = "10.0.0.20";
 /// `signup_router` over `pool` with both buckets limited, every request
 /// arriving from [`SIGNUP_CLIENT_IP`].
 fn limited_signup_router(pool: Pool, ip: &Arc<RateLimiter>, account: &Arc<RateLimiter>) -> Router {
+    let gate = fuz_testing::testing_auth_gate(pool.clone());
     let state = SignupRouteState {
-        gate: fuz_testing::testing_auth_gate(pool.clone()),
         options: Arc::new(SignupOptions {
+            keyring: Arc::clone(&gate.keyring),
+            session_cookie_name: gate.session_cookie_name,
             audit: Arc::new(AuditEmitter::new(pool.clone())),
             pool,
             password_hasher: StubHasher::accepting(),
@@ -1292,6 +1292,7 @@ fn limited_signup_router(pool: Pool, ip: &Arc<RateLimiter>, account: &Arc<RateLi
             signup_fail_floor_ms: 0,
             signup_fail_jitter_ms: 0,
         }),
+        gate,
     };
     signup_router(state).layer(Extension(ClientIp(SIGNUP_CLIENT_IP.to_owned())))
 }
@@ -1952,7 +1953,7 @@ impl ConnectionCloser for AuditWatchingCloser {
 }
 
 /// A change that fails writes no `password_change` row of either outcome —
-/// the success row is written after the commit, never ahead of it.
+/// the success row commits with the change or not at all.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_failed_change_audits_nothing() {
@@ -1973,11 +1974,12 @@ async fn password_failed_change_audits_nothing() {
 }
 
 /// The committed change is audited once, as a success on the account, with
-/// the counts it revoked and the credential type it arrived on — and the
-/// close has already run when that row is written.
+/// the counts it revoked and the credential type it arrived on — a row that
+/// committed with the change, so a separate connection already reads it when
+/// the close runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
-async fn password_committed_change_closes_before_it_audits_its_counts() {
+async fn password_committed_change_audits_its_counts_with_the_commit_before_the_close() {
     let pool = fresh_db_pool().await;
     // Two sessions and one token, so the two counts cannot stand in for each
     // other.
@@ -2005,8 +2007,8 @@ async fn password_committed_change_closes_before_it_audits_its_counts() {
     );
     assert_eq!(
         *closer.audited_at_close.lock().unwrap(),
-        [0],
-        "one close, before the audit row exists"
+        [1],
+        "one close, after the audit row committed with the change"
     );
     assert_eq!(
         password_change_audits(&pool).await,
@@ -2270,4 +2272,161 @@ async fn password_dropped_mid_verify_costs_an_attempt_on_each_bucket() {
 
     assert!(parked, "the change finished before its verify started");
     assert_eq!(limited.attempts(account_id), (1, 1));
+}
+
+// -- A refused success row fails the request ----------------------------------
+
+// Every REST success row is written in the request's transaction, last before
+// its commit, so a refused INSERT rolls the change back with it: the flat 500
+// and nothing changed. `/password`'s case sits with its transaction above.
+
+/// How many `audit_log` rows of `event_type` a separate connection reads.
+async fn audit_rows(pool: &Pool, event_type: &str) -> i64 {
+    pool.get()
+        .await
+        .expect("pool.get")
+        .query_one(
+            "SELECT count(*) FROM audit_log WHERE event_type = $1",
+            &[&event_type],
+        )
+        .await
+        .expect("audit count")
+        .get(0)
+}
+
+/// How many sessions `account_id` holds.
+async fn session_count(pool: &Pool, account_id: Uuid) -> i64 {
+    pool.get()
+        .await
+        .expect("pool.get")
+        .query_one(
+            "SELECT count(*) FROM auth_session WHERE account_id = $1",
+            &[&account_id],
+        )
+        .await
+        .expect("session count")
+        .get(0)
+}
+
+/// How many accounts are named `username`.
+async fn account_count(pool: &Pool, username: &str) -> i64 {
+    pool.get()
+        .await
+        .expect("pool.get")
+        .query_one(
+            "SELECT count(*) FROM account WHERE username = $1",
+            &[&username],
+        )
+        .await
+        .expect("account count")
+        .get(0)
+}
+
+/// A refused `login` row mints no session and sets no cookie.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn login_refused_audit_row_mints_no_session() {
+    let pool = fresh_db_pool().await;
+    let (account_id, _) = seed_account_actor(&pool, "login_audit_refused").await;
+    fuz_testing::seed::refuse_audit_rows(&pool, &["login"]).await;
+
+    let reply = post_login(account_routes(pool.clone()), "login_audit_refused").await;
+
+    assert_flat_500(&reply);
+    assert_eq!(session_count(&pool, account_id).await, 0);
+    assert_eq!(audit_rows(&pool, "login").await, 0);
+}
+
+/// A refused `logout` row ends no session and closes nothing: the session
+/// still authenticates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn logout_refused_audit_row_ends_no_session_and_closes_nothing() {
+    let pool = fresh_db_pool().await;
+    let (account_id, cookie) = seed_credentials(&pool, "logout_audit_refused").await;
+    let (router, closer) = probed_routes(&pool, StubHasher::accepting());
+    fuz_testing::seed::refuse_audit_rows(&pool, &["logout"]).await;
+
+    let reply = post_logout(router, &cookie).await;
+
+    assert_flat_500(&reply);
+    assert_eq!(session_count(&pool, account_id).await, 1);
+    assert_eq!(closer.closes(), [], "a rolled-back logout closes nothing");
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
+    assert_eq!(reply.status, StatusCode::OK, "the session is still live");
+    assert_eq!(audit_rows(&pool, "logout").await, 0);
+}
+
+/// A refused `signup` row creates no account.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn signup_refused_audit_row_creates_no_account() {
+    let pool = fresh_db_pool().await;
+    execute(
+        &pool,
+        "UPDATE app_settings SET open_signup = true WHERE id = 1",
+    )
+    .await;
+    fuz_testing::seed::refuse_audit_rows(&pool, &["signup"]).await;
+
+    let reply = post_signup(signup_router(signup_state(pool.clone()))).await;
+
+    assert_flat_500(&reply);
+    assert_eq!(account_count(&pool, "newcomer").await, 0);
+    assert_eq!(audit_rows(&pool, "signup").await, 0);
+}
+
+/// A [`BootstrapTokenStore`] holding [`BOOTSTRAP_TOKEN`] that records whether
+/// it was burned.
+struct BurnRecordingTokenStore {
+    burned: AtomicBool,
+}
+
+impl BootstrapTokenStore for BurnRecordingTokenStore {
+    fn read_token(&self) -> BoxFuture<'_, io::Result<Vec<u8>>> {
+        async { Ok(BOOTSTRAP_TOKEN.as_bytes().to_vec()) }.boxed()
+    }
+
+    fn burn_token(&self) -> BoxFuture<'_, io::Result<fuz_sys::secure_file::BurnOutcome>> {
+        self.burned.store(true, Ordering::SeqCst);
+        async { Ok(fuz_sys::secure_file::BurnOutcome::Burned) }.boxed()
+    }
+}
+
+/// A refused `bootstrap` row creates nothing, leaves the lock unflipped and
+/// the window open, and burns no token — the operator retries the same one.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn bootstrap_refused_audit_row_creates_nothing_and_keeps_the_token() {
+    let pool = fresh_db_pool().await;
+    fuz_testing::seed::refuse_audit_rows(&pool, &["bootstrap"]).await;
+    let store = Arc::new(BurnRecordingTokenStore {
+        burned: AtomicBool::new(false),
+    });
+    let state = bootstrap_state(
+        pool.clone(),
+        Some(Arc::<BurnRecordingTokenStore>::clone(&store)),
+        true,
+    );
+    let available = Arc::clone(&state.options.bootstrap_available);
+
+    let reply = post_bootstrap(bootstrap_router(state), BOOTSTRAP_TOKEN).await;
+
+    assert_flat_500(&reply);
+    assert_eq!(account_count(&pool, "keeper").await, 0);
+    let bootstrapped: bool = pool
+        .get()
+        .await
+        .expect("pool.get")
+        .query_one("SELECT bootstrapped FROM bootstrap_lock WHERE id = 1", &[])
+        .await
+        .expect("bootstrap_lock row")
+        .get(0);
+    assert!(!bootstrapped, "the lock is not flipped");
+    assert!(
+        !store.burned.load(Ordering::SeqCst),
+        "the token is not burned"
+    );
+    assert!(available.load(Ordering::SeqCst), "the window stays open");
+    assert_eq!(audit_rows(&pool, "bootstrap").await, 0);
 }

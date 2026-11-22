@@ -239,8 +239,11 @@ async fn token_count(pool: &Pool, account_id: &uuid::Uuid) -> i64 {
         .get(0)
 }
 
-async fn failed_login_rows(pool: &Pool, account_id: &uuid::Uuid) -> i64 {
-    let client = pool.get().await.unwrap();
+/// How many failed-login rows name `account_id`, once every failure row in
+/// flight has landed — login spawns them, never awaiting one.
+async fn failed_login_rows(state: &AccountRouteState, account_id: &uuid::Uuid) -> i64 {
+    state.audit.drain_inflight().await;
+    let client = state.gate.pool.get().await.unwrap();
     client
         .query_one(
             "SELECT COUNT(*) FROM audit_log
@@ -358,7 +361,7 @@ async fn a_login_held_across_a_password_change_is_refused_as_a_wrong_password() 
     assert_eq!(first.status, StatusCode::OK);
     let wrong = login(&state, "victim", "not-the-password").await;
     assert_refused_as_wrong_password(&wrong, "the control: a wrong password");
-    let failures_before = failed_login_rows(&pool, &account_id).await;
+    let failures_before = failed_login_rows(&state, &account_id).await;
 
     let (reached, release) = hasher.hold();
     let held = tokio::spawn({
@@ -378,7 +381,7 @@ async fn a_login_held_across_a_password_change_is_refused_as_a_wrong_password() 
         "no session row survives"
     );
     assert_eq!(
-        failed_login_rows(&pool, &account_id).await,
+        failed_login_rows(&state, &account_id).await,
         failures_before + 1,
         "audited as a failed login, as the wrong password was"
     );

@@ -32,7 +32,9 @@ use crate::account_queries::query_create_account;
 use crate::account_schema::AccountRow;
 use crate::actor_queries::{query_create_actor, query_create_role_grant};
 use crate::actor_schema::ActorRow;
-use crate::audit_emitter::{AuditEmitter, AuditLogInput};
+use crate::audit_emitter::{
+    AuditEmitter, AuditLogInput, CollectingAuditPostCommit, emit_failure_row, route_audit_emit,
+};
 use crate::audit_event_type::AuditEventType;
 use crate::bootstrap_keeper_resolved::BootstrapKeeperResolved;
 use crate::bootstrap_token_store::{BootstrapTokenStore, read_bootstrap_token_file};
@@ -423,7 +425,7 @@ pub async fn bootstrap_handler(
         // fires once.
         options.bootstrap_available.store(false, Ordering::Relaxed);
         ip_reservation.record();
-        emit_failure(&options.audit, client_ip.as_deref(), "token_file_missing").await;
+        emit_failure(&options.audit, client_ip.as_deref(), "token_file_missing");
         return Err(BootstrapError::Classified {
             kind: BootstrapErrorKind::TokenFileMissing,
         });
@@ -431,7 +433,7 @@ pub async fn bootstrap_handler(
 
     if !bool::from(input.token.as_bytes().ct_eq(&expected_token)) {
         ip_reservation.record();
-        emit_failure(&options.audit, client_ip.as_deref(), "invalid_token").await;
+        emit_failure(&options.audit, client_ip.as_deref(), "invalid_token");
         return Err(BootstrapError::Classified {
             kind: BootstrapErrorKind::InvalidToken,
         });
@@ -449,8 +451,8 @@ pub async fn bootstrap_handler(
     // the burn (which completes on its blocking thread regardless) and the
     // COMMIT would roll the transaction back silently, leaving the token gone,
     // nothing created, and the window open. Everything from the pool checkout
-    // to the success audit row is on the task, so no await point of it is the
-    // request's to cancel. A panic on the task answers the 500.
+    // to the success row's listener fan-out is on the task, so no await point
+    // of it is the request's to cancel. A panic on the task answers the 500.
     let write = tokio::spawn(bootstrap_write(
         options.clone(),
         Arc::clone(token_store),
@@ -478,7 +480,8 @@ pub async fn bootstrap_handler(
 
 /// The write phase of [`bootstrap_handler`], spawned so the request can't
 /// cancel it: the lock, the inserts, the session and its signed cookie, the
-/// burn, the commit, then the post-commit flip, callback, and audit row.
+/// success audit row, the burn, the commit, then the post-commit flip,
+/// callback, and the row's listener fan-out.
 async fn bootstrap_write(
     options: BootstrapOptions,
     token_store: Arc<dyn BootstrapTokenStore>,
@@ -534,6 +537,22 @@ async fn bootstrap_write(
     )
     .map_err(BootstrapError::SessionCookie)?;
 
+    // The success row, in the transaction and ahead of the burn: a refused
+    // INSERT rolls the bootstrap back with the token unburned and the window
+    // open, as a failed insert above does.
+    let post_commit = CollectingAuditPostCommit::default();
+    route_audit_emit(
+        &options.audit,
+        &post_commit,
+        &tx,
+        AuditLogInput::for_event(AuditEventType::Bootstrap)
+            .actor(actor.id)
+            .account(account.id)
+            .ip(client_ip.clone()),
+    )
+    .await
+    .map_err(BootstrapError::Audit)?;
+
     // Burn the token last inside the transaction, immediately before the
     // commit. After the lock UPDATE, so only the lock winner burns (its row
     // lock is held across the unlink, so a concurrent attempt waits on its
@@ -556,8 +575,7 @@ async fn bootstrap_write(
                 &options.audit,
                 client_ip.as_deref(),
                 "token_file_undeletable",
-            )
-            .await;
+            );
             return Err(BootstrapError::Classified {
                 kind: BootstrapErrorKind::TokenFileUndeletable,
             });
@@ -579,15 +597,8 @@ async fn bootstrap_write(
         cb.on_keeper_resolved(account.id).await;
     }
 
-    let _ = options
-        .audit
-        .emit(
-            AuditLogInput::for_event(AuditEventType::Bootstrap)
-                .actor(actor.id)
-                .account(account.id)
-                .ip(client_ip),
-        )
-        .await;
+    // the `bootstrap` row's listener fan-out, now that the row has committed
+    post_commit.drain().await;
 
     Ok(BootstrapSuccess {
         session_token,
@@ -613,15 +624,15 @@ fn bootstrap_input_canonical_username(input: &BootstrapInput) -> Option<String> 
     crate::primitive_schemas::canonical_username_for_creation(&input.username)
 }
 
-async fn emit_failure(audit: &Arc<AuditEmitter>, client_ip: Option<&str>, error: &str) {
-    let _ = audit
-        .emit(
-            AuditLogInput::for_event(AuditEventType::Bootstrap)
-                .failure()
-                .ip(client_ip.map(str::to_owned))
-                .metadata(json!({"error": error})),
-        )
-        .await;
+/// Write a `bootstrap` failure row ([`emit_failure_row`]).
+fn emit_failure(audit: &Arc<AuditEmitter>, client_ip: Option<&str>, error: &str) {
+    emit_failure_row(
+        audit,
+        AuditLogInput::for_event(AuditEventType::Bootstrap)
+            .failure()
+            .ip(client_ip.map(str::to_owned))
+            .metadata(json!({"error": error})),
+    );
 }
 
 #[cfg(test)]

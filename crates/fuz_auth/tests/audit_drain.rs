@@ -1,4 +1,4 @@
-//! PG-backed test for [`fuz_auth::AuditEmitter::drain_inflight`]: a tracked
+//! PG-backed test for [`fuz_auth::AuditEmitter::drain_inflight`]: an
 //! `emit` whose listener panics still settles the in-flight count, so the
 //! drain — the barrier the `_testing_drain_effects` action awaits — resolves
 //! rather than hanging.
@@ -30,7 +30,7 @@ use fuz_auth::{AuditEmitter, AuditEventType, AuditListenerFn, AuditLogInput};
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_panicking_listener_still_settles_the_drain() {
     let pool = common::fresh_db_pool().await;
-    let emitter = Arc::new(AuditEmitter::new_with_inflight_tracking(pool));
+    let emitter = Arc::new(AuditEmitter::new(pool));
     let heard = Arc::new(AtomicBool::new(false));
     let listener: AuditListenerFn = {
         let heard = Arc::clone(&heard);

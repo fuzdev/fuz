@@ -27,10 +27,10 @@ use common::fresh_db_pool;
 
 fn build_options(pool: Pool) -> SignupOptions {
     let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2idHasher::new());
-    // Inflight tracking so `drain_inflight` is a real barrier: signup's
-    // audit rows are fire-and-forget `emit` writes, so reading `audit_log`
-    // without draining races the spawned INSERT.
-    let audit = Arc::new(AuditEmitter::new_with_inflight_tracking(pool.clone()));
+    // Signup's failure rows are fire-and-forget `emit` writes, so reading
+    // `audit_log` without draining races the spawned INSERT (a success row
+    // commits with the signup).
+    let audit = Arc::new(AuditEmitter::new(pool.clone()));
     SignupOptions {
         pool,
         password_hasher: hasher,
@@ -40,6 +40,8 @@ fn build_options(pool: Pool) -> SignupOptions {
         // 0-ms floor in tests so denial paths don't add wall-clock.
         signup_fail_floor_ms: 0,
         signup_fail_jitter_ms: 0,
+        keyring: Arc::new(fuz_testing::testing_keyring()),
+        session_cookie_name: fuz_auth::SESSION_COOKIE_NAME,
     }
 }
 
@@ -569,6 +571,8 @@ async fn signup_rate_limit_bypasses_deadline_floor() {
         // catches that regression.
         signup_fail_floor_ms: 500,
         signup_fail_jitter_ms: 0,
+        keyring: Arc::new(fuz_testing::testing_keyring()),
+        session_cookie_name: fuz_auth::SESSION_COOKIE_NAME,
     };
 
     // Burn the bucket.

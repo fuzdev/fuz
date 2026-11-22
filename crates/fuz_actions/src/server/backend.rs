@@ -169,14 +169,11 @@ pub struct SpineBackendOptions {
     /// Fired after the pool exists and before migrations. Production: `None`;
     /// a test binary's env-gated schema reset.
     pub pre_migration_hook: Option<PreMigrationHook<StartupError>>,
-    /// Whether the audit emitter tracks its in-flight writes, the substrate of
-    /// `_testing_drain_effects`. Production: `false`.
-    pub audit_inflight_tracking: bool,
 }
 
 impl SpineBackendOptions {
     /// The production options: `password_hasher`, every limiter enforced at
-    /// the spine defaults, no daemon token, no hook, no in-flight tracking.
+    /// the spine defaults, no daemon token, no hook.
     #[must_use]
     pub fn production(password_hasher: Arc<dyn PasswordHasher>) -> Self {
         Self {
@@ -185,7 +182,6 @@ impl SpineBackendOptions {
             login_ip_rate_limit: fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT,
             daemon_token_state: None,
             pre_migration_hook: None,
-            audit_inflight_tracking: false,
         }
     }
 }
@@ -297,6 +293,19 @@ impl AppBackend {
                 closer
             },
             |sse| RealtimeCloser::connection_closer(&self.realtime, sse),
+        )
+    }
+
+    /// What [`super::serve_until_shutdown`] serves over: this backend's
+    /// [`Self::connection_closer`], which shutdown closes every live
+    /// connection through, its audit emitter, whose spawned writes shutdown
+    /// drains, and `upkeep` to run beside the server.
+    #[must_use]
+    pub fn serve_backend(&self, upkeep: Option<super::UpkeepOptions>) -> super::ServeBackend {
+        super::ServeBackend::new(
+            self.connection_closer(),
+            Arc::clone(&self.audit_emitter),
+            upkeep,
         )
     }
 
@@ -491,7 +500,6 @@ pub fn build_app_backend(
         login_ip_rate_limit,
         daemon_token_state,
         pre_migration_hook: _,
-        audit_inflight_tracking,
     } = options;
     let rate_limiters = *rate_limiters;
     // a name the `Cookie` grammar cannot carry would be written as a header
@@ -515,12 +523,7 @@ pub fn build_app_backend(
     )?;
     let keyring = Arc::new(build_keyring(env.cookie_keys.as_deref())?);
     let audit_emitter = Arc::new(
-        if *audit_inflight_tracking {
-            AuditEmitter::new_with_inflight_tracking(pool.clone())
-        } else {
-            AuditEmitter::new(pool.clone())
-        }
-        .with_checkout_timeout(env.db_audit_checkout_timeout),
+        AuditEmitter::new(pool.clone()).with_checkout_timeout(env.db_audit_checkout_timeout),
     );
     Ok(AppBackend {
         login_ip_rate_limiter: rate_limiters.limiter(*login_ip_rate_limit),
@@ -854,12 +857,12 @@ mod tests {
         );
     }
 
-    /// `_testing_drain_effects` is a barrier only over the tracked emitter: a
-    /// fire-and-forget write still in flight (here, stuck dialing a server
-    /// that accepts the connection and never answers) holds the drain, and
-    /// the untracked production emitter's drain returns at once.
+    /// The backend's emitter tracks its pool writes: a fire-and-forget write
+    /// still in flight (here, stuck dialing a server that accepts the
+    /// connection and never answers) holds the drain — what shutdown and
+    /// `_testing_drain_effects` wait on — until the write ends.
     #[tokio::test]
-    async fn audit_inflight_tracking_makes_the_drain_wait_for_a_write() {
+    async fn the_backend_emitter_drain_waits_for_a_write() {
         use fuz_auth::{AuditEventType, AuditLogInput};
 
         let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -888,51 +891,33 @@ mod tests {
             audit_sse: None,
             browser_gates: BrowserGateSpec::DEFAULT,
         };
-        let build = |audit_inflight_tracking| {
-            build_app_backend(
-                &env,
-                &spec,
-                &SpineBackendOptions {
-                    audit_inflight_tracking,
-                    ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
-                },
-            )
-            .expect("the core builds without the database")
-        };
-        let emit = |backend: &AppBackend| {
-            backend
-                .audit_emitter
-                .emit(AuditLogInput::for_event(AuditEventType::Logout))
-        };
+        let backend = build_app_backend(
+            &env,
+            &spec,
+            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+        )
+        .expect("the core builds without the database");
 
-        let tracked = build(true);
-        let write = emit(&tracked);
+        let write = backend
+            .audit_emitter
+            .emit(AuditLogInput::for_event(AuditEventType::Logout));
         assert!(
             tokio::time::timeout(
                 Duration::from_millis(200),
-                tracked.audit_emitter.drain_inflight()
+                backend.audit_emitter.drain_inflight()
             )
             .await
             .is_err(),
             "the drain waits while the write is in flight"
         );
+        assert_eq!(backend.audit_emitter.inflight_count(), 1);
         write.abort();
         tokio::time::timeout(
             Duration::from_secs(5),
-            tracked.audit_emitter.drain_inflight(),
+            backend.audit_emitter.drain_inflight(),
         )
         .await
         .expect("the drain resolves once the write ends");
-
-        let untracked = build(false);
-        let write = emit(&untracked);
-        tokio::time::timeout(
-            Duration::from_millis(200),
-            untracked.audit_emitter.drain_inflight(),
-        )
-        .await
-        .expect("untracked, the drain returns at once");
-        write.abort();
     }
 
     /// A revocation's row reaches the audit stream it revokes before the

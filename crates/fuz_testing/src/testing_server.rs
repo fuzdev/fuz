@@ -28,9 +28,7 @@ use crate::testing_reset::{ResetStateFn, TestingResetOptions, create_testing_res
 /// - `daemon_token_state`, the keeper credential `_testing_reset`
 ///   authenticates with;
 /// - [`startup_reset_hook`], the env-gated schema wipe, so repeated runs
-///   against one database start clean;
-/// - in-flight audit tracking, which makes `_testing_drain_effects` a real
-///   barrier (over an untracked emitter it returns at once).
+///   against one database start clean.
 ///
 /// A server that differs sets the field with struct-update syntax: a suite
 /// that drives the limiters selects `rate_limiters` from its env gate, and a
@@ -41,7 +39,6 @@ pub fn testing_backend_options(daemon_token_state: SharedDaemonTokenState) -> Sp
         rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
         daemon_token_state: Some(daemon_token_state),
         pre_migration_hook: Some(startup_reset_hook()),
-        audit_inflight_tracking: true,
         ..SpineBackendOptions::production(Arc::new(crate::TestingArgon2idHasher::new()))
     }
 }

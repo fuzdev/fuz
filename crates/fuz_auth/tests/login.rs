@@ -753,13 +753,13 @@ async fn login_failure_missing_account_audits_without_account_id() {
     let pool = fresh_db_pool().await;
     let (hasher, _) = RecordingHasher::new("unused");
     let audit = Arc::new(AuditEmitter::new(pool.clone()));
-    let state = build_state(pool.clone(), hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, Arc::clone(&audit), None, None);
 
     let response = call_login(&state, Some("9.9.9.9"), "Ghost", "any-password-123").await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    // The handler awaits the emit `JoinHandle`, so the row is committed by the
-    // time the response returns — no poll/sleep needed.
+    // A failure row is spawned, never awaited by the handler: drain it.
+    audit.drain_inflight().await;
     let client = pool.get().await.expect("pool.get");
     let row = client
         .query_one(
@@ -798,11 +798,12 @@ async fn login_failure_wrong_password_audits_with_account_id() {
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone()));
-    let state = build_state(pool.clone(), hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, Arc::clone(&audit), None, None);
 
     let response = call_login(&state, Some("9.9.9.9"), "alice", "wrong-password").await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
+    audit.drain_inflight().await;
     let client = pool.get().await.expect("pool.get");
     let row = client
         .query_one(

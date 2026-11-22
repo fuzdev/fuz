@@ -171,6 +171,10 @@ impl AppBackend {
                     .limiter(fuz_auth::DEFAULT_LOGIN_ACCOUNT_RATE_LIMIT),
                 signup_fail_floor_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_FLOOR_MS,
                 signup_fail_jitter_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_JITTER_MS,
+                // the gate's keyring and cookie name, so the cookie the
+                // handler signs in its transaction is the one the gate reads
+                keyring: Arc::clone(&gate.keyring),
+                session_cookie_name: gate.session_cookie_name,
             }),
             gate,
         }

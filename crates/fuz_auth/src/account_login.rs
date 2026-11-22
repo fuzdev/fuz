@@ -6,7 +6,10 @@
 //! (`fuz_http::trim_js_whitespace` — the JS `String.prototype.trim` set, not
 //! Rust's `trim` — then lowercased); per-IP + per-account rate limit before any
 //! DB / argon2 work; dummy-hash timing equalization on missing accounts;
-//! audit row on both success and failure. The audit `username` metadata
+//! audit row on both success and failure — the success row written in the
+//! session's transaction, last before its commit, so a refused row mints no
+//! session; the failure row spawned on the pool, never holding the 401. The
+//! audit `username` metadata
 //! field carries the canonicalized identifier as submitted (the email on
 //! an email login), matching the TS side.
 
@@ -23,7 +26,9 @@ use serde_json::json;
 use crate::account_queries::{query_account_lock_verified, query_account_with_password_hash};
 use crate::account_route_state::AccountRouteState;
 use crate::account_schema::AccountWithPasswordHash;
-use crate::audit_emitter::AuditLogInput;
+use crate::audit_emitter::{
+    AuditLogInput, CollectingAuditPostCommit, emit_failure_row, route_audit_emit,
+};
 use crate::audit_event_type::AuditEventType;
 use crate::connection_closer::ConnectionCloseTarget;
 use crate::password::PASSWORD_LENGTH_MAX;
@@ -248,17 +253,18 @@ async fn login_inner(
     // verify read it — live, the verified hash — so a password change or a
     // delete that committed since mints nothing, and one still to commit waits
     // and then revokes this session (`query_account_lock_verified`).
+    let post_commit = CollectingAuditPostCommit::default();
     let minted = match account.filter(|_| password_valid) {
-        Some(account) => mint_login_session(&state.gate.pool, &account)
+        Some(account) => mint_login_session(state, &account, &client_ip, &post_commit)
             .await?
-            .map(|session| (account, session)),
+            .map(|minted| (account, minted.session, minted.response_headers)),
         None => None,
     };
 
     // A wrong password, and a right one whose account changed under it, are
     // one refusal: the same answer, charge, and audit row, so the caller can't
     // learn the password was right a moment ago.
-    let Some((account, session)) = minted else {
+    let Some((account, session, response_headers)) = minted else {
         // One failed credential check, charged to both buckets — the account
         // one keyed by the canonical username on the unknown-account path, so
         // misses against a nonexistent account share one bucket too.
@@ -274,7 +280,7 @@ async fn login_inner(
         // username exists. The builder's `.account` takes `Uuid`; thread
         // the Option through the field directly.
         input.account_id = failure_account_id;
-        let _ = state.audit.emit(input).await;
+        emit_failure_row(&state.audit, input);
         // Single 401 site for the no-account, wrong-password, and changed-account
         // paths, so the floor wait threads through here once — masking the
         // timing delta between them. 429 returns above without waiting; the
@@ -300,31 +306,18 @@ async fn login_inner(
     // The sessions the cap evicted are gone from the table, but not from the
     // connections they opened — a WebSocket keeps the authority it resolved at
     // upgrade, and an SSE stream never rechecks. Close them now that the
-    // eviction has committed, before the fail-open audit write, through the
-    // closer that reaches both transports. No audit row: fuz_app's event registry
-    // has no eviction event, and the `login` row records the cause.
+    // eviction has committed, through the closer that reaches both transports.
+    // No audit row of their own: fuz_app's event registry has no eviction
+    // event, and the `login` row records the cause.
     for evicted_hash in &session.evicted {
         state
             .connection_closer
             .close_connections(&ConnectionCloseTarget::Session(evicted_hash.clone()));
     }
-
-    let response_headers = session_cookie_header(
-        &state.gate.keyring,
-        &session.token,
-        state.gate.session_cookie_name,
-    )?;
+    // the `login` row's listener fan-out, now that the row has committed
+    post_commit.drain().await;
 
     tracing::info!(username = %account.username, "login successful");
-
-    let _ = state
-        .audit
-        .emit(
-            AuditLogInput::for_event(AuditEventType::Login)
-                .account(account.id)
-                .ip(Some(client_ip)),
-        )
-        .await;
 
     Ok((
         StatusCode::OK,
@@ -334,8 +327,21 @@ async fn login_inner(
         .into_response())
 }
 
+/// What a committed login transaction minted: the session and the response
+/// headers carrying its signed cookie.
+struct MintedSession {
+    session: CappedSession,
+    response_headers: HeaderMap,
+}
+
 /// Mint the login's session in one transaction, when the account is still as
 /// the verify read it: live, holding the verified hash.
+///
+/// The session's cookie is signed and its `login` success row written inside
+/// the transaction, the row last before the commit, so a cookie that can't be
+/// written or a refused row rolls the session back — never a 500 for a
+/// committed login, never a session with no row. The row's listener fan-out
+/// is queued on `post_commit`, for the caller to drain after the commit.
 ///
 /// `None` when [`query_account_lock_verified`] finds it changed — nothing is
 /// written and the transaction is rolled back. The commit is
@@ -345,31 +351,62 @@ async fn login_inner(
 /// # Errors
 ///
 /// The 503 for a pool checkout, the flat 500 for the `BEGIN`, any statement,
-/// or the commit.
+/// the cookie, the audit row, or the commit.
 #[expect(
     clippy::result_large_err,
     reason = "Err is the ready-to-return axum Response — the spine's REST handler idiom"
 )]
 async fn mint_login_session(
-    pool: &fuz_db::Pool,
+    state: &AccountRouteState,
     account: &AccountWithPasswordHash,
-) -> Result<Option<CappedSession>, Response> {
-    let mut client = pool
+    client_ip: &str,
+    post_commit: &CollectingAuditPostCommit,
+) -> Result<Option<MintedSession>, Response> {
+    let mut client = state
+        .gate
+        .pool
         .get()
         .await
         .map_err(|e| db_unavailable_response_with_source("login: db pool error", &e))?;
-    async {
-        let tx = client.transaction().await?;
-        if !query_account_lock_verified(&tx, &account.id, &account.password_hash).await? {
-            tx.rollback().await?;
-            return Ok(None);
-        }
-        let session = create_capped_session(&tx, &account.id).await?;
-        commit_checked(tx).await?;
-        Ok::<_, fuz_db::DbError>(Some(session))
+    // every early return drops `tx`, which rolls it back
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| internal_error_response_with_source("login: transaction begin failed", &e))?;
+    let verified = query_account_lock_verified(&tx, &account.id, &account.password_hash)
+        .await
+        .map_err(|e| internal_error_response_with_source("login: account lock failed", &e))?;
+    if !verified {
+        tx.rollback()
+            .await
+            .map_err(|e| internal_error_response_with_source("login: rollback failed", &e))?;
+        return Ok(None);
     }
+    let session = create_capped_session(&tx, &account.id)
+        .await
+        .map_err(|e| internal_error_response_with_source("login: session creation failed", &e))?;
+    let response_headers = session_cookie_header(
+        &state.gate.keyring,
+        &session.token,
+        state.gate.session_cookie_name,
+    )?;
+    route_audit_emit(
+        &state.audit,
+        post_commit,
+        &tx,
+        AuditLogInput::for_event(AuditEventType::Login)
+            .account(account.id)
+            .ip(Some(client_ip.to_owned())),
+    )
     .await
-    .map_err(|e| internal_error_response_with_source("login: session creation failed", &e))
+    .map_err(|_| fuz_http::internal_error_response())?;
+    commit_checked(tx)
+        .await
+        .map_err(|e| internal_error_response_with_source("login: commit failed", &e))?;
+    Ok(Some(MintedSession {
+        session,
+        response_headers,
+    }))
 }
 
 #[cfg(test)]

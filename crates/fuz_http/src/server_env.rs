@@ -106,12 +106,12 @@ pub struct BaseServerEnv {
     pub bootstrap_token_path: Option<PathBuf>,
     /// `FUZ_DB_CHECKOUT_TIMEOUT_MS` — the bound on the pool checkouts a
     /// request makes; [`fuz_db::DEFAULT_CHECKOUT_TIMEOUT`] when unset. Audit
-    /// writes use [`Self::db_audit_checkout_timeout`] instead, the
-    /// failed-login row a request waits on included.
+    /// pool writes use [`Self::db_audit_checkout_timeout`] instead.
     pub db_checkout_timeout: Duration,
     /// `FUZ_DB_AUDIT_CHECKOUT_TIMEOUT_MS` — the bound on the checkout behind
     /// each audit pool write; [`fuz_db::DEFAULT_AUDIT_CHECKOUT_TIMEOUT`] when
-    /// unset. A failed login awaits its row, so it can wait up to this bound.
+    /// unset. No request waits on one: a pool write (a failure row) is
+    /// spawned, never awaited by its handler.
     pub db_audit_checkout_timeout: Duration,
 }
 

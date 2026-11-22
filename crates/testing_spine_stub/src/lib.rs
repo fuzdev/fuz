@@ -651,6 +651,8 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             // `signup_fail_floor_ms: 0`.
             signup_fail_floor_ms: 0,
             signup_fail_jitter_ms: 0,
+            keyring: Arc::clone(&gate.keyring),
+            session_cookie_name: gate.session_cookie_name,
         }),
         gate: gate.clone(),
     });
@@ -905,8 +907,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             addr,
             drain_timeout,
             shutdown,
-            connection_closer: Some(backend.connection_closer()),
-            upkeep: None,
+            backend: Some(backend.serve_backend(None)),
         },
     )
     .await

@@ -560,8 +560,12 @@ The rules a change must keep:
   builtin-role check read the **global** grant. REST `?acting=` goes through
   `route_helpers::require_acting_actor`.
 - On the REST routes a failed pool checkout answers `fuz_http`'s flat 503
-  `service_unavailable` and any other internal failure its flat 500. The audit
-  write stays fail-open, and a failed credential read ends the walk with
+  `service_unavailable` and any other internal failure its flat 500 — a
+  refused success audit row included, since it is written in the request's
+  transaction. A failure row is spawned on the pool, never holding the answer;
+  the spine's shutdown (`serve_until_shutdown`) waits for those still being
+  written, bounded by the drain timeout, and logs any it gives up on.
+  A failed credential read ends the walk with
   `CredentialReadFault`'s answer — the 503 for a failed checkout, the
   plain-text 500 (the TS twin's Hono default) for a failed query — never a
   lower credential or anonymous.
@@ -872,7 +876,7 @@ not a `fuz_auth` feature, so unification can't route it into production.
   including `TestingTableLock` for driving races deterministically, and
   `assert_expected_schema_fixture`, a server's `/ready` fixture drift guard.
 - A `testing_*` server's toolkit wiring: `testing_backend_options` (the test
-  hasher, limiters off, `startup_reset_hook`, in-flight audit tracking),
+  hasher, limiters off, `startup_reset_hook`),
   `require_daemon_token_from_env`, `testing_reset_specs` (`_testing_reset`,
   `_testing_drain_effects` and `_testing_db_invariants`, over the runtime's
   daemon-token state) over
@@ -953,10 +957,11 @@ Wire twins of fuz_app's (`fuz_realtime::ws_close_codes`):
 - In-transaction revocation handlers close sockets on the post-commit queue
   (`queue_connection_close`), never before the commit — a client rechecking on a
   4001 can't find the revoked row still there.
-- REST `/logout` and `/password` close inline, **before** their fail-open audit
-  write — the one close a failed audit INSERT can't suppress, and the reason the
-  closer must reach SSE. `/password` closes only once its transaction commits,
-  so a rollback closes nothing.
+- REST `/logout` and `/password` write their audit row in the revocation's
+  transaction and close inline once it commits, then drain the row's listeners
+  (the revocation guard repeats the close). A rollback — a refused audit row
+  included — closes nothing. The closer must reach SSE: a stream never
+  rechecks its credential.
 - A request dropped between a commit and its close leaves the write committed
   and the connections open — on `/password`, `/logout`, `/login`'s eviction
   close, and the dispatcher's post-commit drain alike.

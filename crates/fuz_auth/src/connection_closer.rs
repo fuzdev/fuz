@@ -21,11 +21,11 @@
 //! audit row inside the request transaction: a revoke that commits has its
 //! row, so the listener's close cannot be lost to a failed audit write.
 //!
-//! The audit listener closes connections too, but only once the audit row
-//! is written, and a pool-routed audit write (the REST `/logout` and
-//! `/password` handlers) can fail after the revocation has already
-//! committed. The handler's own close is what guarantees the revoked
-//! credential's connections end whatever happens to the audit write — so the
+//! The audit listener closes connections too, once the audit row has
+//! committed. Every revocation writes its row in its own transaction (the
+//! REST `/logout` and `/password` handlers included), so a revocation that
+//! commits has its row. The handler's own close still runs first, straight
+//! after the commit, rather than waiting on the listener fan-out — so the
 //! closer it holds must reach **every** transport whose connections outlive
 //! their credential, SSE included: a stream is authorized once at open and
 //! never rechecks.
@@ -43,10 +43,9 @@
 //! dead socket. [`queue_connection_close`] defers the close onto the request's
 //! post-commit queue — run after the commit, dropped on rollback, so a
 //! rolled-back revocation also leaves the connections alone. REST handlers close
-//! inline once their own write has committed — `/logout`'s on an autocommit
-//! pool client, `/login`'s session-cap eviction and `/password`'s change
-//! after the transaction each opens, so a `/password` whose transaction rolls
-//! back closes nothing.
+//! inline once their own write has committed — `/logout`'s session delete,
+//! `/login`'s session-cap eviction, and `/password`'s change each after the
+//! transaction it opens, so one that rolls back closes nothing.
 //! The scheduled session sweep ([`crate::auth_cleanup`]) is the one close
 //! with no request behind it: it closes each expired session it deletes, after
 //! the commit of the transaction that deletes them.

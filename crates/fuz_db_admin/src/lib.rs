@@ -25,10 +25,11 @@
 //! Row deletion is additionally refused for the tables in
 //! [`NON_DELETABLE_TABLES`] (plus any consumer extension via
 //! [`DbAdminRouteState::non_deletable_tables`]) and for any table whose
-//! primary key is not exactly one column. Every successful row delete emits a
-//! `db_admin_row_delete` audit event (account-grain, metadata
+//! primary key is not exactly one column. Every successful row delete writes a
+//! `db_admin_row_delete` audit row in its transaction (account-grain, metadata
 //! `{table, pk_column, id}`, the resolved client IP when the consumer mounts
-//! `client_ip_middleware`) through [`DbAdminRouteState::audit`].
+//! `client_ip_middleware`) through [`DbAdminRouteState::audit`], so a refused
+//! row deletes nothing.
 //!
 //! Every table name is validated against [`fuz_db::is_valid_sql_identifier`]
 //! before it is interpolated into SQL — that validation is the only reason the
@@ -51,8 +52,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
 use deadpool_postgres::GenericClient;
 use fuz_auth::{
-    AuditEmitter, AuditEventType, AuditLogInput, AuthGate, CredentialGate, OriginChecked,
-    parse_acting_query,
+    AuditEmitter, AuditEventType, AuditLogInput, AuthGate, CollectingAuditPostCommit,
+    CredentialGate, OriginChecked, parse_acting_query, route_audit_emit,
 };
 use fuz_db::{
     PgErrorKind, UntypedTextParam, classify_pg_error, commit_checked, is_valid_sql_identifier,
@@ -171,8 +172,8 @@ pub struct DbAdminRouteState {
     /// builtin [`NON_DELETABLE_TABLES`] floor (which this extends, never
     /// replaces). Usually empty.
     pub non_deletable_tables: &'static [&'static str],
-    /// Audit emitter for the `db_admin_row_delete` event every successful
-    /// row delete emits (pool-routed fire-and-forget).
+    /// Audit emitter for the `db_admin_row_delete` row every successful row
+    /// delete writes in its transaction.
     pub audit: Arc<AuditEmitter>,
 }
 
@@ -831,10 +832,12 @@ struct RowDeleteOptions<'a> {
 /// matches bigint row `7`. An id that cannot be a value of the PK type
 /// (`22P02`/`22003`) maps to the same masked 404 as a typed miss.
 ///
-/// The delete runs inside a [`timed_transaction`], committed **before** the
-/// audit emit so the trail never claims a delete that failed at commit.
-/// Every successful delete emits a `db_admin_row_delete` audit event
-/// (pool-routed, account-grain — the gate resolves no actor; metadata
+/// The delete runs inside a [`timed_transaction`], and its
+/// `db_admin_row_delete` success row is written in that transaction, last
+/// before the commit — the row lands exactly when the delete does, so the
+/// trail never claims a delete that failed at commit, and a refused row
+/// deletes nothing. The row is account-grain (the gate resolves no actor;
+/// metadata
 /// `{table, pk_column, id}` — `id` being the deleted row's canonical
 /// `::text` rendering read back via `RETURNING`, not the URL-supplied
 /// spelling — plus the client IP when one is threaded): the trail for the
@@ -917,23 +920,24 @@ async fn perform_row_delete(
         }
         Ok(rows) => {
             let deleted_id: String = rows[0].get(0);
-            // Commit before emitting — the audit row must never claim a
-            // delete that failed at commit.
+            // The success row, last before the commit: it commits with the
+            // delete or not at all. Its listener fan-out runs after the commit.
+            let post_commit = CollectingAuditPostCommit::default();
+            route_audit_emit(
+                audit,
+                &post_commit,
+                &tx,
+                AuditLogInput::for_event(AuditEventType::DbAdminRowDelete)
+                    .account(account_id)
+                    .ip(Some(ip.to_owned()))
+                    .metadata(json!({"table": name, "pk_column": primary_key, "id": deleted_id})),
+            )
+            .await
+            .map_err(|_| internal_error_response())?;
             commit_checked(tx)
                 .await
                 .map_err(|e| internal_error_response_with_source("db.delete commit", &e))?;
-            // Awaited so the row is observable by response time (the spine
-            // REST idiom — see `account_login`).
-            let _ = audit
-                .emit(
-                    AuditLogInput::for_event(AuditEventType::DbAdminRowDelete)
-                        .account(account_id)
-                        .ip(Some(ip.to_owned()))
-                        .metadata(
-                            json!({"table": name, "pk_column": primary_key, "id": deleted_id}),
-                        ),
-                )
-                .await;
+            post_commit.drain().await;
             Ok(Json(json!({"success": true})).into_response())
         }
         // 22P02 invalid_text_representation / 22003 numeric_value_out_of_range
@@ -1352,6 +1356,42 @@ mod row_delete_pg_tests {
         assert_eq!(remaining.len(), 1, "exactly one row deleted");
         let remaining_id: String = remaining[0].get(0);
         assert_eq!(remaining_id, "keep-1", "the untargeted row survives");
+    }
+
+    /// The success row is written in the delete's transaction, so a refused
+    /// `db_admin_row_delete` INSERT rolls the delete back: the flat 500 and
+    /// the row still there.
+    #[tokio::test]
+    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
+    async fn refused_audit_row_deletes_nothing() {
+        let pool = fresh_pool().await;
+        let mut client = pool.get().await.unwrap();
+        client
+            .execute(
+                "INSERT INTO scratch_single (id, label) VALUES ('target-1', 'target')",
+                &[],
+            )
+            .await
+            .unwrap();
+        fuz_testing::seed::refuse_audit_rows(&pool, &["db_admin_row_delete"]).await;
+
+        let (audit, account_id) = test_audit(&pool);
+        let resp = perform_row_delete(
+            &mut client,
+            &audit,
+            delete_options("scratch_single", "target-1", &[], account_id),
+        )
+        .await
+        .expect_err("a refused audit row fails the delete");
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error_code(resp).await, "internal_error");
+
+        let remaining: i64 = client
+            .query_one("SELECT COUNT(*)::bigint FROM scratch_single", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(remaining, 1, "the row was not deleted");
     }
 
     #[tokio::test]

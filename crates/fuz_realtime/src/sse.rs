@@ -31,10 +31,8 @@
 //! [`RealtimeCloser`](crate::RealtimeCloser), which fans each close to the
 //! WS registry as well, so every closer reaches the streams through it:
 //!
-//! - the revocation handlers' own closes — after the commit on the action
-//!   path, before the fail-open audit write on the REST `/logout` /
-//!   `/password` path, so a failed audit INSERT cannot leave a revoked
-//!   account's stream open;
+//! - the revocation handlers' own closes — after the commit, on the action
+//!   path and the REST `/logout` / `/password` path alike;
 //! - the one audit listener, `fuz_auth::register_revocation_guard`,
 //!   which repeats a revocation's close on its materialized row
 //!   (`fuz_auth::ConnectionCloseTarget::from_audit_event` — a no-op repeat when a

@@ -4,6 +4,8 @@
 //! and serves no `/ready`), and a database whose
 //! `default_transaction_isolation` is not READ COMMITTED is refused before
 //! anything is written. A migration whose body fails gets no connectivity hint.
+//! And the other end of a server's life: shutdown waits for a failure row
+//! still being written, so it lands before the runtime goes.
 //!
 //! Shares the suite database (`FUZ_ACTIONS_TEST_URL`, default
 //! `fuz_actions_test`) with the crate's other PG suites. The isolation test
@@ -258,4 +260,72 @@ async fn a_failed_migration_body_gets_no_connectivity_hint() {
     );
     // the message carries its own remedy; "check Postgres is running" would mislead
     assert_eq!(StartupError::Database(error).hint(), None);
+}
+
+// -- Shutdown drains the audit writes in flight --------------------------------
+
+/// The suite database with the auth chain, for the case that writes a row.
+const AUTH_DB: TestingDbOptions<'static> = TestingDbOptions {
+    migrations: &[AUTH_MIGRATIONS],
+    ..DB
+};
+
+/// A failure row spawned just before the shutdown signal — its INSERT held
+/// behind a lock on `audit_log` until after the token fires — lands: the
+/// serve waits for it before it returns and lets the runtime go.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires PostgreSQL (FUZ_ACTIONS_TEST_URL); run with --ignored --test-threads=1"]
+async fn shutdown_waits_for_a_failure_row_still_being_written() {
+    use std::time::Duration;
+
+    use fuz_actions::server::{
+        ServeOptions, boot_only_router, build_app_backend, serve_until_shutdown,
+    };
+    use fuz_auth::{AuditEventType, AuditLogInput};
+    use fuz_testing::TestingTableLock;
+
+    let pool = fresh_test_db_pool(AUTH_DB).await;
+    let backend = build_app_backend(&env(), &SPEC, &options()).expect("the backend builds");
+    let emitter = Arc::clone(&backend.audit_emitter);
+    let lock = TestingTableLock::acquire(&pool, "audit_log").await;
+    drop(emitter.emit(AuditLogInput::for_event(AuditEventType::Login).failure()));
+    lock.wait_for_waiter().await;
+    let released = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        lock.release().await;
+    });
+
+    let shutdown = fuz_http::CancellationToken::new();
+    shutdown.cancel();
+    let stack_options = fuz_http::StackOptions::new(
+        fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
+        Arc::new(Vec::new()),
+    );
+    serve_until_shutdown(
+        boot_only_router("audit_drain_test_server", &stack_options),
+        ServeOptions {
+            server_name: "audit_drain_test_server",
+            addr: "127.0.0.1:0".parse().expect("addr"),
+            drain_timeout: Duration::from_secs(10),
+            shutdown,
+            backend: Some(backend.serve_backend(None)),
+        },
+    )
+    .await
+    .expect("a clean end");
+
+    assert_eq!(emitter.inflight_count(), 0, "nothing was given up on");
+    let rows: i64 = pool
+        .get()
+        .await
+        .expect("pool.get")
+        .query_one(
+            "SELECT count(*) FROM audit_log WHERE event_type = 'login' AND outcome = 'failure'",
+            &[],
+        )
+        .await
+        .expect("count the rows")
+        .get(0);
+    assert_eq!(rows, 1, "the failure row landed before the serve returned");
+    released.await.expect("the lock was released");
 }

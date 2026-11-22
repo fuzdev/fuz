@@ -1582,11 +1582,11 @@ async fn a_token_mint_past_the_cap_closes_the_evicted_tokens_connections() {
 /// with it — rolls back, and the post-commit close never runs. The credential
 /// is still valid, so the stream it opened rightly stays open.
 ///
-/// The contrast is the REST `/logout` / `/password` pair, whose pool-routed
-/// audit write fails open after the revocation has committed — those close
-/// directly (`fuz_realtime`'s `audit_stream` suite). `fuz_auth`'s
-/// `the_pool_routed_revocations_are_logout_and_password_change` keeps every
-/// other revocation on this side of the line.
+/// The REST `/logout` / `/password` pair share the contract: their rows are
+/// written in the revocation's transaction too (`fuz_realtime`'s
+/// `audit_stream` suite pins the stream staying open on a refused row).
+/// `fuz_auth`'s `no_revocation_is_pool_routed` keeps every revocation on this
+/// side of the line.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_revocation_whose_in_tx_audit_write_fails_is_rolled_back() {

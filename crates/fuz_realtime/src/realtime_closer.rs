@@ -5,13 +5,11 @@
 //!
 //! A revocation handler closes the revoked credential's connections itself,
 //! through the `ConnectionCloser` it is handed, and the audit listeners repeat
-//! the close once the audit row is written. On the REST `/logout` and
-//! `/password` paths that audit write is pool-routed and fail-open, so the
-//! handler's close is the only one guaranteed to run. Handed the WS registry
-//! alone, that close skips SSE — and an audit stream is authorized once at
-//! open and never rechecks, so a failed audit INSERT would leave the revoked
-//! account's streams running for their lifetime. Binding this type makes
-//! every direct close reach both transports.
+//! the close once the audit row has committed. Handed the WS registry alone,
+//! that close skips SSE — and an audit stream is authorized once at open and
+//! never rechecks, so it would run on until a listener's repeat, or for its
+//! lifetime where none comes (a session-cap eviction, the session sweep).
+//! Binding this type makes every direct close reach both transports.
 //!
 //! The one revocation listener (`fuz_auth::register_revocation_guard`)
 //! is handed this closer too, so its close on a materialized row — the only

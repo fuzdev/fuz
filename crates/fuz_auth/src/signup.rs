@@ -3,7 +3,9 @@
 //! Mirrors `fuz_app`'s `auth/signup_routes.ts`: FOR UPDATE invite find
 //! inside the signup tx, constant-time floor on 403/409 denials,
 //! `internal_error` audit on every unclassified failure path
-//! (pre-tx, in-tx, and a failed commit), `{ok, account, actor}` success
+//! (pre-tx, in-tx, and a failed commit), the `signup` success row and the
+//! session cookie written in the signup transaction (a refused row or an
+//! unwritable cookie rolls the account back), `{ok, account, actor}` success
 //! body matching `BootstrapOutput`. Input shape gated by
 //! [`crate::primitive_schemas`] and [`crate::password`]; timing-floor
 //! primitives live in [`crate::timing`].
@@ -30,18 +32,22 @@ use crate::account_queries::query_create_account_with_actor;
 use crate::account_schema::AccountRow;
 use crate::actor_schema::ActorRow;
 use crate::app_settings_queries::query_app_settings_load;
-use crate::audit_emitter::{AuditEmitter, AuditLogInput};
+use crate::audit_emitter::{
+    AuditEmitter, AuditLogInput, CollectingAuditPostCommit, emit_failure_row, route_audit_emit,
+};
 use crate::audit_event_type::AuditEventType;
 use crate::error::{SignupError, SignupErrorKind};
 use crate::invite_queries::{
     query_invite_claim_unscoped, query_invite_find_unclaimed_match_for_update,
 };
+use crate::keyring::Keyring;
 use crate::password::{PASSWORD_LENGTH_MAX, PASSWORD_LENGTH_MIN};
 use crate::password_hasher::PasswordHasher;
 use crate::primitive_schemas::{canonical_username_for_creation, is_valid_email};
 use crate::rate_limiter::{
     RESERVATION_WAIT_MAX, RateLimitReservation, RateLimiter, reserve_optional,
 };
+use crate::session_cookie::sign_session_cookie;
 use crate::session_queries::create_capped_session;
 use crate::timing::{compute_fail_deadline, wait_for_deadline};
 use fuz_db::{commit_checked, is_pg_unique_violation};
@@ -97,6 +103,10 @@ impl std::fmt::Debug for SignupInput {
 /// redacting `Debug`.
 pub struct SignupSuccess {
     pub session_token: String,
+    /// The `Set-Cookie` line carrying the signed session cookie, written in
+    /// the transaction — twin of the `set_cookie` line `fuz_app`'s signup
+    /// formats in its own.
+    pub set_cookie: String,
     pub account: AccountRow,
     pub actor: ActorRow,
 }
@@ -105,6 +115,7 @@ impl std::fmt::Debug for SignupSuccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SignupSuccess")
             .field("session_token", &"<redacted>")
+            .field("set_cookie", &"<redacted>")
             .field("account", &self.account)
             .field("actor", &self.actor)
             .finish()
@@ -139,6 +150,10 @@ pub struct SignupOptions {
     /// Uniform jitter window (±ms) layered on the floor. Set to `0` to
     /// disable jitter while keeping the floor.
     pub signup_fail_jitter_ms: u64,
+    /// Signs the session cookie the signup mints, inside its transaction.
+    pub keyring: Arc<Keyring>,
+    /// The session cookie's name (default [`crate::SESSION_COOKIE_NAME`]).
+    pub session_cookie_name: &'static str,
 }
 
 impl std::fmt::Debug for SignupOptions {
@@ -373,20 +388,32 @@ pub async fn signup_handler(
         }
     };
 
-    // Account + actor + (optional) invite claim + session — all inside
-    // the same tx. Any error rolls back and routes through the
-    // unclassified catch.
+    // Account + actor + (optional) invite claim + session + its cookie +
+    // the success row — all inside the same tx. Any error rolls back and
+    // routes through the unclassified catch.
+    let post_commit = CollectingAuditPostCommit::default();
     let signup_tx_result = signup_inner_tx(
+        options,
         &tx,
-        &canonical_username,
-        password_hash.as_str(),
-        email_opt,
-        invite_id.as_ref(),
+        &post_commit,
+        SignupWrite {
+            canonical_username: &canonical_username,
+            password_hash: password_hash.as_str(),
+            email: email_opt,
+            invite_id,
+            open_signup: app_settings.open_signup,
+            client_ip: client_ip.as_deref(),
+        },
     )
     .await;
 
-    let (account, actor, session_token) = match signup_tx_result {
-        Ok(triple) => triple,
+    let SignupWritten {
+        account,
+        actor,
+        session_token,
+        set_cookie,
+    } = match signup_tx_result {
+        Ok(written) => written,
         Err(e) => {
             // Classify the unique-violation conflict path; everything
             // else funnels through the fallback `internal_error` audit
@@ -485,22 +512,12 @@ pub async fn signup_handler(
         ip_reservation.release();
     }
 
-    drop(
-        options.audit.emit(
-            AuditLogInput::for_event(AuditEventType::Signup)
-                .actor(actor.id)
-                .account(account.id)
-                .ip(client_ip)
-                .metadata(success_metadata(
-                    &canonical_username,
-                    invite_id,
-                    app_settings.open_signup,
-                )),
-        ),
-    );
+    // the `signup` row's listener fan-out, now that the row has committed
+    post_commit.drain().await;
 
     Ok(SignupSuccess {
         session_token,
+        set_cookie,
         account,
         actor,
     })
@@ -508,17 +525,46 @@ pub async fn signup_handler(
 
 // -- Helpers --------------------------------------------------------------
 
-async fn signup_inner_tx(
-    tx: &deadpool_postgres::Transaction<'_>,
-    canonical_username: &str,
-    password_hash: &str,
-    email_opt: Option<&str>,
-    invite_id: Option<&Uuid>,
-) -> Result<(AccountRow, ActorRow, String), SignupError> {
-    let (account, actor) =
-        query_create_account_with_actor(tx, canonical_username, password_hash, email_opt).await?;
+/// What [`signup_inner_tx`] writes.
+struct SignupWrite<'a> {
+    canonical_username: &'a str,
+    password_hash: &'a str,
+    email: Option<&'a str>,
+    invite_id: Option<Uuid>,
+    open_signup: bool,
+    client_ip: Option<&'a str>,
+}
 
-    if let Some(invite_id) = invite_id {
+/// What [`signup_inner_tx`] wrote, for the caller to answer once it commits.
+struct SignupWritten {
+    account: AccountRow,
+    actor: ActorRow,
+    session_token: String,
+    set_cookie: String,
+}
+
+/// The signup's writes, in `tx`: the account and actor, the invite claim,
+/// the session, its signed cookie, and — last — the `signup` success row,
+/// its listener fan-out queued on `post_commit` for the caller to drain after
+/// the commit.
+async fn signup_inner_tx(
+    options: &SignupOptions,
+    tx: &deadpool_postgres::Transaction<'_>,
+    post_commit: &CollectingAuditPostCommit,
+    write: SignupWrite<'_>,
+) -> Result<SignupWritten, SignupError> {
+    let SignupWrite {
+        canonical_username,
+        password_hash,
+        email,
+        invite_id,
+        open_signup,
+        client_ip,
+    } = write;
+    let (account, actor) =
+        query_create_account_with_actor(tx, canonical_username, password_hash, email).await?;
+
+    if let Some(invite_id) = invite_id.as_ref() {
         // FOR UPDATE held the row for the duration of the tx, so no
         // concurrent claim could flip `claimed_at` between the find and
         // this UPDATE. A miss means that invariant broke (a refactor that
@@ -539,8 +585,35 @@ async fn signup_inner_tx(
     let session_token = create_capped_session(tx, &account.id)
         .await?
         .into_token_for_new_account();
+    // Signed inside the transaction, as the twin signs it: a cookie that
+    // can't be written rolls the signup back, rather than answering 500 for
+    // a committed one.
+    let set_cookie = sign_session_cookie(
+        &options.keyring,
+        &session_token,
+        options.session_cookie_name,
+    )
+    .map_err(SignupError::SessionCookie)?;
 
-    Ok((account, actor, session_token))
+    route_audit_emit(
+        &options.audit,
+        post_commit,
+        tx,
+        AuditLogInput::for_event(AuditEventType::Signup)
+            .actor(actor.id)
+            .account(account.id)
+            .ip(client_ip.map(str::to_owned))
+            .metadata(success_metadata(canonical_username, invite_id, open_signup)),
+    )
+    .await
+    .map_err(SignupError::Audit)?;
+
+    Ok(SignupWritten {
+        account,
+        actor,
+        session_token,
+        set_cookie,
+    })
 }
 
 fn emit_failure_audit(
@@ -548,13 +621,12 @@ fn emit_failure_audit(
     client_ip: Option<&str>,
     metadata: serde_json::Value,
 ) {
-    drop(
-        audit.emit(
-            AuditLogInput::for_event(AuditEventType::Signup)
-                .failure()
-                .ip(client_ip.map(str::to_owned))
-                .metadata(metadata),
-        ),
+    emit_failure_row(
+        audit,
+        AuditLogInput::for_event(AuditEventType::Signup)
+            .failure()
+            .ip(client_ip.map(str::to_owned))
+            .metadata(metadata),
     );
 }
 
@@ -683,6 +755,7 @@ mod tests {
         let account_id = Uuid::nil();
         let success = SignupSuccess {
             session_token: "signup-session-Tg5hP7".to_owned(),
+            set_cookie: "fuz_session=signup-cookie-Rm3vK8".to_owned(),
             account: AccountRow {
                 id: account_id,
                 username: "new_user".to_owned(),
@@ -695,6 +768,7 @@ mod tests {
         };
         let rendered = format!("{success:?}");
         assert!(!rendered.contains("signup-session-Tg5hP7"), "{rendered}");
+        assert!(!rendered.contains("signup-cookie-Rm3vK8"), "{rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
         assert!(rendered.contains("new_user"), "{rendered}");
     }
