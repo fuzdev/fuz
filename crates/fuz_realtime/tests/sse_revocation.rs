@@ -135,10 +135,13 @@ async fn the_fan_out_listener_alone_closes_nothing() {
     let _connect = stream.next().await;
 
     emitter
-        .notify(event("logout", "success", Some(account), None))
+        .notify(event("password_change", "success", Some(account), None))
         .await;
     let frame = stream.next().await.expect("the row is broadcast").unwrap();
-    assert!(frame.starts_with(r#"data: {"method":"logout","#), "{frame}");
+    assert!(
+        frame.starts_with(r#"data: {"method":"password_change","#),
+        "{frame}"
+    );
     assert_eq!(registry.count(), 1, "the stream is still open");
 }
 
@@ -354,46 +357,50 @@ async fn a_scoped_role_grant_revoke_leaves_the_role_gated_stream_open() {
     assert_eq!(registry.count(), 0);
 }
 
+/// `logout` closes by the session its row names, as `session_revoke` does —
+/// the account's other session keeps its stream.
 #[tokio::test]
-async fn session_revoke_closes_only_the_revoked_sessions_stream() {
-    let (registry, emitter) = guarded_registry();
-    let account = Uuid::new_v4();
-    let mut revoked = Box::pin(common::subscribe_admitted(
-        &registry,
-        SseSubscription {
-            identity: ConnectionIdentity {
-                account_id: Some(account),
-                session_hash: Some("hash_a".to_owned()),
-                ..ConnectionIdentity::default()
+async fn session_scoped_events_close_only_the_named_sessions_stream() {
+    for event_type in ["session_revoke", "logout"] {
+        let (registry, emitter) = guarded_registry();
+        let account = Uuid::new_v4();
+        let mut revoked = Box::pin(common::subscribe_admitted(
+            &registry,
+            SseSubscription {
+                identity: ConnectionIdentity {
+                    account_id: Some(account),
+                    session_hash: Some("hash_a".to_owned()),
+                    ..ConnectionIdentity::default()
+                },
+                ..SseSubscription::default()
             },
-            ..SseSubscription::default()
-        },
-    ));
-    let mut kept = Box::pin(common::subscribe_admitted(
-        &registry,
-        SseSubscription {
-            identity: ConnectionIdentity {
-                account_id: Some(account),
-                session_hash: Some("hash_b".to_owned()),
-                ..ConnectionIdentity::default()
+        ));
+        let mut kept = Box::pin(common::subscribe_admitted(
+            &registry,
+            SseSubscription {
+                identity: ConnectionIdentity {
+                    account_id: Some(account),
+                    session_hash: Some("hash_b".to_owned()),
+                    ..ConnectionIdentity::default()
+                },
+                ..SseSubscription::default()
             },
-            ..SseSubscription::default()
-        },
-    ));
-    let _ = revoked.next().await;
-    let _ = kept.next().await;
+        ));
+        let _ = revoked.next().await;
+        let _ = kept.next().await;
 
-    emitter
-        .notify(event(
-            "session_revoke",
-            "success",
-            Some(account),
-            Some(json!({"session_id": "hash_a"})),
-        ))
-        .await;
+        emitter
+            .notify(event(
+                event_type,
+                "success",
+                Some(account),
+                Some(json!({"session_id": "hash_a"})),
+            ))
+            .await;
 
-    assert_stream_closes(revoked, "session_revoke").await;
-    assert_eq!(registry.count(), 1);
+        assert_stream_closes(revoked, event_type).await;
+        assert_eq!(registry.count(), 1);
+    }
 }
 
 /// The account-wide scope, including the two rows that reach it only through
@@ -406,7 +413,6 @@ async fn account_wide_events_close_every_stream_on_the_account() {
         "session_revoke_all",
         "token_revoke_all",
         "password_change",
-        "logout",
         "account_delete",
         "account_purge",
     ] {

@@ -968,7 +968,10 @@ Wire twins of fuz_app's (`fuz_realtime::ws_close_codes`):
   transaction and close inline once it commits, then drain the row's listeners
   (the revocation guard repeats the close). A rollback — a refused audit row
   included — closes nothing. The closer must reach SSE: a stream never
-  rechecks its credential.
+  rechecks its credential. `/logout` closes only the session it ends (its
+  row names it, `metadata.session_id`, and declares `RevocationScope::Session`)
+  — the account's other sessions and tokens stay valid; `/password` closes
+  the account.
 - A request dropped between a commit and its close leaves the write committed
   and the connections open — on `/password`, `/logout`, `/login`'s eviction
   close, and the dispatcher's post-commit drain alike.

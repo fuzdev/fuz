@@ -96,9 +96,9 @@ use futures::StreamExt;
 use fuz_auth::ConnectionCloseTarget;
 use fuz_auth::{
     AUTH_MIGRATIONS, AccountRouteState, AuditEmitter, AuditLogEvent, AuthCleanupOptions,
-    AuthCleanupResult, ConnectionCloser, CredentialGate, Keyring, PasswordHasher, ROLE_ADMIN,
-    SESSION_COOKIE_NAME, TokenScopeDocument, account_router, register_revocation_guard,
-    run_auth_cleanup,
+    AuthCleanupResult, ConnectionCloser, CredentialGate, Keyring, NoopConnectionCloser,
+    PasswordHasher, ROLE_ADMIN, SESSION_COOKIE_NAME, TokenScopeDocument, account_router,
+    register_revocation_guard, run_auth_cleanup,
 };
 use fuz_db::Pool;
 use fuz_http::ShutdownCloser;
@@ -761,6 +761,23 @@ struct RevocationHarness {
 }
 
 fn revocation_harness(pool: Pool, keyring: &Arc<Keyring>) -> RevocationHarness {
+    revocation_harness_with(pool, keyring, HandlerCloses::Yes)
+}
+
+/// Whether the account handlers close through the harness's fan-out closer,
+/// or hold a [`NoopConnectionCloser`] — so every close is the revocation
+/// guard's, made on the audit row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HandlerCloses {
+    Yes,
+    No,
+}
+
+fn revocation_harness_with(
+    pool: Pool,
+    keyring: &Arc<Keyring>,
+    handler_closes: HandlerCloses,
+) -> RevocationHarness {
     let registry = Arc::new(SseRegistry::new());
     let ws = Arc::new(ConnectionRegistry::new());
     let connection_closer = RealtimeCloser::connection_closer(&ws, &registry);
@@ -772,7 +789,10 @@ fn revocation_harness(pool: Pool, keyring: &Arc<Keyring>) -> RevocationHarness {
         gate: gate(pool.clone(), Arc::clone(keyring)),
         password_hasher: Arc::new(TestingArgon2idHasher::new()),
         audit: Arc::clone(&audit),
-        connection_closer: Arc::clone(&connection_closer),
+        connection_closer: match handler_closes {
+            HandlerCloses::Yes => Arc::clone(&connection_closer),
+            HandlerCloses::No => Arc::new(NoopConnectionCloser),
+        },
         bootstrap_available: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         login_ip_rate_limiter: None,
         login_account_rate_limiter: None,
@@ -947,15 +967,13 @@ async fn session_hashes(pool: &Pool, account_id: Uuid) -> Vec<String> {
 /// Register a WS connection for `session_hash` the way the upgrade does, and
 /// return it — its `signal` is what a revocation cancels.
 fn add_ws(h: &RevocationHarness, account_id: Uuid, session_hash: &str) -> fuz_realtime::Connection {
-    let (tx, _rx) = fuz_realtime::connection_channel(1 << 20);
-    h.ws.add_connection(
-        tx,
+    add_ws_identity(
+        h,
         ConnectionIdentity {
             session_hash: Some(session_hash.to_owned()),
             account_id: Some(account_id),
             ..ConnectionIdentity::default()
         },
-        tokio_util::sync::CancellationToken::new(),
     )
 }
 
@@ -1024,6 +1042,130 @@ async fn a_login_past_the_session_cap_closes_the_evicted_sessions_connections() 
         .unwrap();
     assert!(
         String::from_utf8_lossy(&frame).contains(r#""event_type":"login""#),
+        "the surviving stream is still live: {frame:?}"
+    );
+}
+
+/// Register a WS connection of `identity` the way the upgrade does, and
+/// return it — its `signal` is what a revocation cancels.
+fn add_ws_identity(
+    h: &RevocationHarness,
+    identity: ConnectionIdentity,
+) -> fuz_realtime::Connection {
+    let (tx, _rx) = fuz_realtime::connection_channel(1 << 20);
+    h.ws.add_connection(tx, identity, tokio_util::sync::CancellationToken::new())
+}
+
+/// **`/logout` closes only the connections of the session it ends** — the
+/// handler's close, then the guard's repeat on the `logout` row. Logout ends
+/// one credential: the account's other session, its API token and the daemon
+/// token stay valid, so their connections stay open, the other session's
+/// stream proven live by the `logout` row's own frame. The row names the
+/// session it ended (`metadata.session_id`), which is what the guard closes by.
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn logout_closes_only_the_logged_out_sessions_connections() {
+    logout_closes_only_its_session("admin_logout_session", HandlerCloses::Yes).await;
+}
+
+/// **The `logout` row alone closes only its session.** The account handlers
+/// hold a [`NoopConnectionCloser`], so every close here is the revocation
+/// guard's — the backstop for a logout emitted by code holding no closer —
+/// and it must name the session, never the account.
+#[tokio::test]
+#[ignore = "requires PostgreSQL"]
+async fn the_logout_row_alone_closes_only_its_session() {
+    logout_closes_only_its_session("admin_logout_guard", HandlerCloses::No).await;
+}
+
+async fn logout_closes_only_its_session(username: &str, handler_closes: HandlerCloses) {
+    let pool = fresh_db_pool().await;
+    let keyring = keyring();
+    let admin = seed_admin(&pool, &keyring, username).await;
+    set_current_password(&pool, admin.account_id).await;
+    let h = revocation_harness_with(pool, &keyring, handler_closes);
+
+    // the seeded session logs out; a second login is the session that stays
+    let other_cookie = login(&h, username).await;
+    let hashes = session_hashes(&h.pool, admin.account_id).await;
+    assert_eq!(hashes.len(), 2);
+    let (logged_out, other) = (&hashes[0], &hashes[1]);
+
+    let logged_out_stream = open_stream(&h, &admin.cookie).await;
+    let response = get_stream(
+        h.stream_router.clone(),
+        &[
+            (header::COOKIE, other_cookie),
+            (header::ORIGIN, ORIGIN.to_owned()),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut other_stream = response.into_body().into_data_stream();
+    assert!(other_stream.next().await.is_some(), "connect comment");
+    assert_eq!(h.registry.count(), 2);
+    let logged_out_ws = add_ws(&h, admin.account_id, logged_out);
+    let other_ws = add_ws(&h, admin.account_id, other);
+    let bearer_ws = add_ws_identity(
+        &h,
+        ConnectionIdentity {
+            account_id: Some(admin.account_id),
+            api_token_id: Some("tok_bearerbearer".to_owned()),
+            ..ConnectionIdentity::default()
+        },
+    );
+    // a daemon-token socket: the account, no session or token
+    let daemon_ws = add_ws_identity(
+        &h,
+        ConnectionIdentity {
+            account_id: Some(admin.account_id),
+            ..ConnectionIdentity::default()
+        },
+    );
+
+    let response = post_account(&h, "/logout", &admin.cookie, Body::empty()).await;
+    assert_eq!(response.status(), StatusCode::OK, "logout");
+
+    let metadata: Option<String> = h
+        .pool
+        .get()
+        .await
+        .unwrap()
+        .query_one(
+            "SELECT metadata::text FROM audit_log WHERE event_type = 'logout'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let metadata: serde_json::Value = serde_json::from_str(&metadata.unwrap()).unwrap();
+    assert_eq!(metadata, json!({"session_id": logged_out}));
+
+    assert_body_ends(logged_out_stream, "the logged-out session's stream").await;
+    assert!(
+        logged_out_ws.signal.is_cancelled(),
+        "the logged-out session's WS socket must be closed"
+    );
+    assert_eq!(h.registry.count(), 1, "the other session's stream stays");
+    assert!(
+        !other_ws.signal.is_cancelled(),
+        "the other session's WS socket stays"
+    );
+    assert!(
+        !bearer_ws.signal.is_cancelled(),
+        "the bearer WS socket stays"
+    );
+    assert!(
+        !daemon_ws.signal.is_cancelled(),
+        "the daemon-token WS socket stays"
+    );
+    let frame = tokio::time::timeout(CLOSE_TIMEOUT, other_stream.next())
+        .await
+        .expect("the surviving stream receives the logout's audit row")
+        .unwrap()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&frame).contains(r#""event_type":"logout""#),
         "the surviving stream is still live: {frame:?}"
     );
 }

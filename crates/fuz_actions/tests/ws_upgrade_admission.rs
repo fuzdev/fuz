@@ -632,9 +632,10 @@ async fn a_failing_role_recheck_refuses_the_upgrade_with_1011() {
 // -- the pending registration: a close that lands mid-admission ----------------
 
 /// A close reaches the upgrade while it is stalled inside its re-read — the
-/// credential itself untouched, as when another session's logout closes the
-/// whole account. The re-read passes, so only the pending registration can
-/// refuse it: 4001, and the account's live socket at the cap is not evicted.
+/// credential itself untouched, as when an admin's `admin_token_revoke_all`
+/// closes the whole account of a session socket. The re-read passes, so only
+/// the pending registration can refuse it: 4001, and the account's live socket
+/// at the cap is not evicted.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_close_during_admission_refuses_the_upgrade() {

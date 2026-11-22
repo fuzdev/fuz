@@ -996,7 +996,7 @@ mod tests {
             .notify(Arc::new(fuz_auth::AuditLogEvent {
                 id: uuid::Uuid::new_v4(),
                 seq: 1,
-                event_type: "logout".to_owned(),
+                event_type: "password_change".to_owned(),
                 outcome: "success".to_owned(),
                 actor_id: None,
                 account_id: Some(account_id),
@@ -1014,7 +1014,7 @@ mod tests {
             .expect("the row's frame")
             .expect("infallible");
         assert!(
-            frame.starts_with(r#"data: {"method":"logout","#),
+            frame.starts_with(r#"data: {"method":"password_change","#),
             "the revocation row reached the stream first: {frame}"
         );
         assert!(stream.next().await.is_none(), "and then the stream ended");

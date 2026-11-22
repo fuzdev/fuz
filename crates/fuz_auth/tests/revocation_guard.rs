@@ -139,6 +139,28 @@ async fn session_revoke_closes_the_named_session() {
     assert_eq!(calls, vec![Closed::Session("hash_a".to_owned())]);
 }
 
+/// Logout ends one credential, the session it was sent on, so its row closes
+/// that session's connections and never the account's: the account's other
+/// sessions, API tokens and daemon token stay valid.
+#[tokio::test]
+async fn logout_closes_the_session_it_ended() {
+    let calls = dispatch(event(
+        "logout",
+        "success",
+        Some(Uuid::new_v4()),
+        Some(json!({"session_id": "hash_a"})),
+    ))
+    .await;
+    assert_eq!(calls, vec![Closed::Session("hash_a".to_owned())]);
+}
+
+/// A `logout` row naming no session closes nothing — not the account.
+#[tokio::test]
+async fn a_logout_row_with_no_session_id_closes_nothing() {
+    let calls = dispatch(event("logout", "success", Some(Uuid::new_v4()), None)).await;
+    assert_eq!(calls, vec![]);
+}
+
 /// The arm whose SSE twin was missing. Kept as a WS-side pin so a future
 /// convergence pass can't "align" the two halves by deleting this one.
 #[tokio::test]
@@ -159,7 +181,6 @@ async fn account_wide_events_close_the_whole_account() {
         "session_revoke_all",
         "token_revoke_all",
         "password_change",
-        "logout",
         // `account_delete` also queues the close from its handler; the event is
         // declared `Account` regardless, and the redundant close is a no-op.
         "account_delete",

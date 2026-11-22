@@ -1,8 +1,10 @@
 //! `POST /api/account/logout` — invalidate session, close live connections.
 //!
 //! The session delete and the `logout` success row are one transaction, so a
-//! refused row ends no session and closes nothing; the account's live
-//! connections close once it commits.
+//! refused row ends no session and closes nothing; the live connections of the
+//! session it ends close once it commits. Only that session's: logout ends one
+//! credential, and the account's other sessions, its API tokens and the daemon
+//! token stay valid, so their connections stay open.
 
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -112,7 +114,10 @@ async fn logout_inner(
         &tx,
         AuditLogInput::for_event(AuditEventType::Logout)
             .account(resolved.account.id)
-            .ip(Some(client_ip)),
+            .ip(Some(client_ip))
+            // the ended session, as a `session_revoke` row names it — what the
+            // revocation guard closes by
+            .metadata(serde_json::json!({"session_id": session_hash})),
     )
     .await
     .map_err(|_| internal_error_response())?;
@@ -120,14 +125,14 @@ async fn logout_inner(
         .await
         .map_err(|e| internal_error_response_with_source("logout: commit failed", &e))?;
 
-    // Eager account-wide close once the delete has committed — matches
-    // `fuz_app`'s widening logout to account-wide invalidation. It reaches
-    // every transport the consumer's closer covers (WS and SSE with
-    // `fuz_realtime`'s fan-out); an SSE stream never rechecks its credential.
-    // The row's listeners, drained next, repeat it (idempotent).
+    // Close the ended session's connections once the delete has committed —
+    // the session alone, as `fuz_app`'s logout does. It reaches every
+    // transport the consumer's closer covers (WS and SSE with `fuz_realtime`'s
+    // fan-out); an SSE stream never rechecks its credential. The row's
+    // listeners, drained next, repeat it (idempotent).
     state
         .connection_closer
-        .close_connections(&ConnectionCloseTarget::Account(resolved.account.id));
+        .close_connections(&ConnectionCloseTarget::Session(session_hash.to_owned()));
     post_commit.drain().await;
 
     tracing::info!(username = %resolved.account.username, "logout successful");

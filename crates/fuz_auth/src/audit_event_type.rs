@@ -110,7 +110,8 @@ audit_event_types! {
     // --- account self-service ---
     /// Account-grain session login (REST handler).
     Login => "login",
-    /// Account-grain session logout (REST handler).
+    /// Account-grain session logout (REST handler). Ends the session it was
+    /// sent on; its row names it in `metadata.session_id`.
     Logout => "logout",
     /// Account signup (REST handler).
     Signup => "signup",
@@ -372,10 +373,10 @@ impl AuditEventSpec {
 ///   the response: the write is spawned, not awaited.
 /// - **[`RevocationScope`]** is [`None`](RevocationScope::None) unless the
 ///   event's success *invalidates a live connection's credential or access*.
-///   Nine rows are not: `Logout` / `PasswordChange` / `SessionRevokeAll` /
+///   The rows that do: `PasswordChange` / `SessionRevokeAll` /
 ///   `TokenRevokeAll` / `AccountDelete` / `AccountPurge` are account-wide,
-///   `SessionRevoke` and `TokenRevoke` name the one credential they killed,
-///   and `RoleGrantRevoke` names the lost role. Granting access
+///   `SessionRevoke`, `Logout` and `TokenRevoke` name the one credential they
+///   ended, and `RoleGrantRevoke` names the lost role. Granting access
 ///   (`RoleGrantCreate`, `TokenCreate`, `AccountUndelete`) revokes nothing,
 ///   and neither does an event about a *different* subject than a live
 ///   connection's identity (the `Cell*` and `Actor*` families, `InviteDelete`,
@@ -395,7 +396,7 @@ pub static AUDIT_EVENT_SPECS: &[AuditEventSpec] = &[
         event_type: AuditEventType::Logout,
         success_routing: AuditRouting::InTx,
         failure_routing: AuditRouting::Pool,
-        revocation_scope: RevocationScope::Account,
+        revocation_scope: RevocationScope::Session,
     },
     AuditEventSpec {
         event_type: AuditEventType::Signup,
@@ -1116,7 +1117,7 @@ mod tests {
     #[test]
     fn the_revoking_events_are_the_expected_ones() {
         let expected: &[(AuditEventType, RevocationScope)] = &[
-            (AuditEventType::Logout, RevocationScope::Account),
+            (AuditEventType::Logout, RevocationScope::Session),
             (AuditEventType::PasswordChange, RevocationScope::Account),
             (AuditEventType::SessionRevoke, RevocationScope::Session),
             (AuditEventType::SessionRevokeAll, RevocationScope::Account),

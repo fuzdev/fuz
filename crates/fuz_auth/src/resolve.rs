@@ -594,10 +594,10 @@ async fn resolve_daemon_token_from_headers(
 /// - **Every credential** — the account row still exists and is not
 ///   soft-deleted.
 ///
-/// It re-checks the **credential**, not what a revocation chose to close: a
-/// `logout` closes every connection of the account but deletes only its own
-/// session, so another session's connection opening concurrently passes this
-/// check and is refused only if that account-wide close found its pending
+/// It re-checks the **credential**, not what a revocation chose to close: an
+/// `admin_token_revoke_all` closes every connection of the account but deletes
+/// only its API tokens, so a session's connection opening concurrently passes
+/// this check and is refused only if that account-wide close found its pending
 /// registration — the same two outcomes an already-open connection has.
 ///
 /// **No side effects.** Unlike the resolve walk's bearer leg this never
