@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
-use fuz_auth::BackgroundWrites;
+use fuz_http::BackgroundWrites;
 use fuz_http::InputShape;
 use serde_json::{Value, json};
 
@@ -62,7 +62,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use fuz_auth::{AuditEmitter, AuditEventType, AuditLogInput, BackgroundWrites};
+    use fuz_auth::{AuditEmitter, AuditEventType, AuditLogInput};
+    use fuz_http::BackgroundWrites;
     use serde_json::json;
 
     use super::drain_effects;

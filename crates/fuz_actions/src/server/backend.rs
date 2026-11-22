@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use axum::Router;
 use fuz_auth::{
-    AuditEmitter, AuthGate, BackgroundWrites, ConnectionCloser, Keyring, PasswordHasher,
-    RateLimiter, RateLimiterMode, RateLimiterOptions, SharedDaemonTokenState,
+    AuditEmitter, AuthGate, ConnectionCloser, Keyring, PasswordHasher, RateLimiter,
+    RateLimiterMode, RateLimiterOptions, SharedDaemonTokenState,
 };
 use fuz_db::{MigrationNamespace, Pool};
-use fuz_http::{BaseServerEnv, ParsedProxy, StackOptions};
+use fuz_http::{BackgroundWrites, BaseServerEnv, ParsedProxy, StackOptions};
 use fuz_realtime::{ConnectionRegistry, RealtimeCloser, SseRegistry};
 
 use crate::PreMigrationHook;
@@ -247,8 +247,8 @@ impl std::fmt::Debug for AppBackend {
 impl AppBackend {
     /// The server's one tracker of detached writes — the one its audit
     /// emitter was built over: the gate ([`Self::auth_gate`]) spawns its
-    /// token touches on it, and shutdown ([`Self::serve_backend`]) and
-    /// `_testing_drain_effects` drain it.
+    /// token touches on it, and shutdown (through [`Self::stack_options`]'
+    /// duties) and `_testing_drain_effects` drain it.
     #[must_use]
     pub fn background_writes(&self) -> &Arc<BackgroundWrites> {
         self.audit_emitter.background_writes()
@@ -278,14 +278,21 @@ impl AppBackend {
     /// it ([`BrowserGateSpec::host_gate`]), and the gate's cookie-clear hook
     /// ([`fuz_auth::AuthGate::cookie_clear_hook`]), so a server composed on
     /// these options clears an invalid session cookie under the auth scope
-    /// with nothing mounted by hand.
+    /// with nothing mounted by hand — and the backend's shutdown duties
+    /// ([`Self::shutdown_duties`]), so the router composed on them is always
+    /// served with this backend's closer and write drain.
+    ///
+    /// The one way a live router gets its duties: a router composed over
+    /// [`StackOptions::without_backend`] instead carries none, and is served with no
+    /// close and no drain.
     #[must_use]
     pub fn stack_options(&self) -> StackOptions {
         StackOptions {
             host_gate: self.host_gate,
             allowed_origins_var: self.allowed_origins_var,
             cookie_clear: Some(self.auth_gate().cookie_clear_hook()),
-            ..StackOptions::new(
+            shutdown: Some(self.shutdown_duties()),
+            ..StackOptions::without_backend(
                 self.allowed_origins.clone(),
                 Arc::clone(&self.trusted_proxies),
             )
@@ -307,17 +314,15 @@ impl AppBackend {
         )
     }
 
-    /// The backend half of a [`super::ServeMode::Live`]: this backend's
-    /// [`Self::connection_closer`], which shutdown closes every live
-    /// connection through, [`Self::background_writes`], which shutdown
-    /// drains, and `upkeep` to run beside the server.
+    /// What a router served over this backend owes at shutdown:
+    /// [`Self::connection_closer`], which closes every live connection, and
+    /// [`Self::background_writes`], drained last. Set on
+    /// [`Self::stack_options`]; a hand-built `StackOptions` for a live router
+    /// takes it from here.
     #[must_use]
-    pub fn serve_backend(&self, upkeep: Option<super::UpkeepOptions>) -> super::ServeBackend {
-        super::ServeBackend::new(
-            self.connection_closer(),
-            Arc::clone(self.background_writes()),
-            upkeep,
-        )
+    pub fn shutdown_duties(&self) -> fuz_http::ShutdownDuties {
+        let closer: Arc<dyn fuz_http::ShutdownCloser> = self.connection_closer();
+        fuz_http::ShutdownDuties::new(closer, Arc::clone(self.background_writes()))
     }
 
     /// The WebSocket registry as a `NotificationSender`, for the
@@ -797,6 +802,34 @@ mod tests {
             Some(&b"spine_test_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"[..])
         );
         assert_eq!(hook.clear_for("/health", &headers), None);
+    }
+
+    /// The backend's stack options carry its shutdown duties, so the router
+    /// composed over them is served with the backend's closer and drain; the
+    /// boot-only router, over `StackOptions::without_backend`, carries none.
+    #[tokio::test]
+    async fn a_router_over_the_backend_options_carries_the_shutdown_duties() {
+        let env = wildcard_env("http://localhost", None);
+        let spec = AppBackendSpec {
+            session_cookie_name: "spine_test_session",
+            migration_namespaces: &[],
+            expected_schema_json: None,
+            audit_sse: None,
+            browser_gates: BrowserGateSpec::DEFAULT,
+        };
+        let backend = build_app_backend(
+            &env,
+            &spec,
+            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+        )
+        .expect("the core builds without the database");
+        let live = super::super::boot_only_router("duties_test_server", &backend.stack_options());
+        assert!(live.has_shutdown_duties());
+        let bare = super::super::boot_only_router(
+            "duties_test_server",
+            &StackOptions::without_backend(backend.allowed_origins, Arc::new(Vec::new())),
+        );
+        assert!(!bare.has_shutdown_duties());
     }
 
     /// A session cookie name the `Cookie` grammar cannot carry refuses the

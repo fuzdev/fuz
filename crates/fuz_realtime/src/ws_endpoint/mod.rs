@@ -1242,7 +1242,9 @@ async fn run_ws_loop<S, R>(
     // future pushed here and polled as a third `select!` arm, so dispatches
     // run concurrently per socket — the natural interleaving the TS event
     // loop already gives the twin. The set is dropped on loop exit, so an
-    // in-flight handler is cancelled with the socket (no detached task).
+    // in-flight handler is cancelled with the socket (no detached task) and
+    // its transaction rolls back — at shutdown too, where the TS twin instead
+    // waits for an in-flight WS handler and refuses its reply.
     //
     // Each future yields a [`DispatchDone`] — the id lets the completion arm
     // drop the request's entry from `signals` (so a late `cancel` for a

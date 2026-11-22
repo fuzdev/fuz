@@ -35,7 +35,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use fuz_actions::ActionRateLimits;
 use fuz_actions::server::{
-    AppBackendSpec, BootedAppBackend, ServeMode, ServeOptions, SpineBackendOptions, StartupError,
+    AppBackendSpec, BootedAppBackend, ServeOptions, SpineBackendOptions, StartupError,
     compile_action_registry, create_app_backend, serve_until_shutdown,
 };
 use fuz_auth::actor_queries::query_active_actor_holds_any_global_role;
@@ -905,15 +905,13 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     );
 
     serve_until_shutdown(
-        ServeMode::Live {
-            router,
-            backend: backend.serve_backend(None),
-        },
+        router,
         ServeOptions {
             server_name: SERVER_NAME,
             addr,
             drain_timeout,
             shutdown,
+            upkeep: None,
         },
     )
     .await
@@ -934,7 +932,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
 /// included, which a test binary can afford. A WebSocket's frames are
 /// untouched — only the upgrade's answer waits — as on the TS binary.
 async fn await_background_writes_layer(
-    axum::extract::State(background_writes): axum::extract::State<Arc<fuz_auth::BackgroundWrites>>,
+    axum::extract::State(background_writes): axum::extract::State<Arc<fuz_http::BackgroundWrites>>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {

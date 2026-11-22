@@ -463,20 +463,28 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   these too; axum's `Query` and `Path` decode leniently.
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
-- **`serve_with_shutdown`** — its own hyper accept loop, with a required
-  `ShutdownCloser` that closes every WS / SSE connection at shutdown, and
-  write-progress and header-read deadlines the TS twin lacks.
-- A server with an `AuthGate` builds its options with `AuthGate::stack_options`,
-  so both origin checks read one allowlist.
+- **`serve_with_shutdown`** — its own hyper accept loop, with write-progress
+  and header-read deadlines the TS twin lacks. It takes no closer: the router
+  carries its `ShutdownDuties` (a `ShutdownCloser` that closes every WS / SSE
+  connection, and the `BackgroundWrites` drained last), set on
+  `StackOptions::shutdown` and kept by the `GatedRouter`. A spine server
+  composes over `AppBackend::stack_options`, which sets the backend's closer
+  and `BackgroundWrites`, so a router is always served with the duties it was
+  composed with. The hole the types leave: a live router composed over a bare
+  `StackOptions::without_backend` carries none and is served with no close
+  and no drain. `serve_until_shutdown` refuses one that is handed upkeep —
+  which only a server with a backend has — with `StartupError::Config`.
+- A spine server builds its options with `AppBackend::stack_options`, so the
+  stack's origin check and the auth gate's read one allowlist.
 - **The stack clears an invalid session cookie.** `StackOptions::cookie_clear`
   is an opaque `CookieClearHook` — request path and headers in, an optional
   clearing `Set-Cookie` out — since `fuz_http` can't name a keyring;
-  `AuthGate::stack_options` and `AppBackend::stack_options` set it. Its layer sits inside the origin check in
+  `AppBackend::stack_options` sets it. Its layer sits inside the origin check in
   every checked group, the fallback included, so a refusal by the host or
   origin gate carries no clear. It leaves a `101` alone and puts the clear
   ahead of any `Set-Cookie` the handler wrote, so a login carrying a stale
   cookie keeps its new session. A group carved out of the origin check has no
-  clear layer, and neither does a stack built from a bare `StackOptions::new`.
+  clear layer, and neither does a stack built from a bare `StackOptions::without_backend`.
 - **Action params** — `params` holds:
   - the hand-decode helpers a handler reads `params` with (field parsers,
     `reject_unknown_keys` / `reject_null_keys`, `serialize_result`);
@@ -565,14 +573,19 @@ The rules a change must keep:
   transaction. A failure row is spawned on the pool, never holding the answer,
   and so is the bearer leg's `api_token` use (`spawn_api_token_touch`) and
   the bootstrap's burn-and-commit — all on the one tracker of detached
-  writes, `BackgroundWrites`, that `AppBackend` owns, its audit emitter is
+  writes, `fuz_http::BackgroundWrites`, that `AppBackend` owns, its audit emitter is
   built over, and its `AuthGate` holds. An action's post-commit effects run
   on it too (`PostCommitEffects`, built over the emitter's tracker), so a
   socket closed at shutdown, dropping its in-flight dispatches, leaves their
   committed effects counted and awaited. The spine's shutdown
   (`serve_until_shutdown`) and `_testing_drain_effects` wait for those still
-  running, the shutdown bounded by the drain timeout, logging any it gives up
-  on. `testing_spine_stub` also settles them before each HTTP answer
+  running. The shutdown waits for them after every request it was serving has
+  answered and the upkeep has stopped, so it sees the writes those spawned,
+  all within one drain timeout from when the serve sees the signal, logging
+  the requests, connections, closes, upkeep tasks and writes it gives up on.
+  An in-flight WS dispatch is dropped with its socket at shutdown and rolls
+  back; the TS twin waits for an in-flight WS handler and refuses its reply.
+  `testing_spine_stub` also settles them before each HTTP answer
   (`await_background_writes_layer`), as the TS test binary does with
   `await_pending_effects`.
   A failed credential read ends the walk with

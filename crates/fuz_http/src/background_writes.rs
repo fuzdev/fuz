@@ -1,8 +1,8 @@
 //! [`BackgroundWrites`] — the spine's tracker of detached background writes.
 //!
 //! A write the request path never waits on — an audit failure row
-//! ([`crate::AuditEmitter::emit`]), a bearer token's use
-//! ([`crate::api_token_queries::spawn_api_token_touch`]) — runs on a detached
+//! (`fuz_auth::AuditEmitter::emit`), a bearer token's use
+//! (`fuz_auth::api_token_queries::spawn_api_token_touch`) — runs on a detached
 //! tokio task, and so does work a request awaits but must not cancel by
 //! being dropped (the bootstrap's burn-and-commit, `bootstrap_handler`; an
 //! action's post-commit effects, `fuz_actions::PostCommitEffects::drain_all`,
@@ -10,13 +10,13 @@
 //! handle doesn't cancel it, but the runtime shutting down does, mid-checkout
 //! or mid-write, with nothing logged. So every such write is spawned
 //! through the one tracker, which counts it in flight until its task ends,
-//! and the two barriers that must see the writes land await it: a server's graceful shutdown
-//! (`fuz_actions::server::serve_until_shutdown`) and the
-//! `_testing_drain_effects` test action.
+//! and the two barriers that must see the writes land await it: a server's
+//! graceful shutdown ([`crate::serve_with_shutdown`], through the router's
+//! [`crate::ShutdownDuties`]) and the `_testing_drain_effects` test action.
 //!
 //! A server's backend owns its one tracker (`fuz_actions::server::AppBackend`'s
-//! `background_writes`); its [`crate::AuditEmitter`] is built over it and its
-//! [`crate::AuthGate`] holds it beside the credential walk, so one drain
+//! `background_writes`); its `fuz_auth::AuditEmitter` is built over it and its
+//! `fuz_auth::AuthGate` holds it beside the credential walk, so one drain
 //! covers every write. The TS twin splits the one tracker in two, both
 //! awaited by `AppServer.close` in `fuz_app`: a `RequestFlushTracker`
 //! (`http/pending_effects.ts`) holds each request's effect flush — an HTTP
@@ -34,8 +34,8 @@ use tokio::task::JoinHandle;
 /// Counts the detached writes in flight so [`Self::drain`] can await them.
 ///
 /// Always on: an atomic increment and decrement per write. Shared by `Arc`
-/// between the backend that owns it, the [`crate::AuditEmitter`] built over
-/// it, every [`crate::AuthGate`] the backend builds, and every
+/// between the backend that owns it, the `fuz_auth::AuditEmitter` built over
+/// it, every `fuz_auth::AuthGate` the backend builds, and every
 /// `fuz_actions::PostCommitEffects` a dispatch builds over that emitter. `Default` makes a
 /// fresh one — what a test builds a gate or an emitter over; a tracker
 /// nothing drains loses its writes at shutdown.

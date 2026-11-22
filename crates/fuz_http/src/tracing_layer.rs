@@ -18,7 +18,7 @@
 //!
 //! [`crate::compose_stack`] wraps the whole router in it, outermost, when
 //! [`StackOptions::request_tracing`](crate::StackOptions::request_tracing) is
-//! set (the [`StackOptions::new`](crate::StackOptions::new) default).
+//! set (the [`StackOptions::without_backend`](crate::StackOptions::without_backend) default).
 
 use tower_http::trace::HttpMakeClassifier;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};

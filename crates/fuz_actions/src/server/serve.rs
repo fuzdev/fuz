@@ -10,7 +10,6 @@ use axum::Router;
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use fuz_auth::{BackgroundWrites, ConnectionCloser};
 use fuz_http::{
     BaseServerEnv, BodyCap, CancellationToken, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, RouteGroup,
     StackOptions, compose_stack,
@@ -120,35 +119,14 @@ pub fn fallback_group() -> RouteGroup {
 /// The router a server serves with no database: the probes and the fallback,
 /// and nothing live.
 ///
-/// Its own type so [`serve_until_shutdown`] can never serve a full router as
-/// boot-only — only [`boot_only_router`] (and [`boot_only`] over it) builds
-/// one, and [`ServeMode::BootOnly`] takes nothing else, so through
-/// [`serve_until_shutdown`] a router with live mounts always serves with its
-/// backend's closer and drain ([`ServeMode::Live`]). The guarantee is this
-/// function's, not the transport's: `fuz_http::serve_with_shutdown`, the
-/// public primitive below it, takes any closer.
-/// The converse is harmless and open: [`Self::into_gated_router`] lets the
-/// probes serve live.
-#[derive(Clone, Debug)]
-pub struct BootOnlyRouter(GatedRouter);
-
-impl BootOnlyRouter {
-    /// The router as a plain [`GatedRouter`] — to serve live, or beside a full
-    /// router in a test.
-    #[must_use]
-    pub fn into_gated_router(self) -> GatedRouter {
-        self.0
-    }
-}
-
-/// The router a server serves with no database.
-///
 /// The probes ([`probe_router`]) and the fallback, through the same stack as
 /// the full router (1 MiB cap, origin-checked). Without a database there is no
-/// `AuthGate`, so `stack_options` comes from the env's allowlist and proxies.
+/// backend, so `stack_options` comes from the env's allowlist and proxies
+/// ([`StackOptions::without_backend`]), and the router carries no shutdown duties — it
+/// has no live connection to close and no detached write to drain.
 #[must_use]
-pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions) -> BootOnlyRouter {
-    BootOnlyRouter(compose_stack(
+pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions) -> GatedRouter {
+    compose_stack(
         [RouteGroup::new(
             "probes",
             probe_router(server_name),
@@ -156,7 +134,7 @@ pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions)
         )],
         fallback_group(),
         stack_options,
-    ))
+    )
 }
 
 /// The boot-only branch, for a server started with no `DATABASE_URL`: the
@@ -177,7 +155,7 @@ pub fn boot_only(
     env: &BaseServerEnv,
     spec: &AppBackendSpec,
     server_name: &'static str,
-) -> Result<BootOnlyRouter, StartupError> {
+) -> Result<GatedRouter, StartupError> {
     spec.browser_gates.admit_origin_wildcards(env)?;
     tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api/*, no /ready)");
     Ok(boot_only_router(
@@ -185,7 +163,7 @@ pub fn boot_only(
         &StackOptions {
             host_gate: spec.browser_gates.host_gate,
             allowed_origins_var: spec.browser_gates.allowed_origins_var,
-            ..StackOptions::new(
+            ..StackOptions::without_backend(
                 env.allowed_origins.clone(),
                 Arc::new(env.trusted_proxies.clone()),
             )
@@ -195,6 +173,9 @@ pub fn boot_only(
 
 /// A periodic task the server runs beside itself, spawned once the listener
 /// is bound: it takes the shutdown token and returns its handle.
+///
+/// The task must stop on the token — the shutdown joins it within its one
+/// bound and aborts it past that.
 pub type UpkeepTask = Box<dyn FnOnce(CancellationToken) -> JoinHandle<()> + Send>;
 
 /// What [`spawn_upkeep`] schedules.
@@ -216,9 +197,10 @@ pub struct UpkeepOptions {
 /// Spawn the upkeep tasks.
 ///
 /// Each runs a startup pass and then one per interval until `shutdown`
-/// fires; cancelling drops a pass in progress, so the
-/// handles resolve at once. Call it once migrations have run — the startup
-/// passes read the schema.
+/// fires. For the auth cleanup, cancelling drops a pass in progress, so its
+/// handle resolves at once; a consumer's own task resolves when it stops on
+/// the token. Call it once migrations have run — the startup passes read the
+/// schema.
 ///
 /// # Panics
 ///
@@ -238,99 +220,67 @@ pub fn spawn_upkeep(options: UpkeepOptions, shutdown: &CancellationToken) -> Vec
     handles
 }
 
-/// What [`serve_until_shutdown`] serves with, beside the router and backend
-/// ([`ServeMode`]).
-#[derive(Debug)]
+/// What [`serve_until_shutdown`] serves with, beside the router.
+#[expect(
+    missing_debug_implementations,
+    reason = "`UpkeepOptions` holds boxed closures, which have no `Debug`"
+)]
 pub struct ServeOptions {
     /// Names the startup and shutdown sentinels (`<name> listening on …`).
     pub server_name: &'static str,
     pub addr: SocketAddr,
+    /// Bounds the whole shutdown ([`fuz_http::DEFAULT_DRAIN_TIMEOUT`]).
     pub drain_timeout: Duration,
     /// The process's shutdown token (`fuz_http::shutdown_token`).
     pub shutdown: CancellationToken,
+    /// The upkeep to run beside the server, from the bind until shutdown —
+    /// `None` for a boot-only server, which has nothing to sweep.
+    pub upkeep: Option<UpkeepOptions>,
 }
 
-/// What [`serve_until_shutdown`] serves: a full router always with its
-/// backend, or the boot-only router alone.
-#[expect(
-    missing_debug_implementations,
-    reason = "`ServeBackend` has no `Debug`"
-)]
-pub enum ServeMode {
-    /// A server with a database: its router, and the backend it serves over
-    /// — the closer shutdown closes every live connection through, the
-    /// tracker of detached writes shutdown drains, the upkeep beside it.
-    /// The router and the backend must come from the same `AppBackend`;
-    /// the types don't enforce it.
-    Live {
-        router: GatedRouter,
-        backend: ServeBackend,
-    },
-    /// A server with no database ([`boot_only`]): mounts nothing live,
-    /// writes no audit row, runs no upkeep, so it has no closer or drain.
-    BootOnly(BootOnlyRouter),
-}
-
-/// The backend half of [`ServeMode::Live`], built by
-/// `AppBackend::serve_backend` so the closer and the tracker are always the
-/// backend's own.
-#[expect(
-    missing_debug_implementations,
-    reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
-)]
-pub struct ServeBackend {
-    /// The closer over every live transport, which shutdown closes them
-    /// through.
-    connection_closer: Arc<dyn ConnectionCloser>,
-    /// The backend's tracker of detached writes — its audit failure rows,
-    /// token touches, bootstrap write and actions' post-commit effects, which
-    /// no handler awaits or a dropped request or socket left running — that
-    /// shutdown waits on before the runtime goes.
-    background_writes: Arc<BackgroundWrites>,
-    /// The upkeep to run beside the server.
-    upkeep: Option<UpkeepOptions>,
-}
-
-impl ServeBackend {
-    /// The backend half of [`ServeMode::Live`] — `pub(crate)` so only
-    /// `AppBackend::serve_backend` builds one.
-    pub(crate) fn new(
-        connection_closer: Arc<dyn ConnectionCloser>,
-        background_writes: Arc<BackgroundWrites>,
-        upkeep: Option<UpkeepOptions>,
-    ) -> Self {
-        Self {
-            connection_closer,
-            background_writes,
-            upkeep,
-        }
-    }
-}
-
-/// Bind, start the upkeep, serve until the shutdown token fires, then join
-/// the upkeep and drain the background writes in flight.
+/// Bind, start the upkeep, and serve `router` until the shutdown token fires,
+/// then shut down within one drain timeout.
 ///
-/// A [`ServeMode::BootOnly`] router has no backend: no upkeep, no closer,
-/// nothing to drain. For a [`ServeMode::Live`] one, on the token,
-/// `fuz_http::serve_with_shutdown` closes every live WebSocket with 1001 and
-/// ends every SSE stream through the closer, then drains in-flight requests,
-/// bounded by the drain timeout. It returns only once the token has fired, so
-/// the upkeep is already stopping. Then the backend's detached writes
-/// (`AppBackend::background_writes`) are awaited, bounded by the drain
-/// timeout again: a failure row or a token touch spawned by a request that
-/// just answered, or the post-commit effects of a dispatch the close-all
-/// dropped with its socket, land rather than dying with the runtime, and the
-/// writes given up on past the bound are counted in the log. A request still
-/// running past the request drain may spawn a write after this drain
-/// resolves; that write is lost, uncounted. Two `eprintln!` sentinels, which
-/// no log filter suppresses, mark the bind and the end.
+/// The router carries what its shutdown owes (`fuz_http::ShutdownDuties`):
+/// a router composed over [`super::AppBackend::stack_options`] closes the
+/// backend's live connections and drains its detached writes, and the
+/// boot-only router ([`boot_only_router`]) owes nothing. The drain timeout
+/// is counted from when the serve sees the token — the moment it fires —
+/// and bounds, in
+/// order (`fuz_http::serve_with_shutdown`):
+///
+/// 1. Every live WebSocket closed with 1001 and every SSE stream ended, every
+///    HTTP request already dispatched answered, and every connection
+///    finished closing. A WebSocket's in-flight dispatches are dropped with
+///    its loop: one dropped in its handler rolls back, and one whose commit
+///    has returned has its post-commit effects on the backend's tracker. The
+///    TS twin differs here — it waits for an in-flight WS handler at
+///    shutdown and refuses its reply; here it is dropped and rolls back.
+/// 2. The upkeep joined. The spine's auth cleanup stops on the token at once;
+///    a consumer's own task ([`UpkeepOptions::extra`]) should too, and one
+///    still running at the bound is aborted.
+/// 3. The backend's detached writes (`AppBackend::background_writes`)
+///    drained: a failure row or a token touch, the post-commit effects of a
+///    dispatch, the write of a request that answered in step 1. They follow
+///    steps 1 and 2, so every write those spawned is seen.
+///
+/// What is still running when the bound runs out is given up on and counted
+/// in the log — handlers still running and connections still open, closes
+/// not finished, upkeep tasks aborted, writes still in flight — and dies with
+/// the runtime. Two `eprintln!` sentinels, which no log filter suppresses,
+/// mark the bind and the end. A token that fired during boot ends this
+/// before the bind, with neither sentinel.
 ///
 /// # Errors
 ///
-/// [`StartupError::Bind`] when the listener cannot bind;
+/// [`StartupError::Config`] when `upkeep` is set but the router carries no
+/// shutdown duties — upkeep means a backend, so the router was composed over
+/// `StackOptions::without_backend` where it needed
+/// [`super::AppBackend::stack_options`], and would serve with no close and
+/// no drain; [`StartupError::Bind`] when the listener cannot bind;
 /// [`StartupError::Serve`] when the serve loop fails.
 pub async fn serve_until_shutdown(
-    mode: ServeMode,
+    router: GatedRouter,
     options: ServeOptions,
 ) -> Result<(), StartupError> {
     let ServeOptions {
@@ -338,76 +288,29 @@ pub async fn serve_until_shutdown(
         addr,
         drain_timeout,
         shutdown,
+        upkeep,
     } = options;
+    if upkeep.is_some() && !router.has_shutdown_duties() {
+        return Err(StartupError::Config(format!(
+            "{server_name}: a router served with upkeep has a backend, but carries no shutdown \
+             duties — compose it over `AppBackend::stack_options`, not \
+             `StackOptions::without_backend`"
+        )));
+    }
+    if shutdown.is_cancelled() {
+        tracing::info!("{server_name}: shutdown signalled during boot; not serving");
+        return Ok(());
+    }
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
-    let (router, connection_closer, background_writes, upkeep) = match mode {
-        ServeMode::Live {
-            router,
-            backend:
-                ServeBackend {
-                    connection_closer,
-                    background_writes,
-                    upkeep,
-                },
-        } => (
-            router,
-            Some(connection_closer),
-            Some(background_writes),
-            upkeep,
-        ),
-        ServeMode::BootOnly(router) => (router.into_gated_router(), None, None, None),
-    };
-    let upkeep = upkeep.map(|upkeep| spawn_upkeep(upkeep, &shutdown));
-
     eprintln!("{server_name} listening on http://{addr}");
-
-    let closer: &dyn fuz_http::ShutdownCloser = match &connection_closer {
-        Some(closer) => closer.as_ref(),
-        None => &fuz_http::NoopShutdownCloser,
-    };
-    let served =
-        fuz_http::serve_with_shutdown(listener, router, shutdown, closer, drain_timeout).await;
-
-    for task in upkeep.into_iter().flatten() {
-        if let Err(e) = task.await {
-            tracing::warn!(error = %fuz_sys::cli::format_error_chain(&e), "an upkeep task failed");
-        }
-    }
-    if let Some(writes) = &background_writes {
-        drain_background_writes(writes, drain_timeout).await;
-    }
-    served.map_err(StartupError::Serve)?;
-
+    let upkeep = upkeep.map_or_else(Vec::new, |upkeep| spawn_upkeep(upkeep, &shutdown));
+    fuz_http::serve_with_shutdown(listener, router, shutdown, upkeep, drain_timeout)
+        .await
+        .map_err(StartupError::Serve)?;
     eprintln!("{server_name} shutdown complete");
     Ok(())
-}
-
-/// Await the detached writes in flight on `writes` — the audit pool writes,
-/// token touches, bootstrap write and post-commit effects — for at most
-/// `bound`, and return how many were still in flight when the bound ran out
-/// (`0` when every one ended).
-///
-/// A write still in flight past the bound dies with the runtime — its task
-/// cancelled mid-checkout or mid-write, with no dropped-row line of its own
-/// — so the count given up on is logged at `error` and as an `eprintln!`
-/// sentinel.
-async fn drain_background_writes(writes: &BackgroundWrites, bound: Duration) -> usize {
-    if tokio::time::timeout(bound, writes.drain()).await.is_ok() {
-        return 0;
-    }
-    // the last write may have ended between the timeout and this read
-    let given_up = writes.inflight_count();
-    if given_up == 0 {
-        return 0;
-    }
-    tracing::error!(
-        writes = given_up,
-        "shutdown gave up on background writes still running past the drain timeout"
-    );
-    eprintln!("Background write drain timeout: gave up on {given_up} write(s) still running");
-    given_up
 }
 
 #[cfg(test)]
@@ -417,6 +320,9 @@ mod tests {
     use axum::body::Body;
     use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode, header};
+    use std::future::Future;
+
+    use fuz_http::BackgroundWrites;
     use tower::ServiceExt;
 
     use super::*;
@@ -428,7 +334,7 @@ mod tests {
         path: &str,
         headers: &[(header::HeaderName, &str)],
     ) -> (StatusCode, String) {
-        let stack_options = StackOptions::new(
+        let stack_options = StackOptions::without_backend(
             fuz_http::AllowedOrigins::parse("http://localhost:*").expect("the allowlist parses"),
             Arc::new(Vec::new()),
         );
@@ -444,7 +350,6 @@ mod tests {
                 .expect("the peer parses"),
         ));
         let response = boot_only_router("probe_test_server", &stack_options)
-            .into_gated_router()
             .into_router_for_testing()
             .oneshot(request)
             .await
@@ -562,7 +467,7 @@ mod tests {
         }
     }
 
-    async fn boot_only_status(router: BootOnlyRouter, host: &str) -> StatusCode {
+    async fn boot_only_status(router: GatedRouter, host: &str) -> StatusCode {
         let mut request = Request::builder()
             .uri("/health")
             .header(header::HOST, host)
@@ -574,7 +479,6 @@ mod tests {
                 .expect("the peer parses"),
         ));
         router
-            .into_gated_router()
             .into_router_for_testing()
             .oneshot(request)
             .await
@@ -643,17 +547,18 @@ mod tests {
             .await
             .expect("an ephemeral port");
         let addr = held.local_addr().expect("the bound address");
-        let stack_options = StackOptions::new(
+        let stack_options = StackOptions::without_backend(
             fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
             Arc::new(Vec::new()),
         );
         let error = serve_until_shutdown(
-            ServeMode::BootOnly(boot_only_router("bind_test_server", &stack_options)),
+            boot_only_router("bind_test_server", &stack_options),
             ServeOptions {
                 server_name: "bind_test_server",
                 addr,
                 drain_timeout: Duration::from_secs(1),
                 shutdown: CancellationToken::new(),
+                upkeep: None,
             },
         )
         .await
@@ -666,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_cancelled_token_ends_the_serve() {
-        let stack_options = StackOptions::new(
+        let stack_options = StackOptions::without_backend(
             fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
             Arc::new(Vec::new()),
         );
@@ -675,12 +580,13 @@ mod tests {
         tokio::time::timeout(
             Duration::from_secs(10),
             serve_until_shutdown(
-                ServeMode::BootOnly(boot_only_router("cancel_test_server", &stack_options)),
+                boot_only_router("cancel_test_server", &stack_options),
                 ServeOptions {
                     server_name: "cancel_test_server",
                     addr: "127.0.0.1:0".parse().expect("addr"),
                     drain_timeout: Duration::from_secs(1),
                     shutdown,
+                    upkeep: None,
                 },
             ),
         )
@@ -689,11 +595,98 @@ mod tests {
         .expect("a clean end");
     }
 
-    /// A write still in flight when the bound runs out is given up on and
-    /// counted: here one stuck dialing a server that accepts the connection
-    /// and never answers.
+    /// A server handed upkeep has a backend, so a router with no shutdown
+    /// duties is one composed over the bare options by mistake: refused
+    /// before it binds, rather than served with no close and no drain.
     #[tokio::test]
-    async fn the_audit_drain_counts_the_writes_it_gives_up_on() {
+    async fn upkeep_beside_a_router_with_no_duties_is_refused() {
+        let env = BaseServerEnv::from_vars(
+            &|k| match k {
+                "DATABASE_URL" => Some("postgres://spine:spine@127.0.0.1:1/unused".to_owned()),
+                "SECRET_FUZ_COOKIE_KEYS" => Some("0123456789abcdef0123456789abcdef".to_owned()),
+                "FUZ_ALLOWED_ORIGINS" => Some("http://localhost".to_owned()),
+                _ => None,
+            },
+            fuz_http::ServerEnvOptions {
+                trusted_proxies_var: "FUZ_TEST_TRUSTED_PROXIES",
+            },
+        )
+        .expect("the env reads");
+        let backend = super::super::build_app_backend(
+            &env,
+            &boot_only_spec(false),
+            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+        )
+        .expect("the core builds without the database");
+        let bare = StackOptions::without_backend(
+            fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
+            Arc::new(Vec::new()),
+        );
+        let served = serve_until_shutdown(
+            boot_only_router("duties_test_server", &bare),
+            ServeOptions {
+                server_name: "duties_test_server",
+                addr: "127.0.0.1:0".parse().expect("addr"),
+                drain_timeout: Duration::from_secs(1),
+                shutdown: CancellationToken::new(),
+                upkeep: Some(UpkeepOptions {
+                    auth_cleanup: backend.auth_cleanup_options(),
+                    extra: Vec::new(),
+                }),
+            },
+        );
+        let error = tokio::time::timeout(Duration::from_secs(10), served)
+            .await
+            .expect("refused at once, not served")
+            .expect_err("a live server with no duties is refused");
+        let StartupError::Config(message) = &error else {
+            panic!("expected a config error, got {error:?}");
+        };
+        assert!(message.contains("shutdown duties"), "{message}");
+    }
+
+    /// A token that fired during boot ends the serve before it binds: no
+    /// listener, no `listening on` sentinel — here proven by a port already
+    /// held, which a bind would refuse.
+    #[tokio::test]
+    async fn a_token_fired_during_boot_returns_before_the_bind() {
+        let held = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("an ephemeral port");
+        let stack_options = StackOptions::without_backend(
+            fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
+            Arc::new(Vec::new()),
+        );
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        serve_until_shutdown(
+            boot_only_router("early_test_server", &stack_options),
+            ServeOptions {
+                server_name: "early_test_server",
+                addr: held.local_addr().expect("the bound address"),
+                drain_timeout: Duration::from_secs(1),
+                shutdown,
+                upkeep: None,
+            },
+        )
+        .await
+        .expect("a clean end, with no bind attempted");
+    }
+
+    /// Await `writes`' drain for at most `ms`, then report how many are in
+    /// flight — `0` once the drain resolved.
+    async fn in_flight_after(writes: &BackgroundWrites, ms: u64) -> usize {
+        match tokio::time::timeout(Duration::from_millis(ms), writes.drain()).await {
+            Ok(()) => 0,
+            Err(_) => writes.inflight_count(),
+        }
+    }
+
+    /// A failure row is a tracked write: one in flight — here stuck dialing a
+    /// server that accepts the connection and never answers — holds the
+    /// shutdown drain.
+    #[tokio::test]
+    async fn an_audit_failure_row_is_a_tracked_write() {
         use fuz_auth::{AuditEventType, AuditLogInput};
 
         let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -711,23 +704,18 @@ mod tests {
         let emitter = Arc::new(fuz_auth::AuditEmitter::new(pool, Arc::clone(&writes)));
         let write = emitter.emit(AuditLogInput::for_event(AuditEventType::Login).failure());
 
-        assert_eq!(
-            drain_background_writes(&writes, Duration::from_millis(100)).await,
-            1
-        );
+        assert_eq!(in_flight_after(&writes, 100).await, 1);
         write.abort();
         assert_eq!(
-            drain_background_writes(&writes, Duration::from_secs(5)).await,
+            in_flight_after(&writes, 5000).await,
             0,
             "nothing left once the write ends"
         );
     }
 
-    /// A bearer token's use is a tracked write too: a touch in flight — here
-    /// stuck dialing a server that accepts the connection and never answers —
-    /// holds the shutdown drain, and past the bound is counted as given up.
+    /// A bearer token's use is a tracked write too.
     #[tokio::test]
-    async fn the_shutdown_drain_awaits_a_token_touch() {
+    async fn a_token_touch_is_a_tracked_write() {
         let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("binds");
@@ -748,15 +736,194 @@ mod tests {
         );
 
         assert_eq!(
-            drain_background_writes(&writes, Duration::from_millis(100)).await,
+            in_flight_after(&writes, 100).await,
             1,
             "the touch in flight holds the drain"
         );
         touch.abort();
         assert_eq!(
-            drain_background_writes(&writes, Duration::from_secs(5)).await,
+            in_flight_after(&writes, 5000).await,
             0,
             "nothing left once the touch ends"
         );
+    }
+
+    /// A router whose shutdown duties are `writes` (and a closer with no
+    /// connections), with `GET /block` running `handler`.
+    fn live_router<F, Fut>(writes: &Arc<BackgroundWrites>, handler: F) -> GatedRouter
+    where
+        F: Fn() -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let closer: Arc<dyn fuz_http::ShutdownCloser> = Arc::new(fuz_auth::NoopConnectionCloser);
+        let writes = Arc::clone(writes);
+        let stack_options = StackOptions {
+            shutdown: Some(fuz_http::ShutdownDuties::new(closer, writes)),
+            ..StackOptions::without_backend(
+                fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
+                Arc::new(Vec::new()),
+            )
+        };
+        compose_stack(
+            [RouteGroup::new(
+                "block",
+                Router::new().route(
+                    "/block",
+                    get(move || {
+                        let handler = handler.clone();
+                        async move {
+                            handler().await;
+                            "done"
+                        }
+                    }),
+                ),
+                BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
+            )],
+            fallback_group(),
+            &stack_options,
+        )
+    }
+
+    /// Serve `router` on an ephemeral port and send `GET /block`, returning
+    /// the serve's handle and the request's socket (held so the request stays
+    /// in flight).
+    async fn serve_blocked(
+        router: GatedRouter,
+        shutdown: &CancellationToken,
+        upkeep: Vec<JoinHandle<()>>,
+        drain_timeout: Duration,
+    ) -> (
+        JoinHandle<Result<fuz_http::ServeShutdown, std::io::Error>>,
+        tokio::net::TcpStream,
+    ) {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("an ephemeral port");
+        let addr = listener.local_addr().expect("the bound address");
+        let served = tokio::spawn(fuz_http::serve_with_shutdown(
+            listener,
+            router,
+            shutdown.clone(),
+            upkeep,
+            drain_timeout,
+        ));
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connects");
+        stream
+            .write_all(b"GET /block HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .expect("the request writes");
+        (served, stream)
+    }
+
+    /// A request already running when the shutdown starts is waited for, and
+    /// so is the write it spawns on its way out: the router's write drain
+    /// follows the request drain, so it sees what every finished request left
+    /// behind.
+    #[tokio::test]
+    async fn the_shutdown_awaits_the_write_of_a_request_running_at_the_token() {
+        let writes = Arc::new(BackgroundWrites::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let landed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let router = live_router(&writes, {
+            let (writes, started, release, landed) = (
+                Arc::clone(&writes),
+                Arc::clone(&started),
+                Arc::clone(&release),
+                Arc::clone(&landed),
+            );
+            move || {
+                let (writes, started, release, landed) = (
+                    Arc::clone(&writes),
+                    Arc::clone(&started),
+                    Arc::clone(&release),
+                    Arc::clone(&landed),
+                );
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    writes.spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        landed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    });
+                }
+            }
+        });
+        let shutdown = CancellationToken::new();
+        let (served, _request) =
+            serve_blocked(router, &shutdown, Vec::new(), Duration::from_secs(30)).await;
+        started.notified().await;
+        shutdown.cancel();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !served.is_finished(),
+            "the running request holds the shutdown"
+        );
+        release.notify_one();
+        let given_up = tokio::time::timeout(Duration::from_secs(60), served)
+            .await
+            .expect("the shutdown ends")
+            .expect("the serve task ran")
+            .expect("a clean end");
+        assert_eq!(given_up, fuz_http::ServeShutdown::default());
+        assert!(
+            landed.load(std::sync::atomic::Ordering::SeqCst),
+            "the request's write landed before the shutdown returned"
+        );
+    }
+
+    /// One drain bound covers the whole shutdown — the requests, the upkeep,
+    /// then the writes — counted from when the serve sees the token, and each
+    /// phase's leftovers are counted. A request, an upkeep task and a write
+    /// that never end get one bound between them, not one each.
+    #[tokio::test]
+    async fn one_bound_covers_the_requests_the_upkeep_and_the_writes() {
+        let writes = Arc::new(BackgroundWrites::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let router = live_router(&writes, {
+            let started = Arc::clone(&started);
+            move || {
+                let started = Arc::clone(&started);
+                async move {
+                    started.notify_one();
+                    std::future::pending::<()>().await;
+                }
+            }
+        });
+        let stuck_write = writes.spawn(std::future::pending::<()>());
+        let stuck_upkeep = tokio::spawn(std::future::pending::<()>());
+        let shutdown = CancellationToken::new();
+        let bound = Duration::from_secs(1);
+        let (served, _request) = serve_blocked(router, &shutdown, vec![stuck_upkeep], bound).await;
+        started.notified().await;
+        let fired = tokio::time::Instant::now();
+        shutdown.cancel();
+        let given_up = tokio::time::timeout(Duration::from_secs(60), served)
+            .await
+            .expect("the shutdown ends")
+            .expect("the serve task ran")
+            .expect("a clean end");
+        let elapsed = fired.elapsed();
+        assert_eq!(
+            given_up,
+            fuz_http::ServeShutdown {
+                closes_given_up: true,
+                requests_given_up: 1,
+                connections_given_up: 1,
+                upkeep_given_up: 1,
+                writes_given_up: 1,
+            }
+        );
+        // a bound per phase would take at least three; anything under two is
+        // one shared bound, however loaded the machine
+        assert!(
+            elapsed >= bound && elapsed < bound * 2,
+            "the shutdown took {elapsed:?} against a {bound:?} bound"
+        );
+        stuck_write.abort();
     }
 }

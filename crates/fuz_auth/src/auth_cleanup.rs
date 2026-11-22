@@ -98,7 +98,8 @@
 //! tables), with the app's bound [`AuditEmitter`] so the expiry audits reach
 //! its listeners and the [`ConnectionCloser`] its revocation handlers close
 //! through — the one over the registries its connections live in, both
-//! transports where it has both — and join it after the server drains:
+//! transports where it has both — and hand its handle to the serve, which
+//! joins it after the connection drain, within the shutdown's bound:
 //!
 //! ```ignore
 //! let shutdown = fuz_http::shutdown_token();
@@ -112,16 +113,15 @@
 //!     fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
 //!     shutdown.clone(),
 //! );
+//! // the serve joins the task after its connection drain, within its bound
 //! let served = fuz_http::serve_with_shutdown(
 //!     listener,
 //!     router,
 //!     shutdown.clone(),
-//!     connection_closer.as_ref(),
+//!     vec![auth_cleanup],
 //!     drain,
 //! )
 //! .await;
-//! // the token is cancelled by now, so the task stops
-//! let _ = auth_cleanup.await;
 //! ```
 //!
 //! Shutdown drops a pass in progress. Both sweeps are safe to drop. A session
@@ -345,11 +345,12 @@ pub async fn run_auth_cleanup(options: &AuthCleanupOptions) -> Result<AuthCleanu
 /// `interval`, until `shutdown` is cancelled.
 ///
 /// The auth surface's upkeep in one call — spawn it once migrations have run
-/// and join the handle after the server drains (see the module doc's
-/// § Scheduling). A failed pass is logged at `warn` and the next interval
-/// retries; a pass that swept something logs its counts at `info`, and one
-/// that closed a swept session's connections logs that count too. Shutdown
-/// drops a pass in progress, which is safe for both sweeps.
+/// and hand the handle to `fuz_http::serve_with_shutdown`, which joins it
+/// within the shutdown's bound (see the module doc's § Scheduling). A failed
+/// pass is logged at `warn` and the next interval retries; a pass that swept
+/// something logs its counts at `info`, and one that closed a swept
+/// session's connections logs that count too. Shutdown drops a pass in
+/// progress, which is safe for both sweeps.
 ///
 /// Built on [`spawn_periodic`], which fixes the loop's semantics (startup
 /// pass, delayed-not-burst schedule, prompt join).

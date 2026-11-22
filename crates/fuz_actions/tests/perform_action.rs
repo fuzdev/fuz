@@ -567,7 +567,7 @@ async fn the_ws_path_serves_get_alone_and_gates_before_the_upgrade() {
             fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES),
         )],
         fuz_actions::server::fallback_group(),
-        &fuz_http::StackOptions::new(
+        &fuz_http::StackOptions::without_backend(
             fuz_http::AllowedOrigins::parse(fuz_testing::TESTING_ALLOWED_ORIGIN).unwrap(),
             Arc::new(Vec::new()),
         ),

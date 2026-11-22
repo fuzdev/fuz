@@ -9,9 +9,10 @@
 //! bind [`NoopConnectionCloser`].
 //!
 //! It extends [`fuz_http::ShutdownCloser`], so the closer a server already
-//! holds is also what `fuz_http::serve_with_shutdown` closes every live
-//! connection through when the server shuts down: one capability reaches
-//! every transport for revocation and shutdown alike.
+//! holds is also its router's shutdown duty (`fuz_http::ShutdownDuties`),
+//! which `fuz_http::serve_with_shutdown` closes every live connection through
+//! when the server shuts down: one capability reaches every transport for
+//! revocation and shutdown alike.
 //!
 //! ## Why the handlers close directly
 //!
@@ -61,7 +62,7 @@
 
 use std::sync::Arc;
 
-use fuz_http::{ShutdownCloser, WaitClosedFuture};
+use fuz_http::{ShutdownCloser, ShutdownFuture};
 
 use crate::audit_emitter::AuditPostCommit;
 
@@ -81,9 +82,9 @@ use crate::audit_emitter::AuditPostCommit;
 ///
 /// The [`ShutdownCloser`] supertrait is the shutdown half: every impl also
 /// closes all of its connections, and waits for them to finish closing, when
-/// the server stops — so an `Arc<dyn ConnectionCloser>` is passed to
-/// `fuz_http::serve_with_shutdown` as it is (`closer.as_ref()` upcasts to
-/// `&dyn ShutdownCloser`). Its `wait_closed` is the one async method, and
+/// the server stops — so an `Arc<dyn ConnectionCloser>` becomes the router's
+/// `fuz_http::ShutdownDuties` closer as it is (it upcasts to
+/// `Arc<dyn ShutdownCloser>`). Its `wait_closed` is the one async method, and
 /// only shutdown calls it.
 ///
 /// **Object-safe** — consumed as `Arc<dyn ConnectionCloser>`.
@@ -103,7 +104,7 @@ impl ShutdownCloser for NoopConnectionCloser {
     fn close_all_connections(&self) -> usize {
         0
     }
-    fn wait_closed(&self) -> WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> ShutdownFuture<'_> {
         Box::pin(std::future::ready(()))
     }
 }
@@ -181,7 +182,7 @@ mod tests {
         fn close_all_connections(&self) -> usize {
             0
         }
-        fn wait_closed(&self) -> WaitClosedFuture<'_> {
+        fn wait_closed(&self) -> ShutdownFuture<'_> {
             Box::pin(std::future::ready(()))
         }
     }

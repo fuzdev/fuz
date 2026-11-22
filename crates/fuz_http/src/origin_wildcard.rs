@@ -51,7 +51,7 @@ pub struct OriginWildcardOptions {
 }
 
 impl OriginWildcardOptions {
-    /// The host gate on (as [`crate::StackOptions::new`] mounts it), no notes.
+    /// The host gate on (as [`crate::StackOptions::without_backend`] mounts it), no notes.
     pub const DEFAULT: Self = Self {
         host_gate: true,
         note: None,

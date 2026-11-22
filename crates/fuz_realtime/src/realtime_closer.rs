@@ -24,14 +24,15 @@
 //! close each connection already makes at its credential's deadline — and it
 //! has to reach both transports for the same reason.
 //!
-//! And it is what the server hands `fuz_http::serve_with_shutdown`, as the
-//! [`ShutdownCloser`] its `ConnectionCloser` extends: on shutdown it closes every
-//! WebSocket and every stream, and waits for both registries to finish.
+//! And it is the server's shutdown closer, as the [`ShutdownCloser`] its
+//! `ConnectionCloser` extends, carried by the router (`fuz_http::ShutdownDuties`)
+//! to `fuz_http::serve_with_shutdown`: on shutdown it closes every WebSocket
+//! and every stream, and waits for both registries to finish.
 
 use std::sync::Arc;
 
 use fuz_auth::{ConnectionCloseTarget, ConnectionCloser};
-use fuz_http::{ShutdownCloser, WaitClosedFuture};
+use fuz_http::{ShutdownCloser, ShutdownFuture};
 
 use crate::connection_registry::ConnectionRegistry;
 use crate::sse::SseRegistry;
@@ -71,7 +72,7 @@ impl ShutdownCloser for RealtimeCloser {
     }
 
     /// Both registries' waits, joined — resolves once both have.
-    fn wait_closed(&self) -> WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> ShutdownFuture<'_> {
         Box::pin(async move {
             futures::future::join(self.ws.wait_closed(), self.sse.wait_closed()).await;
         })

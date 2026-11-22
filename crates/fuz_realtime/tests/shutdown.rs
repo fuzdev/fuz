@@ -38,7 +38,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use fuz_auth::ConnectionCloseTarget;
 use fuz_auth::ConnectionCloser;
-use fuz_http::{CancellationToken, ShutdownCloser, WaitClosedFuture};
+use fuz_http::{CancellationToken, ShutdownCloser, ShutdownFuture};
 use fuz_realtime::ConnectionIdentity;
 use fuz_realtime::ws_endpoint::WsDispatchInput;
 use fuz_realtime::{
@@ -444,7 +444,7 @@ impl ShutdownCloser for Observed {
         closed
     }
 
-    fn wait_closed(&self) -> WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> ShutdownFuture<'_> {
         self.inner.wait_closed()
     }
 }
@@ -475,17 +475,22 @@ impl Server {
 }
 
 /// `router` composed by `fuz_http::compose_stack` as one checked group — the
-/// only shape `serve_with_shutdown` serves. The requests here send no
+/// only shape `serve_with_shutdown` serves — carrying `closer` as its
+/// shutdown duty, with an empty write tracker. The requests here send no
 /// `Origin` and no body, so the gates pass them all.
-fn gated(router: axum::Router) -> fuz_http::GatedRouter {
+fn gated(router: axum::Router, closer: Arc<dyn ShutdownCloser>) -> fuz_http::GatedRouter {
     let cap = fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES);
+    let writes = Arc::new(fuz_http::BackgroundWrites::default());
     fuz_http::compose_stack(
         [fuz_http::RouteGroup::new("test", router, cap)],
         fuz_http::RouteGroup::new("fallback", axum::Router::new(), cap),
-        &fuz_http::StackOptions::new(
-            fuz_http::AllowedOrigins::parse("https://app.example").unwrap(),
-            Arc::new(Vec::new()),
-        ),
+        &fuz_http::StackOptions {
+            shutdown: Some(fuz_http::ShutdownDuties::new(closer, writes)),
+            ..fuz_http::StackOptions::without_backend(
+                fuz_http::AllowedOrigins::parse("https://app.example").unwrap(),
+                Arc::new(Vec::new()),
+            )
+        },
     )
 }
 
@@ -506,15 +511,15 @@ fn start(router: axum::Router, closer: Arc<dyn ShutdownCloser>) -> Server {
         runtime.block_on(async move {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             addr_tx.send(listener.local_addr().unwrap()).unwrap();
-            let closer = Observed {
+            let closer: Arc<dyn ShutdownCloser> = Arc::new(Observed {
                 inner: closer,
                 closed_tx,
-            };
+            });
             let served = fuz_http::serve_with_shutdown(
                 listener,
-                gated(router),
+                gated(router, closer),
                 server_token,
-                &closer,
+                Vec::new(),
                 DRAIN,
             )
             .await;

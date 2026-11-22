@@ -1224,18 +1224,31 @@ async fn an_upgrade_in_flight_at_shutdown_is_refused_with_1001_before_serve_retu
         let pool_for_stack = pool.clone();
         async move {
             // `serve_with_shutdown` serves only a composed stack: the one
-            // group, with the testing gate's allowlist
+            // group, with the testing gate's allowlist, carrying the closer
+            // the test watches as its shutdown duty
+            let gate = fuz_testing::testing_auth_gate(pool_for_stack);
+            let duty_closer: Arc<dyn ShutdownCloser> = closer;
+            let stack_options = fuz_http::StackOptions {
+                shutdown: Some(fuz_http::ShutdownDuties::new(
+                    duty_closer,
+                    gate.background_writes,
+                )),
+                ..fuz_http::StackOptions::without_backend(
+                    gate.allowed_origins,
+                    Arc::new(Vec::new()),
+                )
+            };
             let cap = fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES);
             let gated = fuz_http::compose_stack(
                 [fuz_http::RouteGroup::new("ws", app, cap)],
                 fuz_http::RouteGroup::new("fallback", axum::Router::new(), cap),
-                &fuz_testing::testing_auth_gate(pool_for_stack).stack_options(Arc::new(Vec::new())),
+                &stack_options,
             );
             let served = fuz_http::serve_with_shutdown(
                 listener,
                 gated,
                 token,
-                closer.as_ref(),
+                Vec::new(),
                 Duration::from_secs(30),
             )
             .await;
@@ -1293,7 +1306,7 @@ impl ShutdownCloser for AnnouncingCloser {
         closed
     }
 
-    fn wait_closed(&self) -> fuz_http::WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
         self.inner.wait_closed()
     }
 }

@@ -17,7 +17,7 @@
 //!     axum::Router::new().nest("/api", fuz_actions::create_rpc_router(dispatch)),
 //!     fuz_http::BodyCap::Bytes(fuz_http::DEFAULT_BODY_LIMIT_BYTES),
 //! );
-//! let app = fuz_http::compose_stack([api], fallback, &gate.stack_options(trusted_proxies));
+//! let app = fuz_http::compose_stack([api], fallback, &backend.stack_options());
 //! ```
 //!
 //! The handlers check the origin again through the dispatch's

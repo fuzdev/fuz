@@ -19,14 +19,16 @@
 //! a response body that never ends, so the drain waits on it until the
 //! timeout; an upgraded WebSocket has left hyper for a detached task the
 //! drain does not see, so the process exits under it and the client reads a
-//! reset (a browser's 1006) instead of a close frame. So
-//! [`serve_with_shutdown`] takes a required [`ShutdownCloser`] — in a spine
-//! server the `fuz_auth::ConnectionCloser` it already holds, which extends this
-//! trait — and when the token fires it closes every live connection
-//! ([`ShutdownCloser::close_all_connections`]) beside the drain, then waits for
-//! the connections to finish closing ([`ShutdownCloser::wait_closed`]), the
-//! whole shutdown bounded by the drain timeout. A server with no live
-//! connections passes [`NoopShutdownCloser`].
+//! reset (a browser's 1006) instead of a close frame. So a router carries its
+//! [`ShutdownDuties`] — in a spine server the `fuz_auth::ConnectionCloser` and
+//! the [`BackgroundWrites`] its backend holds, set on its
+//! [`crate::StackOptions`] — and when the token fires [`serve_with_shutdown`]
+//! closes every live connection ([`ShutdownCloser::close_all_connections`])
+//! beside the drain, then waits for the connections to finish closing
+//! ([`ShutdownCloser::wait_closed`]), and last drains the detached writes
+//! ([`BackgroundWrites::drain`]), the whole shutdown bounded by the drain
+//! timeout. A router composed with no duties — the boot-only router — closes
+//! and drains nothing.
 //!
 //! Closing a stream is not always enough to end its connection: hyper polls
 //! a response body only while the socket takes writes, so a stream — SSE, a
@@ -100,17 +102,13 @@
 //!
 //! Background upkeep runs beside the server on the same token:
 //! [`spawn_periodic`] (re-exported from [`fuz_sys::periodic`]) is the loop a
-//! sweep runs on — `fuz_auth::spawn_auth_cleanup` is built on it — and each
-//! task is joined after the drain. [`serve_with_shutdown`] returns only once
-//! the token has fired, so those tasks stop with it.
+//! sweep runs on — `fuz_auth::spawn_auth_cleanup` is built on it — and
+//! [`serve_with_shutdown`] joins each task it is handed after the connection
+//! drain and before the write drain, within the same bound.
 //!
 //! ```no_run
 //! # use std::time::Duration;
-//! # async fn run(
-//! #     listener: tokio::net::TcpListener,
-//! #     router: fuz_http::GatedRouter,
-//! #     closer: &dyn fuz_http::ShutdownCloser,
-//! # ) {
+//! # async fn run(listener: tokio::net::TcpListener, router: fuz_http::GatedRouter) {
 //! # async fn sweep() -> Result<(), std::io::Error> { Ok(()) }
 //! let token = fuz_http::shutdown_token();
 //! let upkeep =
@@ -118,13 +116,12 @@
 //! let served = fuz_http::serve_with_shutdown(
 //!     listener,
 //!     router,
-//!     token.clone(),
-//!     closer,
+//!     token,
+//!     vec![upkeep],
 //!     Duration::from_secs(10),
 //! )
 //! .await;
 //! // consumer-specific teardown runs here, post-drain
-//! let _ = upkeep.await;
 //! served.expect("serve");
 //! # }
 //! ```
@@ -144,18 +141,20 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tower::Service as _;
 
+use crate::background_writes::BackgroundWrites;
 use crate::stack::GatedRouter;
 
-/// Default graceful-shutdown connection-drain timeout (10 s).
+/// Default graceful-shutdown timeout (10 s).
 ///
 /// The single source for every spine consumer's `RunAppOptions.drain_timeout`
 /// — the spine servers and `testing_spine_stub` all pass this to
 /// [`serve_with_shutdown`], so operators see one consistent shutdown UX
-/// across the ecosystem. Bounds how long the drain waits for in-flight
-/// connections before returning.
+/// across the ecosystem. Bounds the whole shutdown: the connection drain,
+/// the live connections' closes, the upkeep join, and the write drain.
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The transport-free SIGINT/SIGTERM → [`CancellationToken`] primitive,
@@ -168,8 +167,8 @@ pub use fuz_sys::signal::shutdown_token;
 /// The periodic background task loop — a startup pass, then one per interval,
 /// until the token is cancelled — re-exported from [`fuz_sys::periodic`],
 /// where it is single-sourced beside the shutdown token it stops on. A spine
-/// server runs its sweeps on it and joins each handle after
-/// [`serve_with_shutdown`] returns.
+/// server runs its sweeps on it and hands each handle to
+/// [`serve_with_shutdown`], which joins it within the shutdown's bound.
 pub use fuz_sys::periodic::spawn_periodic;
 
 /// The token type [`shutdown_token`] returns and [`serve_with_shutdown`] /
@@ -180,7 +179,7 @@ pub use tokio_util::sync::CancellationToken;
 
 /// The future [`ShutdownCloser::wait_closed`] returns — boxed so the trait
 /// stays object-safe.
-pub type WaitClosedFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+pub type ShutdownFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 /// Close every live connection a server holds open past its HTTP requests —
 /// WebSocket connections, SSE streams — when it shuts down.
@@ -207,20 +206,20 @@ pub trait ShutdownCloser: Send + Sync {
     /// has finished closing — at once when there were none. Waits forever if
     /// `close_all_connections` never ran, so a caller bounds it (as
     /// [`serve_with_shutdown`] does).
-    fn wait_closed(&self) -> WaitClosedFuture<'_>;
+    fn wait_closed(&self) -> ShutdownFuture<'_>;
 }
 
-/// The [`ShutdownCloser`] of a server with no live connections: closes
-/// nothing and has nothing to wait for.
+/// The closer of a router with no [`ShutdownDuties`]: closes nothing and has
+/// nothing to wait for.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct NoopShutdownCloser;
+struct NoopShutdownCloser;
 
 impl ShutdownCloser for NoopShutdownCloser {
     fn close_all_connections(&self) -> usize {
         0
     }
 
-    fn wait_closed(&self) -> WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> ShutdownFuture<'_> {
         Box::pin(std::future::ready(()))
     }
 }
@@ -311,12 +310,54 @@ impl ConnectionTimeouts {
 /// before trying again, as axum's serve does.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Serve `router` on `listener` until `token` fires, then close `closer`'s
-/// live connections and drain, bounded by `drain_timeout`.
+/// What serving a router owes at shutdown beyond its HTTP requests: closing
+/// its live connections, and draining its detached writes.
+///
+/// Carried by the router itself — set on [`crate::StackOptions::shutdown`]
+/// and kept by the [`GatedRouter`] [`crate::compose_stack`] builds — so
+/// [`serve_with_shutdown`] takes no closer of its own and a router is always
+/// served with the duties it was composed with. A spine server gets them from
+/// its backend's stack options (`fuz_actions::server::AppBackend::stack_options`);
+/// a router composed with none ([`crate::StackOptions::without_backend`]) owes nothing,
+/// which fits only a router with no live connection and no detached write —
+/// the boot-only router.
+///
+/// Both halves are required: a closer with no drain, or a drain with no
+/// closer, is not a shape a server can have.
+#[derive(Clone)]
+pub struct ShutdownDuties {
+    closer: Arc<dyn ShutdownCloser>,
+    writes: Arc<BackgroundWrites>,
+}
+
+impl ShutdownDuties {
+    /// The duties of a server whose live connections close through `closer`
+    /// and whose detached writes are tracked by `writes` — drained last, once
+    /// every request has answered and the upkeep has stopped, so the drain
+    /// sees every write those spawned.
+    #[must_use]
+    pub fn new(closer: Arc<dyn ShutdownCloser>, writes: Arc<BackgroundWrites>) -> Self {
+        Self { closer, writes }
+    }
+}
+
+impl std::fmt::Debug for ShutdownDuties {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShutdownDuties")
+            .field("writes_in_flight", &self.writes.inflight_count())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Serve `router` on `listener` until `token` fires, then shut down within
+/// one bound: close the router's live connections, drain its requests, join
+/// `upkeep`, and drain its detached writes.
 ///
 /// `router` is a [`GatedRouter`] — the output of [`crate::compose_stack`] —
 /// so every request this loop serves has passed the stack's gates; a router
-/// assembled outside the stack has no way in.
+/// assembled outside the stack has no way in. It carries its
+/// [`ShutdownDuties`] (or none), so the closer and the writes drained are
+/// always the ones it was composed with.
 ///
 /// Each accepted connection is served by hyper (HTTP/1, with upgrades, so a
 /// WebSocket handshake hands its socket to the handler), as `axum::serve`
@@ -333,77 +374,129 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_secs(1);
 /// once [`HEADER_READ_TIMEOUT`] passes without a complete request head: a
 /// client that never sends one, and an idle keep-alive connection alike.
 ///
-/// On `token` cancellation:
+/// `drain_timeout` bounds the whole shutdown, counted from when this loop
+/// sees the token — the moment it fires, or this call's start for a token
+/// already fired. In order:
 ///
 /// 1. Stop accepting, ask every connection to finish gracefully (hyper's
 ///    graceful shutdown: the request in flight completes, keep-alive ends),
-///    and close every live connection through
+///    and close every live connection through the duties'
 ///    [`ShutdownCloser::close_all_connections`] — an SSE stream ends, so its
 ///    response completes, and a WebSocket gets its close frame.
 /// 2. Wait for every connection to finish, then for the closed connections
 ///    to finish closing ([`ShutdownCloser::wait_closed`]). The wait follows
 ///    the drain so it also covers an upgrade whose request was still in
-///    flight when the token fired.
-/// 3. [`SHUTDOWN_CLOSE_TIMEOUT`] after the close-all, and every
-///    [`SHUTDOWN_CLOSE_TIMEOUT`] after that, cut each connection still open
-///    that had no handler running and no byte written in the window just
-///    past: its socket is closed and its response body dropped. A response
-///    body is polled only while the socket takes writes, so a stream whose
-///    client stopped reading never sees its own end; the cut is what lets
-///    that connection, and the registration its body holds, go. A
-///    connection whose handler is still running, or whose stream is still
-///    being written to its client, is not cut — the drain timeout bounds it.
-/// 4. Return once everything has finished, or once `drain_timeout` has
-///    elapsed since the token fired (whichever first). Connections still
-///    open then are left running, as the process exits under them.
+///    flight when the token fired. [`SHUTDOWN_CLOSE_TIMEOUT`] after the
+///    close-all, and every [`SHUTDOWN_CLOSE_TIMEOUT`] after that, each
+///    connection still open that had no handler running and no byte written
+///    in the window just past is cut: its socket is closed and its response
+///    body dropped. A response body is polled only while the socket takes
+///    writes, so a stream whose client stopped reading never sees its own
+///    end; the cut is what lets that connection, and the registration its
+///    body holds, go. A connection whose handler is still running, or whose
+///    stream is still being written to its client, is not cut.
+/// 3. Join each `upkeep` task — the periodic sweeps beside the server, which
+///    stop on the same token. One still running at the bound is aborted.
+/// 4. Drain the duties' detached writes ([`BackgroundWrites::drain`]). They
+///    follow steps 2 and 3, so every write a finished request or sweep
+///    spawned is seen.
 ///
-/// Consumer-specific teardown runs after this returns.
+/// Whatever is still running when the bound runs out is given up on,
+/// counted in the returned [`ServeShutdown`], and logged: handlers still
+/// running and connections still open (left to the process exit), the
+/// closes not finished, upkeep tasks aborted, writes still in flight. What
+/// those leave behind is not counted: a write spawned after the drain by a
+/// handler given up on in step 2, or by a WebSocket loop still running past
+/// the close wait, is lost and uncounted. Consumer-specific teardown runs
+/// after this returns.
 ///
 /// # Errors
 ///
 /// None in practice — accept errors are retried, never returned, as
 /// `axum::serve` treats them — but the [`std::io::Error`] stays in the
-/// signature for consumers to map into their startup-error variant.
-/// Reaching the drain timeout is not an error.
+/// signature for consumers to map into their startup-error variant. Reaching
+/// the drain timeout is not an error. Every step above runs before this
+/// returns.
 pub async fn serve_with_shutdown(
     listener: TcpListener,
     router: GatedRouter,
     token: CancellationToken,
-    closer: &dyn ShutdownCloser,
+    upkeep: Vec<JoinHandle<()>>,
     drain_timeout: Duration,
-) -> Result<(), std::io::Error> {
+) -> Result<ServeShutdown, std::io::Error> {
+    let (router, duties) = router.into_parts();
     serve_with_timeouts(
         listener,
-        router.into_router(),
+        router,
+        duties.as_ref(),
         token,
-        closer,
+        upkeep,
         drain_timeout,
         ConnectionTimeouts::DEFAULT,
     )
     .await
 }
 
-/// [`serve_with_shutdown`], with each connection's deadlines given.
+/// What a [`serve_with_shutdown`] shutdown gave up on when its bound ran out
+/// — all `0` and `false` when everything finished in time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServeShutdown {
+    /// The live connections the close-all closed had not all finished
+    /// closing ([`ShutdownCloser::wait_closed`] had not resolved, or was not
+    /// reached because the HTTP connections never drained) — a WebSocket
+    /// loop still writing its close frame, say.
+    pub closes_given_up: bool,
+    /// Handlers still running — requests dispatched before the token fired,
+    /// or on a connection the drain was still finishing.
+    pub requests_given_up: usize,
+    /// Connections still open, an idle or streaming one included; each
+    /// handler counted above holds one of them.
+    pub connections_given_up: usize,
+    /// Upkeep tasks still running, aborted.
+    pub upkeep_given_up: usize,
+    /// Detached writes still in flight.
+    pub writes_given_up: usize,
+}
+
+/// [`serve_with_shutdown`] over the router's parts, with each connection's
+/// deadlines given.
 async fn serve_with_timeouts(
     listener: TcpListener,
     router: Router,
+    duties: Option<&ShutdownDuties>,
     token: CancellationToken,
-    closer: &dyn ShutdownCloser,
+    upkeep: Vec<JoinHandle<()>>,
     drain_timeout: Duration,
     timeouts: ConnectionTimeouts,
-) -> Result<(), std::io::Error> {
+) -> Result<ServeShutdown, std::io::Error> {
     let connections = TaskTracker::new();
     let cut = CancellationToken::new();
-    accept_until_cancelled(&listener, &router, &token, &cut, &connections, timeouts).await;
+    // every handler running on any connection, so a drain that runs out can
+    // count the requests it gives up on
+    let requests = Arc::new(AtomicUsize::new(0));
+    accept_until_cancelled(
+        &listener,
+        &router,
+        &token,
+        &cut,
+        &connections,
+        &requests,
+        timeouts,
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + drain_timeout;
     drop(listener);
     connections.close();
 
+    let closer: &dyn ShutdownCloser = duties.map_or(&NoopShutdownCloser, |d| d.closer.as_ref());
     let closed = closer.close_all_connections();
     eprintln!("Shutting down: closed {closed} live connection(s), draining...");
 
+    let mut given_up = ServeShutdown::default();
+
     // the wait follows the drain (doc, step 2); the cut timer never finishes
-    // on its own, so the select ends with the drain or the timeout
-    let drained = tokio::time::timeout(drain_timeout, async {
+    // on its own, so the select ends with the drain or the deadline
+    let drained = tokio::time::timeout_at(deadline, async {
         let drain = async {
             connections.wait().await;
             closer.wait_closed().await;
@@ -423,9 +516,76 @@ async fn serve_with_timeouts(
     if drained {
         eprintln!("All connections drained");
     } else {
-        eprintln!("Drain timeout, some connections still active");
+        given_up.closes_given_up = true;
+        given_up.requests_given_up = requests.load(Ordering::Acquire);
+        given_up.connections_given_up = connections.len();
+        tracing::error!(
+            requests = given_up.requests_given_up,
+            connections = given_up.connections_given_up,
+            "shutdown gave up on requests, connections and live-connection closes still \
+             open past the drain timeout"
+        );
+        eprintln!(
+            "Drain timeout: gave up on {} request(s) still running, {} connection(s) still \
+             open, and the live connections still closing",
+            given_up.requests_given_up, given_up.connections_given_up
+        );
     }
-    Ok(())
+
+    for mut task in upkeep {
+        // polled once even past the deadline, so a stopped task is joined
+        match tokio::time::timeout_at(deadline, &mut task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                let error = fuz_sys::cli::format_error_chain(&error);
+                tracing::warn!(%error, "an upkeep task failed");
+            }
+            Err(_) => {
+                task.abort();
+                given_up.upkeep_given_up += 1;
+            }
+        }
+    }
+    if given_up.upkeep_given_up > 0 {
+        tracing::error!(
+            tasks = given_up.upkeep_given_up,
+            "shutdown aborted upkeep tasks still running past the drain timeout"
+        );
+        eprintln!(
+            "Upkeep drain timeout: aborted {} task(s) still running",
+            given_up.upkeep_given_up
+        );
+    }
+
+    if let Some(duties) = duties {
+        given_up.writes_given_up = drain_writes(&duties.writes, deadline).await;
+    }
+    Ok(given_up)
+}
+
+/// Await the detached writes in flight on `writes` until `deadline`, and
+/// return how many were still in flight when it passed (`0` when every one
+/// ended), logged at `error` and as an `eprintln!` sentinel — a write given
+/// up on dies with the runtime, mid-checkout or mid-write, with no line of
+/// its own.
+async fn drain_writes(writes: &BackgroundWrites, deadline: tokio::time::Instant) -> usize {
+    if tokio::time::timeout_at(deadline, writes.drain())
+        .await
+        .is_ok()
+    {
+        return 0;
+    }
+    // the last write may have ended between the timeout and this read
+    let given_up = writes.inflight_count();
+    if given_up == 0 {
+        return 0;
+    }
+    tracing::error!(
+        writes = given_up,
+        "shutdown gave up on background writes still running past the drain timeout"
+    );
+    eprintln!("Background write drain timeout: gave up on {given_up} write(s) still running");
+    given_up
 }
 
 /// Accept connections and serve each on its own task in `connections` until
@@ -436,6 +596,7 @@ async fn accept_until_cancelled(
     token: &CancellationToken,
     cut: &CancellationToken,
     connections: &TaskTracker,
+    requests: &Arc<AtomicUsize>,
     timeouts: ConnectionTimeouts,
 ) {
     loop {
@@ -452,6 +613,7 @@ async fn accept_until_cancelled(
                     router.clone(),
                     token.clone(),
                     cut.clone(),
+                    Arc::clone(requests),
                     timeouts,
                 ));
             }
@@ -481,16 +643,18 @@ fn is_connection_error(error: &std::io::Error) -> bool {
 /// Serve one connection until it ends — asked to finish gracefully once
 /// `token` fires, and dropped from `cut` on at the first close-timeout window
 /// with no handler running on it and nothing written to it
-/// ([`serve_with_shutdown`], steps 1 and 3). At any time, a write that waits
+/// ([`serve_with_shutdown`], steps 1 and 2). At any time, a write that waits
 /// `timeouts.write_progress` with no byte accepted fails, which ends the
 /// connection, and so does `timeouts.header_read` without a complete request
-/// head while no request is in progress.
+/// head while no request is in progress. Each request's handler counts in
+/// `requests`, the server's own count, while it runs.
 async fn serve_connection(
     stream: TcpStream,
     peer: SocketAddr,
     router: Router,
     token: CancellationToken,
     cut: CancellationToken,
+    requests: Arc<AtomicUsize>,
     timeouts: ConnectionTimeouts,
 ) {
     let handlers = Arc::new(AtomicUsize::new(0));
@@ -502,7 +666,10 @@ async fn serve_connection(
         move |mut request: axum::http::Request<Incoming>| {
             dispatched.store(true, Ordering::Release);
             request.extensions_mut().insert(ConnectInfo(peer));
-            let running = HandlerRunning::start(&handlers);
+            let running = (
+                HandlerRunning::start(&handlers),
+                HandlerRunning::start(&requests),
+            );
             let response = router.clone().call(request);
             async move {
                 let response = response.await;
@@ -698,9 +865,9 @@ impl<I: hyper::rt::Write + Unpin> hyper::rt::Write for WriteProgress<I> {
     }
 }
 
-/// Counts a handler running on its connection while it lives — from the
-/// request's dispatch until its response (head and body) is returned to
-/// hyper, or the handler is dropped.
+/// Counts a handler running while it lives — on its connection, and on the
+/// server — from the request's dispatch until its response (head and body)
+/// is returned to hyper, or the handler is dropped.
 struct HandlerRunning(Arc<AtomicUsize>);
 
 impl HandlerRunning {
@@ -743,12 +910,18 @@ mod tests {
             0
         }
 
-        fn wait_closed(&self) -> WaitClosedFuture<'_> {
+        fn wait_closed(&self) -> ShutdownFuture<'_> {
             Box::pin(async move {
                 self.release_wait.notified().await;
                 self.wait_finished.fetch_add(1, Ordering::SeqCst);
             })
         }
+    }
+
+    /// Duties over `closer`, with an empty write tracker.
+    fn duties(closer: &Arc<TestCloser>) -> ShutdownDuties {
+        let closer: Arc<dyn ShutdownCloser> = Arc::<TestCloser>::clone(closer);
+        ShutdownDuties::new(closer, Arc::new(BackgroundWrites::default()))
     }
 
     /// One HTTP/1.1 `GET path` on `addr`, returning the whole response.
@@ -777,15 +950,15 @@ mod tests {
             Duration::from_secs(5),
             serve_with_shutdown(
                 listener,
-                GatedRouter::ungated_for_tests(router),
+                GatedRouter::ungated_for_tests(router, None),
                 token,
-                &NoopShutdownCloser,
+                Vec::new(),
                 Duration::from_secs(30),
             ),
         )
         .await
         .expect("serve_with_shutdown returns before the test timeout");
-        assert!(result.is_ok());
+        assert_eq!(result.expect("a clean end"), ServeShutdown::default());
     }
 
     /// The close runs when the token fires, beside the drain — not after it.
@@ -822,9 +995,9 @@ mod tests {
             async move {
                 serve_with_shutdown(
                     listener,
-                    GatedRouter::ungated_for_tests(router),
+                    GatedRouter::ungated_for_tests(router, Some(duties(&closer))),
                     token,
-                    closer.as_ref(),
+                    Vec::new(),
                     Duration::from_secs(30),
                 )
                 .await
@@ -867,9 +1040,9 @@ mod tests {
             async move {
                 serve_with_shutdown(
                     listener,
-                    GatedRouter::ungated_for_tests(Router::new()),
+                    GatedRouter::ungated_for_tests(Router::new(), Some(duties(&closer))),
                     token,
-                    closer.as_ref(),
+                    Vec::new(),
                     Duration::from_secs(30),
                 )
                 .await
@@ -898,22 +1071,29 @@ mod tests {
     #[tokio::test]
     async fn a_wait_that_never_resolves_is_bounded_by_the_drain_timeout() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let closer = TestCloser::default();
+        let closer = Arc::new(TestCloser::default());
         let token = CancellationToken::new();
         token.cancel();
         let result = tokio::time::timeout(
             Duration::from_secs(10),
             serve_with_shutdown(
                 listener,
-                GatedRouter::ungated_for_tests(Router::new()),
+                GatedRouter::ungated_for_tests(Router::new(), Some(duties(&closer))),
                 token,
-                &closer,
+                Vec::new(),
                 Duration::from_millis(200),
             ),
         )
         .await
         .expect("the drain timeout bounds the wait");
-        assert!(result.is_ok());
+        assert_eq!(
+            result.expect("a clean end"),
+            ServeShutdown {
+                closes_given_up: true,
+                ..ServeShutdown::default()
+            },
+            "a close wait that ran out the clock is given up on, not clean"
+        );
         assert_eq!(closer.close_calls.load(Ordering::SeqCst), 1);
         assert_eq!(closer.wait_finished.load(Ordering::SeqCst), 0);
     }
@@ -946,9 +1126,9 @@ mod tests {
             async move {
                 serve_with_shutdown(
                     listener,
-                    GatedRouter::ungated_for_tests(router),
+                    GatedRouter::ungated_for_tests(router, Some(duties(&closer))),
                     token,
-                    closer.as_ref(),
+                    Vec::new(),
                     drain_timeout,
                 )
                 .await
@@ -959,7 +1139,7 @@ mod tests {
         let fired = std::time::Instant::now();
         token.cancel();
 
-        tokio::time::timeout(Duration::from_secs(10), server)
+        let shutdown = tokio::time::timeout(Duration::from_secs(10), server)
             .await
             .expect("the drain timeout bounds the shutdown")
             .unwrap()
@@ -970,6 +1150,16 @@ mod tests {
             "one budget from the fire, not one per phase: took {took:?}"
         );
         assert_eq!(closer.wait_finished.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            shutdown,
+            ServeShutdown {
+                closes_given_up: true,
+                requests_given_up: 1,
+                connections_given_up: 1,
+                ..ServeShutdown::default()
+            },
+            "the request still running, and its connection, are counted"
+        );
     }
 
     /// Run `router` under [`serve_with_shutdown`] with `drain_timeout` on a
@@ -981,7 +1171,7 @@ mod tests {
     ) -> (
         SocketAddr,
         CancellationToken,
-        tokio::task::JoinHandle<std::time::Instant>,
+        JoinHandle<std::time::Instant>,
     ) {
         spawn_server_with(router, drain_timeout, ConnectionTimeouts::DEFAULT).await
     }
@@ -994,7 +1184,7 @@ mod tests {
     ) -> (
         SocketAddr,
         CancellationToken,
-        tokio::task::JoinHandle<std::time::Instant>,
+        JoinHandle<std::time::Instant>,
     ) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         spawn_server_on(listener, router, drain_timeout, timeouts)
@@ -1009,7 +1199,7 @@ mod tests {
     ) -> (
         SocketAddr,
         CancellationToken,
-        tokio::task::JoinHandle<std::time::Instant>,
+        JoinHandle<std::time::Instant>,
     ) {
         let addr = listener.local_addr().unwrap();
         let token = CancellationToken::new();
@@ -1019,8 +1209,9 @@ mod tests {
                 serve_with_timeouts(
                     listener,
                     router,
+                    None,
                     token,
-                    &NoopShutdownCloser,
+                    Vec::new(),
                     drain_timeout,
                     timeouts,
                 )
@@ -1785,10 +1976,7 @@ mod tests {
         }
     }
 
-    async fn shut_down(
-        token: CancellationToken,
-        server: tokio::task::JoinHandle<std::time::Instant>,
-    ) {
+    async fn shut_down(token: CancellationToken, server: JoinHandle<std::time::Instant>) {
         token.cancel();
         tokio::time::timeout(Duration::from_secs(10), server)
             .await

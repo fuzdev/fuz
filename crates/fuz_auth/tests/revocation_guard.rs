@@ -62,7 +62,7 @@ impl fuz_http::ShutdownCloser for RecordingCloser {
     fn close_all_connections(&self) -> usize {
         0
     }
-    fn wait_closed(&self) -> fuz_http::WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
         Box::pin(std::future::ready(()))
     }
 }

@@ -201,7 +201,7 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 use uuid::Uuid;
 
 use fuz_auth::{ConnectionCloseTarget, ConnectionCloser};
-use fuz_http::{ShutdownCloser, WaitClosedFuture};
+use fuz_http::{ShutdownCloser, ShutdownFuture};
 
 use crate::audit_stream::AUDIT_LOG_SSE_MAX_PER_SCOPE;
 use crate::connection::{ConnectionIdentity, NotAdmitted};
@@ -810,7 +810,7 @@ impl ShutdownCloser for SseRegistry {
 
     /// Resolve once `close_all_connections` has run and every stream body — and
     /// every pending registration — is gone.
-    fn wait_closed(&self) -> WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> ShutdownFuture<'_> {
         Box::pin(self.closers.wait())
     }
 }

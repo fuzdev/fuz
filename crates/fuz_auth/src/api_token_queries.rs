@@ -5,10 +5,10 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 use crate::api_token_schema::{ApiTokenListRow, ApiTokenMintedRow, ApiTokenRow};
-use crate::background_writes::BackgroundWrites;
 use crate::credential_deadline::{EXPIRES_IN_MS_SQL, remaining_from_db_ms};
 use crate::token_scope::TokenScopeDocument;
 use fuz_db::{col, iso8601_timestamp_column, iso8601_timestamp_expr, qualify_columns};
+use fuz_http::BackgroundWrites;
 
 /// The `api_token` table's columns.
 ///

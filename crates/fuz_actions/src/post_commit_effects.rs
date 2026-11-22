@@ -52,7 +52,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
-use fuz_auth::{AuditNotifyFn, AuditPostCommit, BackgroundWrites};
+use fuz_auth::{AuditNotifyFn, AuditPostCommit};
+use fuz_http::BackgroundWrites;
 
 /// A single deferred side-effect.
 ///

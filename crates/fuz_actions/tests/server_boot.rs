@@ -279,7 +279,7 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
     use std::time::Duration;
 
     use fuz_actions::server::{
-        ServeMode, ServeOptions, boot_only_router, build_app_backend, serve_until_shutdown,
+        ServeOptions, boot_only_router, build_app_backend, serve_until_shutdown,
     };
     use fuz_auth::{AuditEventType, AuditLogInput};
     use fuz_testing::TestingTableLock;
@@ -295,23 +295,33 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
         lock.release().await;
     });
 
+    // fired once the serve is up — a token fired before it would end the serve
+    // before the bind, with nothing drained
     let shutdown = fuz_http::CancellationToken::new();
-    shutdown.cancel();
-    let stack_options = fuz_http::StackOptions::new(
-        fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
-        Arc::new(Vec::new()),
-    );
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            shutdown.cancel();
+        }
+    });
+    // the probes serve live here, carrying the duties of the backend whose
+    // write is held
+    let stack_options = fuz_http::StackOptions {
+        shutdown: Some(backend.shutdown_duties()),
+        ..fuz_http::StackOptions::without_backend(
+            fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
+            Arc::new(Vec::new()),
+        )
+    };
     serve_until_shutdown(
-        // the probes serve live here, over the backend whose write is held
-        ServeMode::Live {
-            router: boot_only_router("audit_drain_test_server", &stack_options).into_gated_router(),
-            backend: backend.serve_backend(None),
-        },
+        boot_only_router("audit_drain_test_server", &stack_options),
         ServeOptions {
             server_name: "audit_drain_test_server",
             addr: "127.0.0.1:0".parse().expect("addr"),
             drain_timeout: Duration::from_secs(10),
             shutdown,
+            upkeep: None,
         },
     )
     .await

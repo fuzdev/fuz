@@ -112,6 +112,7 @@ use crate::body_limit::body_limit_layer;
 use crate::cookie_clear::{CookieClearHook, cookie_clear_layer};
 use crate::host::{HostGate, host_layer};
 use crate::ip_resolve::client_ip_middleware;
+use crate::lifecycle::ShutdownDuties;
 use crate::origin::{AllowedOrigins, origin_layer};
 use crate::parsed_proxy::ParsedProxy;
 use crate::rest_error::{internal_error_response, method_not_allowed_response};
@@ -247,12 +248,15 @@ impl RouteGroup {
     }
 }
 
-/// What every group of a [`compose_stack`] router shares.
+/// What every group of a [`compose_stack`] router shares, and what the router
+/// owes at shutdown.
 ///
-/// A server with a `fuz_auth::AuthGate` builds these from the gate
-/// (`AuthGate::stack_options`), so the stack's origin check and the gate's
-/// in-handler one read the same allowlist; a server with no gate (a
-/// boot-only router) uses [`StackOptions::new`].
+/// A spine server builds these from its backend
+/// (`fuz_actions::server::AppBackend::stack_options`), so the stack's origin
+/// check and the auth gate's in-handler one read the same allowlist, an
+/// invalid session cookie is cleared, and the router carries the backend's
+/// [`ShutdownDuties`]. A server with no backend (a boot-only router) uses
+/// [`StackOptions::without_backend`], which sets none of the three.
 #[derive(Debug, Clone)]
 pub struct StackOptions {
     /// The allowlist the origin check (and, when on, the host gate) reads.
@@ -275,18 +279,32 @@ pub struct StackOptions {
     pub request_tracing: bool,
     /// Clear a dead cookie on the response ([`crate::cookie_clear`]): mounted
     /// in every group behind the origin check, inside that check, the fallback
-    /// included. `None` mounts nothing; a server with a `fuz_auth::AuthGate`
-    /// gets the gate's hook from `AuthGate::stack_options`, which clears an
-    /// invalid session cookie under the auth scope.
+    /// included. `None` mounts nothing; a spine server's backend options set
+    /// its auth gate's hook (`fuz_auth::AuthGate::cookie_clear_hook`), which
+    /// clears an invalid session cookie under the auth scope.
     pub cookie_clear: Option<CookieClearHook>,
+    /// What serving the router owes at shutdown — its live connections'
+    /// closer and its detached writes — kept by the [`GatedRouter`] and
+    /// discharged by [`crate::serve_with_shutdown`]. `None` owes nothing,
+    /// which fits only a router with no live connection and no detached
+    /// write: one composed with `None` around a WebSocket, an SSE stream, or a
+    /// route that spawns a write is served with no close and no drain, which
+    /// no type here can refuse.
+    pub shutdown: Option<ShutdownDuties>,
 }
 
 impl StackOptions {
-    /// Options with the given allowlist (read from [`ALLOWED_ORIGINS_VAR`])
-    /// and trusted proxies, request tracing on, the host gate on, and no
-    /// cookie-clear hook.
+    /// Options for a router with no backend behind it: the given allowlist
+    /// (read from [`ALLOWED_ORIGINS_VAR`]) and trusted proxies, request
+    /// tracing on, the host gate on, no cookie-clear hook, and no shutdown
+    /// duties.
+    ///
+    /// Right for the boot-only router, which has no live connection and no
+    /// detached write. A server with a backend composes over the backend's
+    /// options (`fuz_actions::server::AppBackend::stack_options`), which build
+    /// on these and set the backend's pieces.
     #[must_use]
-    pub const fn new(
+    pub const fn without_backend(
         allowed_origins: AllowedOrigins,
         trusted_proxies: Arc<Vec<ParsedProxy>>,
     ) -> Self {
@@ -297,6 +315,7 @@ impl StackOptions {
             host_gate: true,
             request_tracing: true,
             cookie_clear: None,
+            shutdown: None,
         }
     }
 }
@@ -307,30 +326,45 @@ impl StackOptions {
 /// Closed to extension: it offers no way to add a route, a fallback, or a
 /// layer, and it is not a `tower` service, so it cannot be nested or
 /// mounted inside another router either. It is served by
-/// [`crate::serve_with_shutdown`], which takes nothing else. Cloning is
+/// [`crate::serve_with_shutdown`], which takes nothing else, and it carries
+/// the [`ShutdownDuties`] it was composed with
+/// ([`StackOptions::shutdown`]), which that serve discharges. Cloning is
 /// cheap (an `axum::Router` is `Arc`-backed).
 #[derive(Clone)]
 pub struct GatedRouter {
     router: Router,
+    shutdown: Option<ShutdownDuties>,
 }
 
 impl std::fmt::Debug for GatedRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GatedRouter").finish_non_exhaustive()
+        f.debug_struct("GatedRouter")
+            .field("shutdown_duties", &self.shutdown)
+            .finish_non_exhaustive()
     }
 }
 
 impl GatedRouter {
-    /// The composed router, for the serve loop.
-    pub(crate) fn into_router(self) -> Router {
-        self.router
+    /// The composed router and its shutdown duties, for the serve loop.
+    pub(crate) fn into_parts(self) -> (Router, Option<ShutdownDuties>) {
+        (self.router, self.shutdown)
+    }
+
+    /// Whether the router carries [`ShutdownDuties`] — set when its
+    /// [`StackOptions::shutdown`] was.
+    #[must_use]
+    pub const fn has_shutdown_duties(&self) -> bool {
+        self.shutdown.is_some()
     }
 
     /// Wrap a router that did not go through [`compose_stack`] — for this
     /// crate's own serve-loop tests, which exercise the loop, not the gates.
     #[cfg(test)]
-    pub(crate) const fn ungated_for_tests(router: Router) -> Self {
-        Self { router }
+    pub(crate) const fn ungated_for_tests(
+        router: Router,
+        shutdown: Option<ShutdownDuties>,
+    ) -> Self {
+        Self { router, shutdown }
     }
 
     /// The composed router, to drive in-process (`tower::ServiceExt::oneshot`)
@@ -422,7 +456,10 @@ pub fn compose_stack(
     } else {
         router
     };
-    GatedRouter { router }
+    GatedRouter {
+        router,
+        shutdown: options.shutdown.clone(),
+    }
 }
 
 /// Log how the stack resolves client IPs. An empty set is the conservative
@@ -565,7 +602,7 @@ mod tests {
     }
 
     fn base_options() -> StackOptions {
-        StackOptions::new(
+        StackOptions::without_backend(
             AllowedOrigins::parse(ALLOWED).unwrap(),
             Arc::new(Vec::new()),
         )

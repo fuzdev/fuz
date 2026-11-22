@@ -46,7 +46,6 @@ use axum::response::Response;
 use deadpool_postgres::Pool;
 use fuz_http::{AllowedOrigins, CookieClearHook};
 
-use crate::background_writes::BackgroundWrites;
 use crate::daemon_token::SharedDaemonTokenState;
 use crate::keyring::Keyring;
 use crate::request_context::RequestActorContext;
@@ -57,6 +56,7 @@ use crate::resolve::{
 use crate::session_cookie::{
     SessionCookieRead, format_session_clear_cookie, parse_session_from_cookies,
 };
+use fuz_http::BackgroundWrites;
 
 /// The auth scope: the paths under which the spine reads and mints
 /// credentials.
@@ -166,23 +166,6 @@ impl std::fmt::Debug for AuthGate {
 }
 
 impl AuthGate {
-    /// The [`fuz_http::StackOptions`] for this gate's server, reading the
-    /// gate's own allowlist — so the stack's `origin_layer` and the gate's
-    /// in-handler check cannot drift apart — and carrying the gate's
-    /// [`cookie_clear_hook`](Self::cookie_clear_hook). Request tracing and the
-    /// host gate on ([`fuz_http::StackOptions::new`]); set the flags on the
-    /// result.
-    #[must_use]
-    pub fn stack_options(
-        &self,
-        trusted_proxies: Arc<Vec<fuz_http::ParsedProxy>>,
-    ) -> fuz_http::StackOptions {
-        fuz_http::StackOptions {
-            cookie_clear: Some(self.cookie_clear_hook()),
-            ..fuz_http::StackOptions::new(self.allowed_origins.clone(), trusted_proxies)
-        }
-    }
-
     /// The stack's cookie-clear hook for this gate's session cookie
     /// ([`fuz_http::StackOptions::cookie_clear`]): a request under the auth
     /// scope ([`auth_middleware_applies`]) whose session cookie is present
@@ -423,12 +406,6 @@ mod tests {
         assert_eq!(hook.clear_for("/api/rpc", &HeaderMap::new()), None);
         assert_eq!(hook.clear_for("/api/rpc", &cookie("other=1")), None);
         assert_eq!(hook.clear_for("/api/rpc", &cookie(&valid)), None);
-        // the same hook rides the gate's stack options
-        assert!(
-            gate.stack_options(Arc::new(Vec::new()))
-                .cookie_clear
-                .is_some()
-        );
     }
 
     /// A name with no clearing string clears nothing rather than writing a

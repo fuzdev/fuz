@@ -632,7 +632,7 @@ async fn handle_account_token_revoke(
     // `token_id` with the `ApiTokenId` grammar, so an off-grammar id is
     // `invalid_params` there and must not be a `{ok: true, revoked: false}`
     // success envelope here.
-    if !crate::is_valid_token_id(token_id) {
+    if !crate::is_valid_api_token_id(token_id) {
         return Err(invalid_input_params(
             "'token_id' is not a valid api token id",
             None,

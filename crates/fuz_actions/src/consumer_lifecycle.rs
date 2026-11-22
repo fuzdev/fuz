@@ -54,7 +54,7 @@ pub struct ExtraActionSpecsRuntime {
     /// The server's tracker of detached writes (the audit emitter's pool
     /// writes, the gate's token touches), which `_testing_drain_effects`
     /// awaits.
-    pub background_writes: Arc<fuz_auth::BackgroundWrites>,
+    pub background_writes: Arc<fuz_http::BackgroundWrites>,
 }
 
 /// Factory that constructs extra action specs to fold into the registry after

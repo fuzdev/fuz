@@ -20,7 +20,7 @@
 //! passes too — no browser speaks h2c. An empty `Host` and more than one
 //! `Host` are refused (RFC 9112 §3.2).
 //!
-//! The gate is on by default ([`crate::StackOptions::new`]). A refusal is
+//! The gate is on by default ([`crate::StackOptions::without_backend`]). A refusal is
 //! said in the log as well as answered: the first in each
 //! [`HOST_REFUSAL_WARN_INTERVAL`] is a warning naming the refused `Host`
 //! (quoted ASCII-only and truncated, since the client wrote it) and the env

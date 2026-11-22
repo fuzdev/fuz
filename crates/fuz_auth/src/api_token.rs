@@ -75,6 +75,41 @@ pub fn to_api_token_id(token: &str) -> Option<String> {
     Some(format!("{API_TOKEN_ID_PREFIX}{id_body}"))
 }
 
+/// Whether `s` is a valid public API token id — the id `account_token_create`
+/// hands back and `account_token_revoke` takes.
+///
+/// Twin of the TS `ApiTokenId` schema (`pipe(string, regex(API_TOKEN_ID_REGEX))`
+/// in `auth/api_token.ts`), whose regex is `^tok_[A-Za-z0-9_-]{12}$`: the
+/// literal [`API_TOKEN_ID_PREFIX`] followed by exactly
+/// [`API_TOKEN_ID_BODY_LENGTH`] base64url characters
+/// (ASCII alphanumerics plus `_` and `-`). Nothing else — no other length, no
+/// `+` or `/`, no padding, no surrounding whitespace.
+///
+/// The id is the token's *public* half: it is stored verbatim, compared as an
+/// opaque string, and never hashed, so a lookup with an off-grammar id is a
+/// guaranteed miss. Gating on the grammar is a wire-parity rule rather than a
+/// safety one — without it a mutation answers `{ok: true, revoked: false}`
+/// for input the twin refuses with `invalid_params`, which is a success
+/// envelope for a request that was never well-formed.
+///
+/// Hand-rolled instead of regex, for the same reason
+/// [`is_valid_username_for_creation`](crate::is_valid_username_for_creation)
+/// is: `regex` isn't a workspace dependency, and a byte scan is faster than a
+/// DFA compile.
+#[must_use]
+pub fn is_valid_api_token_id(s: &str) -> bool {
+    let Some(suffix) = s.strip_prefix(API_TOKEN_ID_PREFIX) else {
+        return false;
+    };
+    // `len()` is byte length; the base64url class below is ASCII-only, so a
+    // multibyte character fails the class check rather than slipping the
+    // count.
+    suffix.len() == API_TOKEN_ID_BODY_LENGTH
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 /// A freshly generated API token.
 ///
 /// `Debug` redacts the raw token; the id and hash stay visible.
@@ -154,7 +189,7 @@ mod tests {
             &g.id[API_TOKEN_ID_PREFIX.len()..],
             &body[..API_TOKEN_ID_BODY_LENGTH]
         );
-        assert!(crate::is_valid_token_id(&g.id), "{}", g.id);
+        assert!(is_valid_api_token_id(&g.id), "{}", g.id);
 
         assert_eq!(g.token_hash.len(), 64);
         assert_eq!(
@@ -267,5 +302,61 @@ mod tests {
         assert_ne!(a.token, b.token);
         assert_ne!(a.id, b.id);
         assert_ne!(a.token_hash, b.token_hash);
+    }
+
+    /// Twin of the TS `ApiTokenId` regex `^tok_[A-Za-z0-9_-]{12}$`. The
+    /// accepted rows are the shapes `generate_api_token` actually mints (a
+    /// base64url slice, so every class member is reachable); the rejected
+    /// rows are the strings an ungated handler answers
+    /// `{ok: true, revoked: false}` for.
+    #[test]
+    fn api_token_id_accepts_the_minted_shape() {
+        assert!(is_valid_api_token_id("tok_abC0_d-3xyzA"));
+        assert!(is_valid_api_token_id("tok_000000000000"));
+        assert!(is_valid_api_token_id("tok_zzzzzzzzzzzz"));
+        assert!(is_valid_api_token_id("tok_ZZZZZZZZZZZZ"));
+        // The two non-alphanumeric class members, at full width — built from
+        // the constants so the length bound and the literals can't drift.
+        for filler in ['_', '-'] {
+            let id = format!(
+                "{API_TOKEN_ID_PREFIX}{}",
+                filler.to_string().repeat(API_TOKEN_ID_BODY_LENGTH)
+            );
+            assert_eq!(
+                id.len(),
+                API_TOKEN_ID_PREFIX.len() + API_TOKEN_ID_BODY_LENGTH
+            );
+            assert!(is_valid_api_token_id(&id), "{id}");
+        }
+    }
+
+    #[test]
+    fn api_token_id_rejects_off_grammar_strings() {
+        // Wrong / missing prefix.
+        assert!(!is_valid_api_token_id(""));
+        assert!(!is_valid_api_token_id("abC0_d-3xyzA"));
+        assert!(!is_valid_api_token_id("tok-abC0_d-3xyzA"));
+        assert!(!is_valid_api_token_id("TOK_abC0_d-3xyzA"));
+        assert!(!is_valid_api_token_id(" tok_abC0_d-3xyzA"));
+        // Wrong suffix length, either side of the bound.
+        assert!(!is_valid_api_token_id("tok_abC0_d-3xyz"));
+        assert!(!is_valid_api_token_id("tok_abC0_d-3xyzAB"));
+        assert!(!is_valid_api_token_id("tok_"));
+        // Characters outside base64url — including the base64 pair `+/` and
+        // the `=` padding that base64url drops.
+        assert!(!is_valid_api_token_id("tok_abC0+d-3xyzA"));
+        assert!(!is_valid_api_token_id("tok_abC0/d-3xyzA"));
+        assert!(!is_valid_api_token_id("tok_abC0=d-3xyzA"));
+        assert!(!is_valid_api_token_id("tok_abC0 d-3xyzA"));
+        // The shapes a caller actually sends when it has the wrong id: a
+        // UUID, a bare word, and a SQL-injection probe.
+        assert!(!is_valid_api_token_id(
+            "3f8a1c2e-1234-4abc-9def-0123456789ab"
+        ));
+        assert!(!is_valid_api_token_id("not-a-token"));
+        assert!(!is_valid_api_token_id("' OR 1=1--"));
+        // Non-ASCII: twelve characters after the prefix, more than twelve
+        // bytes, and outside the class either way.
+        assert!(!is_valid_api_token_id("tok_\u{FC}bC0_d-3xyz"));
     }
 }

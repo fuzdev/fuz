@@ -41,8 +41,8 @@ use crate::audit_event_type::{
 };
 use crate::audit_listener::{AuditListenerFn, AuditListenerId};
 use crate::audit_log_queries::{audit_log_columns, decode_audit_log_row};
-use crate::background_writes::BackgroundWrites;
 use crate::credential_type::CredentialType;
+use fuz_http::BackgroundWrites;
 use fuz_http::{JsonrpcError, internal_error_with_source};
 
 /// Outcome of an audit event. Wire-format string matches `fuz_app`

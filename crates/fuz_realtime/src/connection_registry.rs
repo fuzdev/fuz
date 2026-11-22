@@ -200,7 +200,7 @@ use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use fuz_auth::{ConnectionCloseTarget, ConnectionCloser, NotificationSender};
-use fuz_http::{ShutdownCloser, WaitClosedFuture};
+use fuz_http::{ShutdownCloser, ShutdownFuture};
 
 use crate::connection::{
     CloseReason, Connection, ConnectionId, ConnectionIdentity, ConnectionInfo, ConnectionSender,
@@ -975,7 +975,7 @@ impl ShutdownCloser for ConnectionRegistry {
     /// and [`UpgradeHold`] is gone — every loop has written its close frame
     /// or given up at the shutdown bound, every refused upgrade has written
     /// its refusal.
-    fn wait_closed(&self) -> WaitClosedFuture<'_> {
+    fn wait_closed(&self) -> ShutdownFuture<'_> {
         Box::pin(self.closers.wait())
     }
 }

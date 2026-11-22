@@ -113,7 +113,6 @@ pub mod resolve;
 pub mod audit_emitter;
 pub mod audit_event_type;
 pub mod audit_listener;
-pub mod background_writes;
 pub mod connection_closer;
 pub mod notification_sender;
 pub mod revocation_guard;
@@ -199,7 +198,8 @@ pub use actor_search_action_specs::{ActorSearchActionSpecs, ERROR_ACTOR_SEARCH_S
 pub use admin_action_specs::AdminActionSpecs;
 pub use api_token::{
     API_TOKEN_ID_BODY_LENGTH, API_TOKEN_ID_PREFIX, API_TOKEN_LEN, API_TOKEN_PREFIX,
-    GeneratedApiToken, generate_api_token, hash_api_token, is_api_token_shaped, to_api_token_id,
+    GeneratedApiToken, generate_api_token, hash_api_token, is_api_token_shaped,
+    is_valid_api_token_id, to_api_token_id,
 };
 pub use api_token_schema::{ApiTokenListRow, ApiTokenRow};
 pub use app_settings_schema::AppSettings;
@@ -227,7 +227,6 @@ pub use auth_cleanup::{
     spawn_auth_cleanup,
 };
 pub use auth_gate::{AUTH_MIDDLEWARE_PATH, AuthGate, OriginChecked, auth_middleware_applies};
-pub use background_writes::BackgroundWrites;
 pub use bootstrap::{
     BOOTSTRAP_TOKEN_LENGTH_MAX, BOOTSTRAP_TOKEN_MIN_BYTES, BootstrapInput, BootstrapOptions,
     bootstrap_handler, is_bootstrap_available,
@@ -271,7 +270,7 @@ pub use password_hasher::{HashedPassword, PasswordHashError, PasswordHasher};
 pub use primitive_schemas::{
     EMAIL_LENGTH_MAX, FACT_HASH_HEX_LENGTH, FACT_HASH_PREFIX, USERNAME_LENGTH_MAX,
     USERNAME_LENGTH_MIN, USERNAME_PROVIDED_LENGTH_MAX, canonical_username_for_creation,
-    is_valid_email, is_valid_fact_hash, is_valid_token_id, is_valid_username_for_creation,
+    is_valid_email, is_valid_fact_hash, is_valid_username_for_creation,
 };
 pub use rate_limiter::{
     DEFAULT_ACTION_ACCOUNT_RATE_LIMIT, DEFAULT_ACTION_IP_RATE_LIMIT,

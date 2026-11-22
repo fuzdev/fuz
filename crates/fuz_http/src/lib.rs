@@ -74,6 +74,11 @@ pub mod origin_wildcard;
 pub mod request_headers;
 pub mod simple_request;
 
+// === detached writes, drained at shutdown ===
+pub mod background_writes;
+
+pub use background_writes::BackgroundWrites;
+
 // === JSON-RPC envelope + errors ===
 pub mod jsonrpc;
 pub mod jsonrpc_error;
@@ -146,8 +151,8 @@ pub use jsonrpc_error::{
     request_cancelled, service_unavailable, timeout, unauthenticated, validation_error,
 };
 pub use lifecycle::{
-    CancellationToken, DEFAULT_DRAIN_TIMEOUT, HEADER_READ_TIMEOUT, NoopShutdownCloser,
-    SHUTDOWN_CLOSE_TIMEOUT, ShutdownCloser, WRITE_PROGRESS_TIMEOUT, WaitClosedFuture,
+    CancellationToken, DEFAULT_DRAIN_TIMEOUT, HEADER_READ_TIMEOUT, SHUTDOWN_CLOSE_TIMEOUT,
+    ServeShutdown, ShutdownCloser, ShutdownDuties, ShutdownFuture, WRITE_PROGRESS_TIMEOUT,
     serve_with_shutdown, shutdown_token, spawn_periodic,
 };
 pub use origin::{
