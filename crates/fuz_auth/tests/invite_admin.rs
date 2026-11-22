@@ -306,3 +306,65 @@ async fn invite_delete_rejects_claimed_invite() {
         Some(ERROR_INVITE_NOT_FOUND)
     );
 }
+
+/// `query_create_invite` refuses an issuer that is not an active actor of a
+/// live account — a missing actor, a tombstoned actor of a live account, an
+/// actor of a soft-deleted account — inserting nothing, and answers a second
+/// unclaimed invite for one username as `Duplicate`. Twin of `fuz_app`'s
+/// `invite_queries.db.test.ts` `issuer` and unique-index cases.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn query_create_invite_refuses_an_inactive_issuer_and_a_duplicate() {
+    use fuz_auth::actor_queries::query_actor_soft_delete;
+    use fuz_auth::{InviteCreateError, query_create_invite};
+
+    let pool = fresh_db_pool().await;
+    let client = pool.get().await.expect("pool.get");
+    let invites = async || -> i64 {
+        client
+            .query_one("SELECT COUNT(*) FROM invite", &[])
+            .await
+            .expect("count")
+            .get(0)
+    };
+
+    let missing = uuid::Uuid::new_v4();
+    let (_, tombstoned) = common::seed_account_actor(&pool, "tombstoned_actor").await;
+    assert!(
+        query_actor_soft_delete(&client, &tombstoned, None)
+            .await
+            .expect("soft-delete the actor")
+    );
+    let (deleted_account, of_deleted) = common::seed_account_actor(&pool, "deleted_account").await;
+    client
+        .execute(
+            "UPDATE account SET deleted_at = NOW() WHERE id = $1",
+            &[&deleted_account],
+        )
+        .await
+        .expect("soft-delete the account");
+    for (issuer, label) in [
+        (missing, "a missing actor"),
+        (tombstoned, "a tombstoned actor"),
+        (of_deleted, "an actor of a deleted account"),
+    ] {
+        let result = query_create_invite(&client, None, Some("refused_invitee"), &issuer).await;
+        assert!(
+            matches!(result, Err(InviteCreateError::IssuerNotActive)),
+            "{label}: {result:?}"
+        );
+    }
+    assert_eq!(invites().await, 0, "nothing inserted");
+
+    let (_, issuer) = common::seed_account_actor(&pool, "live_issuer").await;
+    let invite = query_create_invite(&client, None, Some("dup_user"), &issuer)
+        .await
+        .expect("the first invite");
+    assert_eq!(invite.created_by, Some(issuer));
+    let result = query_create_invite(&client, None, Some("DUP_USER"), &issuer).await;
+    assert!(
+        matches!(result, Err(InviteCreateError::Duplicate)),
+        "a second unclaimed invite for the username: {result:?}"
+    );
+    assert_eq!(invites().await, 1);
+}

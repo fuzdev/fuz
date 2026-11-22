@@ -631,16 +631,19 @@ The rules a change must keep:
   (`query_account_lock_live_many`), and refuses a recipient or a grantor
   that is not an active account (`RoleGrantOfferError::RecipientNotActive`,
   `GrantorNotActive`) — a deleted recipient is refused exactly as a missing
-  one; `invite_create` locks its issuer before its insert. An account
+  one; `query_create_invite` locks its issuer's account the same way and
+  refuses an issuer that is not an active account
+  (`InviteCreateError::IssuerNotActive`). An account
   delete, and a purge, supersedes the pending offers made by the account
   and those made to it — a purge before its cascade, so each is audited —
   notifying each offer's live party (`queue_supersede_notifications` with
   its `SupersedeAudience`), and deletes the unclaimed invites its actors
   issued. Role grants are kept and come back with the undelete; superseded
   offers, deleted invites and revoked credentials stay ended. A server that
-  creates offers through the query gets the rule; one that mints invites
-  through `query_create_invite` for an issuer takes
-  `query_account_lock_live_many` on the issuer first.
+  creates offers or invites through the queries gets the rule; one that
+  holds a lock on the issuer's actor or a grant row before it mints an
+  invite takes the issuer's account row first
+  (`query_account_lock_live_many`), the last-admin guard's order.
 - **One class order: accounts, then offers, then grants and actors**, each
   in id order. The last-admin guard
   (`query_count_active_accounts_with_global_role_locked`) locks its rows

@@ -8,7 +8,9 @@
 
 use serde::Serialize;
 
-use fuz_db::{col, iso8601_timestamp_expr, qualify_columns};
+use fuz_db::{col, is_pg_unique_violation, iso8601_timestamp_expr, qualify_columns};
+
+use crate::account_queries::query_account_lock_live_many;
 
 /// The `invite` table's columns.
 ///
@@ -117,31 +119,104 @@ fn decode_invite_row(row: &tokio_postgres::Row) -> Invite {
     }
 }
 
-/// Insert an invite and return the created row.
+/// Why [`query_create_invite`] created no invite.
+#[derive(Debug, thiserror::Error)]
+pub enum InviteCreateError {
+    /// An unclaimed invite already reserves the email or the username: the
+    /// partial unique index `idx_invite_email_unclaimed` or
+    /// `idx_invite_username_unclaimed` refused the insert (SQLSTATE `23505`),
+    /// which aborts the caller's transaction. Twin of TS
+    /// `InviteDuplicateError`.
+    #[error("an unclaimed invite already exists")]
+    Duplicate,
+    /// The issuer is not an active account: its actor is missing or
+    /// tombstoned, or its account soft-deleted — a delete that committed
+    /// while the invite was in flight. Twin of TS
+    /// `InviteIssuerNotActiveError`.
+    #[error("the issuer is not an active account")]
+    IssuerNotActive,
+    /// Tx-level driver failure.
+    #[error("query error: {0}")]
+    Query(#[from] tokio_postgres::Error),
+}
+
+/// Insert an invite issued by the actor `created_by` and return the created
+/// row.
 ///
-/// Callers that pre-check for account collisions on `email` /
-/// `username` do so upstream — this query returns the row directly and
-/// surfaces the partial-unique violation on `idx_invite_email_unclaimed`
-/// / `idx_invite_username_unclaimed` as a [`tokio_postgres::Error`]
-/// that callers classify via [`fuz_db::is_pg_unique_violation`].
+/// The issuer must be an active actor of a live account, checked here so every
+/// caller — the spine's `invite_create` handler and a consumer minting invites
+/// on its own path — gets the rule: an invite records no authority, so one
+/// minted for an issuer deleted mid-flight would outlive the delete that
+/// should have voided it. The issuer's account row is read under `FOR SHARE`
+/// ([`query_account_lock_live_many`]) before the insert: an account delete
+/// writes its tombstone first, so a delete that wrote its tombstone before the
+/// read is waited for if uncommitted and seen (the invite is refused), and one
+/// that reaches the row after it waits for this
+/// transaction to commit and then deletes the invite with the account's other
+/// unclaimed ones ([`query_invite_delete_unclaimed_by_creators`]). The actor's
+/// tombstone is read after the lock, so a delete waited on is seen there too.
 ///
-/// Mirrors `fuz_app`'s `query_create_invite`.
+/// Run it inside the caller's transaction, which the lock spans — on a bare
+/// client the lock ends with its statement and orders nothing. Lock order:
+/// account rows come before actor and `role_grant` rows, as the last-admin
+/// guard
+/// ([`crate::actor_queries::query_count_active_accounts_with_global_role_locked`])
+/// takes them (account, then actor, then grant). So take it before the
+/// transaction locks any actor or `role_grant` row — or lock the issuer's
+/// account row first yourself ([`query_account_lock_live_many`]), which this
+/// query then re-takes without waiting: a transaction holding a lock on the
+/// issuer's admin grant while it waits here on an account row a removal holds,
+/// while the removal's guard waits on that grant, deadlocks.
+///
+/// Callers that pre-check for account collisions on `email` / `username` do
+/// so upstream. Mirrors `fuz_app`'s `query_create_invite`.
 ///
 /// # Errors
 ///
-/// Propagates `tokio_postgres::Error` from the underlying client — in
-/// particular SQLSTATE `23505` (`unique_violation`) when an unclaimed
-/// invite with the same email or username already exists.
+/// [`InviteCreateError::IssuerNotActive`] when `created_by` names no actor, a
+/// tombstoned one, or one whose account is soft-deleted; nothing is inserted.
+/// [`InviteCreateError::Duplicate`] when an unclaimed invite with the same
+/// email or username already exists.
+/// [`InviteCreateError::Query`] on any other driver error.
 pub async fn query_create_invite(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     email: Option<&str>,
     username: Option<&str>,
-    created_by: Option<&uuid::Uuid>,
-) -> Result<Invite, tokio_postgres::Error> {
-    let row = client
-        .query_one(&sql_create_invite(), &[&email, &username, &created_by])
-        .await?;
-    Ok(decode_invite_row(&row))
+    created_by: &uuid::Uuid,
+) -> Result<Invite, InviteCreateError> {
+    // An actor's account never changes, so it is read unlocked.
+    let Some(issuer_account) = client
+        .query_opt("SELECT account_id FROM actor WHERE id = $1", &[created_by])
+        .await?
+        .map(|row| row.get::<_, uuid::Uuid>(0))
+    else {
+        return Err(InviteCreateError::IssuerNotActive);
+    };
+    if !query_account_lock_live_many(client, &[issuer_account])
+        .await?
+        .contains(&issuer_account)
+    {
+        return Err(InviteCreateError::IssuerNotActive);
+    }
+    // After the lock, so a delete it waited on is seen.
+    let issuer_actor_active = client
+        .query_opt(
+            "SELECT id FROM actor WHERE id = $1 AND deleted_at IS NULL",
+            &[created_by],
+        )
+        .await?
+        .is_some();
+    if !issuer_actor_active {
+        return Err(InviteCreateError::IssuerNotActive);
+    }
+    match client
+        .query_one(&sql_create_invite(), &[&email, &username, created_by])
+        .await
+    {
+        Ok(row) => Ok(decode_invite_row(&row)),
+        Err(err) if is_pg_unique_violation(&err) => Err(InviteCreateError::Duplicate),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// List every invite with creator/claimer usernames joined in, newest

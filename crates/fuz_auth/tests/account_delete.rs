@@ -1206,7 +1206,7 @@ async fn account_removal_deletes_the_accounts_unclaimed_invites() {
     let client = pool.get().await.expect("pool.get");
     let (bystander, bystander_actor) = seed_account_actor(&pool, "invite_bystander").await;
     let invite = async |username: &str, created_by: uuid::Uuid| -> uuid::Uuid {
-        fuz_auth::query_create_invite(&client, None, Some(username), Some(&created_by))
+        fuz_auth::query_create_invite(&client, None, Some(username), &created_by)
             .await
             .expect("invite")
             .id
@@ -1291,11 +1291,11 @@ async fn query_invite_delete_unclaimed_by_creators_deletes_only_those() {
     let client = pool.get().await.expect("pool.get");
     let (_, issuer) = seed_account_actor(&pool, "q_invite_issuer").await;
     let (_, other) = seed_account_actor(&pool, "q_invite_other").await;
-    let mine = fuz_auth::query_create_invite(&client, None, Some("q_mine"), Some(&issuer))
+    let mine = fuz_auth::query_create_invite(&client, None, Some("q_mine"), &issuer)
         .await
         .expect("invite")
         .id;
-    let theirs = fuz_auth::query_create_invite(&client, None, Some("q_theirs"), Some(&other))
+    let theirs = fuz_auth::query_create_invite(&client, None, Some("q_theirs"), &other)
         .await
         .expect("invite")
         .id;

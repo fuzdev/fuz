@@ -246,9 +246,10 @@ pub use daemon_token::{
 pub use error::{BootstrapError, BootstrapErrorKind, SignupError, SignupErrorKind};
 pub use hash::{SESSION_ID_LENGTH, SessionHash, hash_session_token, is_valid_session_id};
 pub use invite_queries::{
-    Invite, InviteWithUsernames, LockedInvite, query_create_invite, query_invite_claim_unscoped,
-    query_invite_delete_unclaimed, query_invite_delete_unclaimed_by_creators,
-    query_invite_find_unclaimed_match_for_update, query_invite_list_all_with_usernames,
+    Invite, InviteCreateError, InviteWithUsernames, LockedInvite, query_create_invite,
+    query_invite_claim_unscoped, query_invite_delete_unclaimed,
+    query_invite_delete_unclaimed_by_creators, query_invite_find_unclaimed_match_for_update,
+    query_invite_list_all_with_usernames,
 };
 pub use keyring::{Keyring, KeyringError, KeyringErrors};
 pub use migrations::{

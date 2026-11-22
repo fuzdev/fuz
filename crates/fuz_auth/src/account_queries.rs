@@ -670,7 +670,7 @@ pub async fn query_account_lock_live(
 /// must be ordered against a delete of any of them.
 ///
 /// An offer locks its two parties ([`crate::query_role_grant_offer_create`]),
-/// an invite its issuer (`invite_create`, one id).
+/// an invite its issuer ([`crate::query_create_invite`], one id).
 ///
 /// `FOR SHARE`: the weakest lock that conflicts with a delete's `UPDATE` of
 /// the row, so these writes don't wait on one another. It also waits on a

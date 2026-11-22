@@ -11,8 +11,8 @@ use serde_json::Value;
 use crate::account_queries::{
     AccountIdentitySnapshot, AdminAccountEntry, query_account_by_email, query_account_by_id,
     query_account_by_username, query_account_lock_admins_for_purge, query_account_lock_for_purge,
-    query_account_lock_live_many, query_account_soft_delete, query_account_undelete,
-    query_admin_account_list, query_purge_account,
+    query_account_soft_delete, query_account_undelete, query_admin_account_list,
+    query_purge_account,
 };
 use crate::action_auth::{AuthSpec, credential_type_required};
 use crate::action_rate_limit::RateLimitClass;
@@ -40,8 +40,9 @@ use crate::auth_action_entry::AuthActionEntry;
 use crate::credential_type::CredentialGate;
 use crate::credential_type::CredentialType;
 use crate::invite_queries::{
-    Invite, InviteWithUsernames, query_create_invite, query_invite_delete_unclaimed,
-    query_invite_delete_unclaimed_by_creators, query_invite_list_all_with_usernames,
+    Invite, InviteCreateError, InviteWithUsernames, query_create_invite,
+    query_invite_delete_unclaimed, query_invite_delete_unclaimed_by_creators,
+    query_invite_list_all_with_usernames,
 };
 use crate::name_schema::NAME_LENGTH_MAX;
 use crate::params_helpers::{
@@ -72,7 +73,6 @@ use crate::connection_closer::ConnectionCloseTarget;
 use crate::session_queries::{
     AdminSession, query_session_list_all_active, query_session_revoke_all_for_account,
 };
-use fuz_db::is_pg_unique_violation;
 
 /// Default page size for `admin_account_list`. Mirrors TS
 /// `ADMIN_ACCOUNT_LIST_DEFAULT_LIMIT`.
@@ -564,31 +564,25 @@ async fn handle_invite_create(
     // The issuer's account was read before this transaction. A delete
     // committed since creates nothing — refused as the dead credential it now
     // is, as `account_token_create` refuses it — and one still to commit waits
-    // on this lock, then deletes the invite with the account's other unclaimed
-    // ones: a delete writes its tombstone first. Twin of the TS handler's.
-    if !query_account_lock_live_many(db, &[ctx.auth.account.id])
-        .await
-        .map_err(|e| internal_error_with_source("invite issuer lock failed", &e))?
-        .contains(&ctx.auth.account.id)
-    {
-        return Err(unauthenticated());
-    }
+    // on the query's issuer lock, then deletes the invite with the account's
+    // other unclaimed ones. Twin of the TS handler's.
     let invite = match query_create_invite(
         db,
         email.as_deref(),
         username.as_deref(),
-        Some(&ctx.auth.actor.id),
+        &ctx.auth.actor.id,
     )
     .await
     {
         Ok(invite) => invite,
-        Err(err) if is_pg_unique_violation(&err) => {
+        Err(InviteCreateError::IssuerNotActive) => return Err(unauthenticated()),
+        Err(InviteCreateError::Duplicate) => {
             return Err(conflict(
                 "an unclaimed invite already exists",
                 Some(ERROR_INVITE_DUPLICATE),
             ));
         }
-        Err(err) => {
+        Err(InviteCreateError::Query(err)) => {
             return Err(internal_error_with_source(
                 "invite_create query failed",
                 &err,

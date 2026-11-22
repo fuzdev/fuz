@@ -4,10 +4,12 @@
 //!
 //! The rule is that nothing is left standing for a deleted account: an offer
 //! pending to or from it, an invite it issued. `query_role_grant_offer_create`
-//! reads both parties' account rows under `FOR SHARE`, and `invite_create` its
-//! issuer's, before they insert; a delete writes its tombstone first, so the two
-//! are ordered: the create is refused, or the delete supersedes the offer or
-//! deletes the invite.
+//! reads both parties' account rows under `FOR SHARE`, and `query_create_invite`
+//! its issuer's, before they insert; a delete writes its tombstone first, so the
+//! two are ordered: the create is refused, or the delete supersedes the offer or
+//! deletes the invite. The invite rule is pinned through the handler and through
+//! the query called directly, as a consumer minting invites on its own path
+//! calls it.
 //!
 //! A create authorized before a delete (its context resolved, then the delete
 //! committed) is refused — 404 `not_found` for a deleted recipient, the dead
@@ -57,7 +59,7 @@ use fuz_auth::role_grant_offer_queries::{
     query_role_grant_revoke_for_scope,
 };
 use fuz_auth::role_grant_schema::RoleGrantRow;
-use fuz_auth::{AdminOfferAuthorize, RoleGrantOfferActionSpecs, RoleRegistry};
+use fuz_auth::{AdminOfferAuthorize, InviteCreateError, RoleGrantOfferActionSpecs, RoleRegistry};
 use fuz_db::{ActionDb, Pool};
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
 use serde_json::{Value, json};
@@ -294,6 +296,24 @@ async fn an_invite_committed_before_its_issuer_is_deleted_is_deleted_by_it() {
     assert_eq!(invites(&f).await, 0, "the delete deleted it");
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn query_create_invite_refuses_an_issuer_deleted_before_it() {
+    let f = setup().await;
+    delete(&f, f.issuer.account.id).await;
+    let result = in_tx!(f.pool, |tx| fuz_auth::query_create_invite(
+        &tx,
+        None,
+        Some("race_invitee"),
+        &f.issuer.actor.id
+    ));
+    assert!(
+        matches!(result, Err(InviteCreateError::IssuerNotActive)),
+        "the query refuses a deleted issuer: {result:?}"
+    );
+    assert_eq!(invites(&f).await, 0, "no invite row");
+}
+
 // -- the locks serialize -------------------------------------------------------
 
 /// A delete of `account_id`, uncommitted on `tx`: its tombstone's row lock held.
@@ -454,6 +474,35 @@ async fn an_invite_create_waits_on_an_uncommitted_delete_of_its_issuer_and_is_th
     .await;
     assert!(waited, "the invite waits on the tombstone's row lock");
     assert_unauthenticated(result, "the invite that waited");
+    assert_eq!(invites(&f).await, 0, "no invite row");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn query_create_invite_waits_on_an_uncommitted_delete_of_its_issuer_and_is_then_refused() {
+    let f = setup().await;
+    let mut client = f.pool.get().await.unwrap();
+    let tx = client.transaction().await.unwrap();
+    hold_a_delete(&f, f.issuer.account.id, &tx).await;
+    let (result, waited) = race_against_commit(
+        async {
+            in_tx!(f.pool, |invite_tx| fuz_auth::query_create_invite(
+                &invite_tx,
+                None,
+                Some("race_invitee"),
+                &f.issuer.actor.id
+            ))
+        },
+        async {
+            tx.commit().await.unwrap();
+        },
+    )
+    .await;
+    assert!(waited, "the query waits on the tombstone's row lock");
+    assert!(
+        matches!(result, Err(InviteCreateError::IssuerNotActive)),
+        "the query that waited is refused: {result:?}"
+    );
     assert_eq!(invites(&f).await, 0, "no invite row");
 }
 
