@@ -350,7 +350,8 @@ shipped).
 - `fuz_fact` / `fuz_fact_serving` — the content-addressed byte store / its sole
   authz'd reader.
 - `fuz_db_admin` — the allowlist-gated table browser.
-- `fuz_testing` — test-only spine fixtures and the Postgres harness.
+- `fuz_testing` — test-only spine fixtures, the Postgres harness, and the
+  shared request-reads census.
 
 **npm bridge** — `fuzi_core`, the engine behind `fuzi`: prints nothing, never
 runs package code.
@@ -446,11 +447,12 @@ rustc lints.
 `RawPathParams`, `Query` and `Form`, `form_urlencoded::parse`,
 `Url::query_pairs`): a handler reads through `fuz_http::RouteParams`, which
 carries the one production `#[expect]`, and `fuz_http::read_query_pairs`.
-`fuz_http/tests/request_reads_census.rs` pins those entries in every
-`clippy.toml`, holds their positive controls, and lists every in-source
-suppression. `fuzi`, `fuzi_core` and `fuz_archive` carry their own
-`clippy.toml` (the exec-free disallows), which replaces the root one rather
-than merging; `fuzi_core/tests/exec_free.rs` checks they carry its settings
+The request-reads census (`fuz_testing::request_reads_census`, shared with
+the consumer workspaces) pins those entries in every `clippy.toml` and lists
+every in-source suppression; `fuz_testing/tests/request_reads_census.rs` runs
+it here and holds the positive controls. `fuzi`, `fuzi_core` and
+`fuz_archive` carry their own `clippy.toml` (the exec-free disallows), which
+replaces the root one rather than merging; `fuzi_core/tests/exec_free.rs` checks they carry its settings
 and stay byte-identical.
 `fuz_pty` re-declares the workspace lint tables (Cargo replaces a crate's
 `[lints]` whole), differing only in `unsafe_code = "deny"` and an added

@@ -35,6 +35,7 @@ pub mod db_reset;
 pub mod fresh_db;
 pub mod migration_tables;
 pub mod password_argon2;
+pub mod request_reads_census;
 pub mod schema_fixture;
 pub mod seed;
 pub mod table_lock;

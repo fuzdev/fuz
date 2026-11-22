@@ -1,10 +1,11 @@
 //! Positive controls for the request-reads census's method disallows (the
-//! workspace `clippy.toml`; the census itself is `fuz_http`'s
-//! `tests/request_reads_census.rs`). Each uses one disallowed method under an
-//! `#[expect]`, fulfilled only while clippy resolves that entry, so a path
-//! that stops resolving fails `-D warnings`. They live here because this crate
-//! links `url`, which `fuz_http` does not. One item per method — a shared
-//! expectation is fulfilled by any one of them.
+//! workspace `clippy.toml`; the census is `fuz_testing::request_reads_census`,
+//! run by `fuz_testing`'s `tests/request_reads_census.rs`). Each uses one
+//! disallowed method under an `#[expect]`, fulfilled only while clippy
+//! resolves that entry, so a path that stops resolving fails `-D warnings`.
+//! They live here because this crate links `url`, which `fuz_testing` does
+//! not. One item per method — a shared expectation is fulfilled by any one of
+//! them.
 
 #[expect(
     dead_code,

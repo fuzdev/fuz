@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Test-only spine fixtures — the test hasher, the daemon-token producer, the _testing_* action specs, and the Postgres test harness. NEVER link from a production binary."
+description = "Test-only spine fixtures — the test hasher, the daemon-token producer, the _testing_* action specs, the Postgres test harness, and the shared request-reads census. NEVER link from a production binary."
 
 [dependencies]
 fuz_actions.workspace = true

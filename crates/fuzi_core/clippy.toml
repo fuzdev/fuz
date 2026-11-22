@@ -16,7 +16,7 @@ disallowed-types = [
     { path = "std::process::Command", reason = "fuzi is exec-free: no process spawns on the install path" },
     { path = "tokio::process::Command", reason = "fuzi is exec-free: no process spawns on the install path", allow-invalid = true },
     # From the workspace clippy.toml: the request-reads census (its comment
-    # there says why; `fuz_http/tests/request_reads_census.rs` pins the list).
+    # there says why; `fuz_testing/tests/request_reads_census.rs` pins the list).
     { path = "axum::extract::Path", reason = "a lenient path-param read: use fuz_http::RouteParams" },
     { path = "axum::extract::RawPathParams", reason = "a lenient path-param read: use fuz_http::RouteParams" },
     { path = "axum::extract::Query", reason = "a lossy query read: use fuz_http::read_query_pairs over RawQuery" },

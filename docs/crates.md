@@ -464,9 +464,11 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   clippy holds it: the workspace `clippy.toml` disallows axum's `Path`,
   `RawPathParams`, `Query` and `Form`, `form_urlencoded::parse` and
   `Url::query_pairs` (`RouteParams` carries the one production `#[expect]`), and
-  `fuz_http/tests/request_reads_census.rs` pins those entries in every
-  `clippy.toml`, holds their positive controls, and lists every
-  in-source suppression.
+  the request-reads census (`fuz_testing::request_reads_census`, run by
+  `fuz_testing/tests/request_reads_census.rs`, which holds the positive
+  controls) pins those entries in every `clippy.toml` and lists every
+  in-source suppression. A consumer workspace that adopts it runs the same
+  census from its own test crate, with its own controls and suppression list.
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with write-progress
@@ -921,6 +923,12 @@ not a `fuz_auth` feature, so unification can't route it into production.
   const, `fuz_auth::AUTH_INTEGRATION_TRUNCATE_TABLES` (the auth tables the
   reset deletes from) among them, is held to its chain's DDL by
   `migration_created_tables`.
+- The request-reads census (`request_reads_census`): the checks that hold a
+  workspace's lenient-reader disallows in place — every `clippy.toml` carries
+  each canonical entry, every in-source suppression is listed, no `[lints]`
+  table allows them — run by the spine and the consumer workspaces that adopt
+  it, each over its own root, beside the positive controls that must compile under its own
+  clippy config.
 - A dev-dependency of the spine crates and consumer servers, and a normal
   dependency of `testing_spine_stub` (`fuz_audit` walks runtime edges only, so
   the dev cycles are allowed).

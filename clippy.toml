@@ -22,8 +22,8 @@ allow-panic-in-tests = true
 # it wraps. `form_urlencoded::parse` also catches its `url::form_urlencoded`
 # re-export. A path whose crate a linted crate doesn't link is skipped
 # silently, but a misspelled item in a linked crate is only a warning that
-# `-D warnings` does not promote, so `fuz_http/tests/request_reads_census.rs`
-# pins each spelling.
+# `-D warnings` does not promote, so `fuz_testing`'s `request_reads_census`
+# (run by `fuz_testing/tests/request_reads_census.rs`) pins each spelling.
 disallowed-methods = [
     { path = "std::env::home_dir", reason = "use fuz_sys::home_dir: it refuses an empty or relative HOME" },
     { path = "form_urlencoded::parse", reason = "a lossy query read: use fuz_http::read_query_pairs over RawQuery" },
