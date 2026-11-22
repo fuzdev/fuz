@@ -283,8 +283,9 @@ pub struct ServeBackend {
     /// through.
     connection_closer: Arc<dyn ConnectionCloser>,
     /// The backend's tracker of detached writes — its audit failure rows,
-    /// token touches and bootstrap write, which no handler awaits or a dropped
-    /// request left running — that shutdown waits on before the runtime goes.
+    /// token touches, bootstrap write and actions' post-commit effects, which
+    /// no handler awaits or a dropped request or socket left running — that
+    /// shutdown waits on before the runtime goes.
     background_writes: Arc<BackgroundWrites>,
     /// The upkeep to run beside the server.
     upkeep: Option<UpkeepOptions>,
@@ -317,11 +318,12 @@ impl ServeBackend {
 /// the upkeep is already stopping. Then the backend's detached writes
 /// (`AppBackend::background_writes`) are awaited, bounded by the drain
 /// timeout again: a failure row or a token touch spawned by a request that
-/// just answered lands rather than dying with the runtime, and the writes
-/// given up on past the bound are counted in the log. A request still running
-/// past the request drain may spawn a write after this drain resolves; that
-/// write is lost, uncounted. Two `eprintln!` sentinels, which no log filter
-/// suppresses, mark the bind and the end.
+/// just answered, or the post-commit effects of a dispatch the close-all
+/// dropped with its socket, land rather than dying with the runtime, and the
+/// writes given up on past the bound are counted in the log. A request still
+/// running past the request drain may spawn a write after this drain
+/// resolves; that write is lost, uncounted. Two `eprintln!` sentinels, which
+/// no log filter suppresses, mark the bind and the end.
 ///
 /// # Errors
 ///
@@ -383,9 +385,9 @@ pub async fn serve_until_shutdown(
 }
 
 /// Await the detached writes in flight on `writes` — the audit pool writes,
-/// token touches and bootstrap write — for at most `bound`, and return
-/// how many were still in flight when the bound ran out (`0` when every one
-/// ended).
+/// token touches, bootstrap write and post-commit effects — for at most
+/// `bound`, and return how many were still in flight when the bound ran out
+/// (`0` when every one ended).
 ///
 /// A write still in flight past the bound dies with the runtime — its task
 /// cancelled mid-checkout or mid-write, with no dropped-row line of its own

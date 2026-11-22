@@ -132,7 +132,7 @@ fn self_service_specs_refuse_a_builtin_eligible_role() {
 async fn post_commit_effects_drain_runs_each_once_concurrently() {
     // Drives the concurrent fan-out used post-commit in
     // `perform_action`. Validates the ordering contract.
-    let q = PostCommitEffects::new();
+    let q = PostCommitEffects::new(Arc::default());
     let counter = Arc::new(AtomicU32::new(0));
 
     for _ in 0..10 {
@@ -154,7 +154,7 @@ async fn post_commit_effects_drain_runs_each_once_concurrently() {
 #[tokio::test]
 async fn post_commit_effects_clear_discards_without_running() {
     // Simulates the rollback path — effects don't fire.
-    let q = PostCommitEffects::new();
+    let q = PostCommitEffects::new(Arc::default());
     let counter = Arc::new(AtomicU32::new(0));
     for _ in 0..5 {
         let c = Arc::clone(&counter);
@@ -200,7 +200,7 @@ async fn heartbeat_spec_composes() {
     // spec composes — the dispatch wrap needs a real pool which we can't
     // justify in a non-#[ignore] test, and heartbeat doesn't touch ctx.db.
     let spec = fuz_actions::heartbeat_action_spec();
-    let pending = PostCommitEffects::new();
+    let pending = PostCommitEffects::new(Arc::default());
     let signal = fuz_realtime::SignalToken::new();
     let span = tracing::Span::current();
 

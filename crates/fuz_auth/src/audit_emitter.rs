@@ -315,7 +315,8 @@ impl AuditEmitter {
     /// How many writes on [`Self::background_writes`] are in flight —
     /// spawned and not yet ended: this emitter's pool writes and anything
     /// else on the same tracker (a server's token touches, its bootstrap
-    /// write).
+    /// write, and the post-commit effect fan-outs of every dispatch built
+    /// over this emitter).
     #[must_use]
     pub fn inflight_count(&self) -> usize {
         self.background_writes.inflight_count()
@@ -323,7 +324,11 @@ impl AuditEmitter {
 
     /// Await every detached write on [`Self::background_writes`] — each
     /// fire-and-forget [`Self::emit`] write in flight, and on a server's
-    /// tracker its token touches and bootstrap write too.
+    /// tracker its token touches and bootstrap write too, and the post-commit
+    /// effect fan-outs of every dispatch built over this emitter.
+    ///
+    /// A listener or post-commit effect must never await this drain: it runs
+    /// on a tracked task, so it would wait on itself.
     ///
     /// Waits until no tracked write is outstanding, so a write that starts
     /// while the drain is waiting (an emit from a post-commit effect) is
@@ -333,15 +338,17 @@ impl AuditEmitter {
     /// task — the INSERT and the listener fan-out of the row it wrote — and it
     /// stops counting when that task ends however it ends: finished, unwound
     /// by a panicking listener, or aborted.
-    /// [`Self::emit_in_tx`] is not tracked: its row commits with the
-    /// caller's transaction, and its fan-out runs from the post-commit drain.
+    /// The [`Self::emit_in_tx`] row is not tracked — it commits with the
+    /// caller's transaction — but its fan-out is, as part of the post-commit
+    /// drain's task on a dispatch built over this emitter.
     ///
     /// The same wait as [`BackgroundWrites::drain`] on the tracker, which a
     /// server's shutdown (`fuz_actions::server::serve_until_shutdown`) and the
     /// `_testing_drain_effects` test action await directly. Twin of the TS
     /// `AuditEmitter.drain_inflight` in `fuz_app`, which also waits for zero
-    /// rather than for a snapshot; the TS token touch rides its request's
-    /// `pending_effects` instead.
+    /// rather than for a snapshot but covers neither the token touch nor
+    /// post-commit effects: both ride the TS request's effect flush, tracked by
+    /// its `RequestFlushTracker`.
     pub async fn drain_inflight(&self) {
         self.background_writes.drain().await;
     }

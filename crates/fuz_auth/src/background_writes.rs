@@ -3,22 +3,26 @@
 //! A write the request path never waits on — an audit failure row
 //! ([`crate::AuditEmitter::emit`]), a bearer token's use
 //! ([`crate::api_token_queries::spawn_api_token_touch`]) — runs on a detached
-//! tokio task, and so does a write a request awaits but must not cancel by
-//! being dropped (the bootstrap's burn-and-commit, `bootstrap_handler`). Dropping the task's handle doesn't cancel it, but the runtime
-//! shutting down does, mid-checkout or mid-write, with nothing logged. So
-//! every such write is spawned through the one tracker, which counts it in
-//! flight until its task ends, and the two barriers that must see the writes
-//! land await it: a server's graceful shutdown
+//! tokio task, and so does work a request awaits but must not cancel by
+//! being dropped (the bootstrap's burn-and-commit, `bootstrap_handler`; an
+//! action's post-commit effects, `fuz_actions::PostCommitEffects::drain_all`,
+//! whose dispatch a socket closed at shutdown drops). Dropping the task's
+//! handle doesn't cancel it, but the runtime shutting down does, mid-checkout
+//! or mid-write, with nothing logged. So every such write is spawned
+//! through the one tracker, which counts it in flight until its task ends,
+//! and the two barriers that must see the writes land await it: a server's graceful shutdown
 //! (`fuz_actions::server::serve_until_shutdown`) and the
 //! `_testing_drain_effects` test action.
 //!
 //! A server's backend owns its one tracker (`fuz_actions::server::AppBackend`'s
 //! `background_writes`); its [`crate::AuditEmitter`] is built over it and its
 //! [`crate::AuthGate`] holds it beside the credential walk, so one drain
-//! covers every write. The TS twin has no tracker type: its touch rides the request's
-//! `pending_effects`, flushed before the response, and its audit failure rows
-//! the emitter's own in-flight set (`AuditEmitter.drain_inflight` in
-//! `fuz_app`).
+//! covers every write. The TS twin splits the one tracker in two, both
+//! awaited by `AppServer.close` in `fuz_app`: a `RequestFlushTracker`
+//! (`http/pending_effects.ts`) holds each request's effect flush — an HTTP
+//! request's eager writes (its token touch) and post-commit thunks, and a
+//! WS message's after its reply — and the audit emitter's own in-flight set
+//! (`AuditEmitter.drain_inflight`) holds its failure rows.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -31,7 +35,8 @@ use tokio::task::JoinHandle;
 ///
 /// Always on: an atomic increment and decrement per write. Shared by `Arc`
 /// between the backend that owns it, the [`crate::AuditEmitter`] built over
-/// it, and every [`crate::AuthGate`] the backend builds. `Default` makes a
+/// it, every [`crate::AuthGate`] the backend builds, and every
+/// `fuz_actions::PostCommitEffects` a dispatch builds over that emitter. `Default` makes a
 /// fresh one — what a test builds a gate or an emitter over; a tracker
 /// nothing drains loses its writes at shutdown.
 #[derive(Debug, Default)]

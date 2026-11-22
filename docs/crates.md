@@ -566,7 +566,10 @@ The rules a change must keep:
   and so is the bearer leg's `api_token` use (`spawn_api_token_touch`) and
   the bootstrap's burn-and-commit — all on the one tracker of detached
   writes, `BackgroundWrites`, that `AppBackend` owns, its audit emitter is
-  built over, and its `AuthGate` holds. The spine's shutdown
+  built over, and its `AuthGate` holds. An action's post-commit effects run
+  on it too (`PostCommitEffects`, built over the emitter's tracker), so a
+  socket closed at shutdown, dropping its in-flight dispatches, leaves their
+  committed effects counted and awaited. The spine's shutdown
   (`serve_until_shutdown`) and `_testing_drain_effects` wait for those still
   running, the shutdown bounded by the drain timeout, logging any it gives up
   on. `testing_spine_stub` also settles them before each HTTP answer

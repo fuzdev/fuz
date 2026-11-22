@@ -4,8 +4,9 @@
 //! `_testing_reset`. It awaits every detached write in flight on the server's
 //! tracker (`fuz_actions::server::AppBackend::background_writes`) — each
 //! fire-and-forget audit `emit`, each bearer token touch, the bootstrap
-//! write — so a following `audit_log_list` or database read is
-//! authoritative: the deterministic barrier the cross-backend conformance
+//! write, each action's post-commit effects — so a following
+//! `audit_log_list` or database read is authoritative: the deterministic
+//! barrier the cross-backend conformance
 //! suite uses in place of a poll/sleep before asserting on audit rows or
 //! `api_token.last_used_at`.
 //!
@@ -13,9 +14,10 @@
 //!
 //! Gated on the daemon-token credential — effectively keeper-only without
 //! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
-//! Mirrors `fuz_app`'s TS `_testing_drain_effects`, which awaits
-//! `AuditEmitter.drain_inflight` (its token touch rides the request's
-//! `pending_effects` instead).
+//! Mirrors `fuz_app`'s TS `_testing_drain_effects`, with one divergence: the
+//! TS action awaits `AuditEmitter.drain_inflight` only, while this one also
+//! waits on post-commit effects in flight (the TS token touch and post-commit
+//! thunks ride the request's effect flush instead).
 
 use std::sync::Arc;
 

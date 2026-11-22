@@ -346,8 +346,10 @@ pub(crate) async fn perform_action_with(
     // ActionContext borrows it. The dispatcher passes a `&Arc<AuditEmitter>`
     // straight from `options.audit` into `ActionContext::audit` — no
     // wrapper, since `fuz_auth::AuditEmitter` exposes both pool and
-    // in-tx emits directly.
-    let post_commit_effects = PostCommitEffects::new();
+    // in-tx emits directly. The queue drains on the emitter's tracker — the
+    // server's one, which graceful shutdown awaits — so an effect outliving
+    // its dropped dispatch (a socket closed at shutdown) is still waited on.
+    let post_commit_effects = PostCommitEffects::new(Arc::clone(options.audit.background_writes()));
     let auth = resolved.as_context();
 
     // 7. Dispatch — transactional iff `spec.side_effects`. Drains
@@ -682,8 +684,10 @@ async fn settle_effects(
                 on_settled();
             }
             // Listeners + WS broadcasts + audit fan-out; concurrent via
-            // `futures::future::join_all`, on a spawned task so a caller
-            // dropped mid-drain (client disconnect) can't cancel them.
+            // `futures::future::join_all`, on a task spawned through the
+            // server's tracker so a caller dropped mid-drain (client
+            // disconnect, shutdown's close-all) can't cancel them and
+            // shutdown waits for them.
             post_commit_effects.drain_all().await;
             Ok(output)
         }

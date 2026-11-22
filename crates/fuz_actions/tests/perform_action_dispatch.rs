@@ -1702,3 +1702,84 @@ async fn a_failed_checkout_answers_service_unavailable_at_every_phase() {
         .get(0);
     assert_eq!(probes, 0, "nothing was written");
 }
+
+/// **The shutdown drain covers a dropped dispatch's effects.** A committed
+/// action's post-commit fan-out runs on the server's tracker — the audit
+/// emitter's `BackgroundWrites`, which graceful shutdown drains — so when the
+/// dispatch is dropped mid-drain (shutdown's close-all ending a socket's loop,
+/// which drops its in-flight dispatches), the effect still runs and the
+/// tracker's drain waits for it rather than resolving past it.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+async fn a_dropped_dispatch_leaves_its_effects_on_the_shutdown_drain() {
+    let pool = fresh_db_pool().await;
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let effect_done = Arc::new(AtomicBool::new(false));
+    let slow_effect_handler: ActionHandler = {
+        let (started, release, effect_done) = (
+            Arc::clone(&started),
+            Arc::clone(&release),
+            Arc::clone(&effect_done),
+        );
+        Arc::new(move |_params, ctx| {
+            let (started, release, effect_done) = (
+                Arc::clone(&started),
+                Arc::clone(&release),
+                Arc::clone(&effect_done),
+            );
+            Box::pin(async move {
+                ctx.post_commit_effects.push_fn(move || async move {
+                    started.notify_one();
+                    release.notified().await;
+                    effect_done.store(true, Ordering::SeqCst);
+                });
+                Ok(json!({ "ok": true }))
+            })
+        })
+    };
+    let registry = ActionRegistry::compile(vec![ActionSpec::with_side_effects(
+        "slow_effect",
+        AuthSpec::public(),
+        InputShape::Object,
+        slow_effect_handler,
+    )])
+    .expect("compile registry");
+    let options = PerformActionOptions {
+        pool: pool.clone(),
+        registry: Arc::new(registry),
+        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
+        connection_closer: Arc::new(NoopConnectionCloser),
+        notification_sender: Arc::new(NoopNotificationSender),
+        peer: fuz_realtime::noop_action_peer(),
+        account_rate_limiter: None,
+        ip_rate_limiter: None,
+    };
+    let writes = Arc::clone(options.audit.background_writes());
+
+    let dispatch = tokio::spawn({
+        let options = options.clone();
+        async move {
+            let _ = run(&options, "slow_effect", json!({}), None, None).await;
+        }
+    });
+    started.notified().await;
+    dispatch.abort();
+    assert!(dispatch.await.unwrap_err().is_cancelled());
+
+    assert_eq!(writes.inflight_count(), 1, "the tracker counts the effect");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), writes.drain())
+            .await
+            .is_err(),
+        "the shutdown drain holds while the dropped dispatch's effect runs"
+    );
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), writes.drain())
+        .await
+        .expect("the drain resolves once the effect ends");
+    assert!(
+        effect_done.load(Ordering::SeqCst),
+        "the effect ran to the end"
+    );
+}
