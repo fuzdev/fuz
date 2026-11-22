@@ -28,18 +28,27 @@ use crate::testing_reset::{ResetStateFn, TestingResetOptions, create_testing_res
 /// - `daemon_token_state`, the keeper credential `_testing_reset`
 ///   authenticates with;
 /// - [`startup_reset_hook`], the env-gated schema wipe, so repeated runs
-///   against one database start clean.
+///   against one database start clean;
+/// - `auth_cleanup`, the caller's, as in production: a consumer's test binary
+///   runs its production server's schedule, and `testing_spine_stub`, held
+///   to a TS test server that schedules none, runs `Off`.
 ///
 /// A server that differs sets the field with struct-update syntax: a suite
 /// that drives the limiters selects `rate_limiters` from its env gate, and a
 /// server's own login bound is its own (`login_ip_rate_limit`).
 #[must_use]
-pub fn testing_backend_options(daemon_token_state: SharedDaemonTokenState) -> SpineBackendOptions {
+pub fn testing_backend_options(
+    daemon_token_state: SharedDaemonTokenState,
+    auth_cleanup: fuz_auth::AuthCleanupSchedule,
+) -> SpineBackendOptions {
     SpineBackendOptions {
         rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
         daemon_token_state: Some(daemon_token_state),
         pre_migration_hook: Some(startup_reset_hook()),
-        ..SpineBackendOptions::production(Arc::new(crate::TestingArgon2idHasher::new()))
+        ..SpineBackendOptions::production(
+            Arc::new(crate::TestingArgon2idHasher::new()),
+            auth_cleanup,
+        )
     }
 }
 
@@ -189,7 +198,11 @@ pub fn inert_app_backend(spec: &AppBackendSpec, allowed_origins: &str) -> AppBac
         spec,
         &SpineBackendOptions {
             rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
-            ..SpineBackendOptions::production(Arc::new(crate::TestingArgon2idHasher::new()))
+            // never served: nothing to sweep beside
+            ..SpineBackendOptions::production(
+                Arc::new(crate::TestingArgon2idHasher::new()),
+                fuz_auth::AuthCleanupSchedule::Off,
+            )
         },
     )
     .expect("an inert core builds")

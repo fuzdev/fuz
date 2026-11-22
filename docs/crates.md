@@ -72,7 +72,8 @@ toolkit, with `fuz_testing`'s hasher, every
 `_testing_*` spec, and an env-gated startup DB reset. Default port 1177; its
 command line is the harness's `--port <port>` alone. Driven by fuz_app's
 cross-backend suites (./testing.md § Cross-backend suite); like its TS twin it
-schedules no auth cleanup and starts with its limiters off.
+schedules no auth cleanup (`AuthCleanupSchedule::Off`) and starts with its
+limiters off.
 
 ### `testing_fake_fgro`
 
@@ -473,15 +474,24 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with write-progress
   and header-read deadlines the TS twin lacks. It takes no closer: the router
-  carries its `ShutdownDuties` (a `ShutdownCloser` that closes every WS / SSE
-  connection, and the `BackgroundWrites` drained last), set on
-  `StackOptions::shutdown` and kept by the `GatedRouter`. A spine server
-  composes over `AppBackend::stack_options`, which sets the backend's closer
-  and `BackgroundWrites`, so a router is always served with the duties it was
-  composed with. The hole the types leave: a live router composed over a bare
-  `StackOptions::without_backend` carries none and is served with no close
-  and no drain. `serve_until_shutdown` refuses one that is handed upkeep —
-  which only a server with a backend has — with `StartupError::Config`.
+  carries its `ServeDuties` (the `Upkeep` tasks run beside it, a
+  `ShutdownCloser` that closes every WS / SSE connection, and the
+  `BackgroundWrites` drained last), set on `StackOptions::serve_duties` and
+  kept by the `GatedRouter`. The serve spawns the duties' upkeep when it
+  starts and joins it, with any extra task it is handed, within the one drain
+  bound. A spine server composes over `AppBackend::stack_options`, which sets
+  the backend's auth cleanup (`fuz_auth::AuthCleanup`, unless its
+  `AuthCleanupSchedule` is `Off`), closer and `BackgroundWrites`, so a router
+  is always served with the duties it was composed with. The hole the types
+  leave: a live router composed over a bare `StackOptions::without_backend`
+  carries none and is served with no cleanup, no close and no drain.
+- **The auth cleanup's schedule has no default.** `SpineBackendOptions` (and
+  `production`, `SpineRunOptions::production`, and
+  `fuz_testing::testing_backend_options`) take an `AuthCleanupSchedule`, so
+  every server writes out whether it sweeps.
+- **A shutdown that gives up fails the process.** `serve_until_shutdown`
+  returns `StartupError::ShutdownGivenUp` with the `ServeShutdown` counts
+  (exit `1`, and no `shutdown complete` line) when the drain bound ran out.
 - A spine server builds its options with `AppBackend::stack_options`, so the
   stack's origin check and the auth gate's read one allowlist.
 - **The stack clears an invalid session cookie.** `StackOptions::cookie_clear`
@@ -1017,7 +1027,7 @@ Wire twins of fuz_app's (`fuz_realtime::ws_close_codes`):
   past that mark to the tracker to finish (the shutdown drain waits for it),
   everything after its first commit included. One dropped before its first
   commit rolls back. The TS twin never cancels a request, so both finish
-  there; served outside `serve_with_shutdown` or with no shutdown duties,
+  there; served outside `serve_with_shutdown` or with no serve duties,
   nothing wraps the request. The mark is seen only by `commit_checked` on the
   request's own task: a commit in a task the request spawns is not marked
   (keep the post-commit tail on the request's task, as the bootstrap does),

@@ -75,10 +75,16 @@ fn env_at(url: &str) -> BaseServerEnv {
     .expect("the env reads")
 }
 
+/// Off: these suites hold the auth tables' locks and count their rows, and
+/// the cleanup's own suite (`fuz_auth`'s `tests/auth_cleanup.rs`) covers the
+/// sweeps.
 fn options() -> SpineBackendOptions {
     SpineBackendOptions {
         rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
-        ..SpineBackendOptions::production(Arc::new(TestingArgon2idHasher::new()))
+        ..SpineBackendOptions::production(
+            Arc::new(TestingArgon2idHasher::new()),
+            fuz_auth::AuthCleanupSchedule::Off,
+        )
     }
 }
 
@@ -308,7 +314,7 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
     // the probes serve live here, carrying the duties of the backend whose
     // write is held
     let stack_options = fuz_http::StackOptions {
-        shutdown: Some(backend.shutdown_duties()),
+        serve_duties: Some(backend.serve_duties()),
         ..fuz_http::StackOptions::without_backend(
             fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
             Arc::new(Vec::new()),
@@ -321,7 +327,7 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
             addr: "127.0.0.1:0".parse().expect("addr"),
             drain_timeout: Duration::from_secs(10),
             shutdown,
-            upkeep: None,
+            extra_upkeep: Vec::new(),
         },
     )
     .await

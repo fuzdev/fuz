@@ -4,9 +4,10 @@
 //! deletes expired sessions and closes the connections they opened
 //! ([`cleanup_expired_sessions`]), then audits newly expired offers
 //! ([`cleanup_expired_role_grant_offers`]), returning both counts.
-//! [`spawn_auth_cleanup`] schedules it — the one call a server makes. The
-//! per-pass pieces stay public for a consumer that wants its own cadence or
-//! error isolation per sweep.
+//! [`spawn_auth_cleanup`] schedules it, and [`AuthCleanup`] is that schedule
+//! as a router's upkeep (`fuz_http::Upkeep`) — how a spine server runs it,
+//! set by its [`AuthCleanupSchedule`]. The per-pass pieces stay public for a
+//! consumer that wants its own cadence or error isolation per sweep.
 //!
 //! ## Expired sessions: the sweep closes what it sweeps
 //!
@@ -94,34 +95,31 @@
 //! reason to differ), until the shutdown token is cancelled. A failed pass —
 //! the database out of reach — is logged and retried on the next interval.
 //!
-//! Spawn it once migrations have run (the startup pass reads the auth
-//! tables), with the app's bound [`AuditEmitter`] so the expiry audits reach
-//! its listeners and the [`ConnectionCloser`] its revocation handlers close
-//! through — the one over the registries its connections live in, both
-//! transports where it has both — and hand its handle to the serve, which
-//! joins it after the connection drain, within the shutdown's bound:
+//! A spine server does not call it: its backend options name an
+//! [`AuthCleanupSchedule`], written out by every server (no default), and
+//! for [`AuthCleanupSchedule::Every`] the backend attaches an
+//! [`AuthCleanup`] to its router's serve duties
+//! (`fuz_actions::server::AppBackend::serve_duties`). The serve spawns it
+//! when it starts serving — migrations have run by then, so the startup pass
+//! reads the auth tables — and joins it after the connection drain, within
+//! the shutdown's bound. The backend builds its options with the app's bound
+//! [`AuditEmitter`], so the expiry audits reach its listeners, and the
+//! [`ConnectionCloser`] its revocation handlers close through — the one over
+//! the registries its connections live in, both transports where it has
+//! both:
 //!
 //! ```ignore
-//! let shutdown = fuz_http::shutdown_token();
-//! // … build the app, run migrations, bind …
-//! let auth_cleanup = fuz_auth::spawn_auth_cleanup(
-//!     fuz_auth::AuthCleanupOptions {
-//!         pool: pool.clone(),
-//!         audit: Arc::clone(&audit),
-//!         connection_closer: Arc::clone(&connection_closer),
+//! let duties = fuz_http::ServeDuties::new(closer, writes).with_upkeep(Arc::new(
+//!     fuz_auth::AuthCleanup {
+//!         options: fuz_auth::AuthCleanupOptions {
+//!             pool: pool.clone(),
+//!             audit: Arc::clone(&audit),
+//!             connection_closer: Arc::clone(&connection_closer),
+//!         },
+//!         interval: fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
 //!     },
-//!     fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
-//!     shutdown.clone(),
-//! );
-//! // the serve joins the task after its connection drain, within its bound
-//! let served = fuz_http::serve_with_shutdown(
-//!     listener,
-//!     router,
-//!     shutdown.clone(),
-//!     vec![auth_cleanup],
-//!     drain,
-//! )
-//! .await;
+//! ));
+//! // set on the stack options; `fuz_http::serve_with_shutdown` spawns and joins it
 //! ```
 //!
 //! Shutdown drops a pass in progress. Both sweeps are safe to drop. A session
@@ -133,9 +131,9 @@
 //! dropped between its commit and its listener fan-out leaves the audit rows
 //! written and unannounced — the listeners are closing with the process.
 //!
-//! `testing_spine_stub` leaves it unscheduled, matching the TS spine test
-//! server it is compared against, which schedules none. A consumer's
-//! `testing_*` binary runs it through the shared `run_app`: no cross-process
+//! `testing_spine_stub` schedules it [`AuthCleanupSchedule::Off`], matching
+//! the TS spine test server it is compared against, which schedules none. A
+//! consumer's `testing_*` binary runs it through the shared `run_app`: no cross-process
 //! suite can make an offer that is already expired, and a backdated session
 //! is refused the same whether or not its row has been swept — a connection
 //! left open on one is closed by the next pass.
@@ -164,6 +162,38 @@ use crate::session_queries::query_session_cleanup_expired;
 /// the interval bounds two things: how late an offer expiry's audit row
 /// lands, and how long dead rows linger.
 pub const DEFAULT_AUTH_CLEANUP_INTERVAL: Duration = Duration::from_mins(10);
+
+/// Whether a server runs the auth cleanup beside itself, and how often.
+///
+/// A required choice, with no default: every server names it in its backend
+/// options, so none gets or loses the sweeps without writing it out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthCleanupSchedule {
+    /// A pass when the server starts serving, then one per interval
+    /// ([`DEFAULT_AUTH_CLEANUP_INTERVAL`] unless the server has a reason to
+    /// differ) — what a production server runs. The interval must be
+    /// nonzero.
+    Every(Duration),
+    /// No cleanup — for a server held to one that schedules none (the TS
+    /// spine test server), or one whose sweeps run elsewhere.
+    Off,
+}
+
+/// The auth cleanup as a router's upkeep: [`spawn_auth_cleanup`] over
+/// `options` every `interval`, spawned by `fuz_http::serve_with_shutdown`
+/// when the router starts serving and joined at its shutdown.
+#[derive(Debug, Clone)]
+pub struct AuthCleanup {
+    pub options: AuthCleanupOptions,
+    /// Must be nonzero ([`spawn_auth_cleanup`] panics on zero).
+    pub interval: Duration,
+}
+
+impl fuz_http::Upkeep for AuthCleanup {
+    fn spawn(&self, shutdown: CancellationToken) -> JoinHandle<()> {
+        spawn_auth_cleanup(self.options.clone(), self.interval, shutdown)
+    }
+}
 
 /// What the cleanup sweeps need: the pool they run on, the bound audit
 /// emitter whose listeners the offer sweep fans out to, and the closer the
@@ -344,9 +374,10 @@ pub async fn run_auth_cleanup(options: &AuthCleanupOptions) -> Result<AuthCleanu
 /// Run [`run_auth_cleanup`] beside the server: a pass now, then one every
 /// `interval`, until `shutdown` is cancelled.
 ///
-/// The auth surface's upkeep in one call — spawn it once migrations have run
-/// and hand the handle to `fuz_http::serve_with_shutdown`, which joins it
-/// within the shutdown's bound (see the module doc's § Scheduling). A failed
+/// The auth surface's upkeep in one call — what [`AuthCleanup`] spawns when
+/// a router's serve duties carry it, once migrations have run;
+/// `fuz_http::serve_with_shutdown` joins it within the shutdown's bound (see
+/// the module doc's § Scheduling). A failed
 /// pass is logged at `warn` and the next interval retries; a pass that swept
 /// something logs its counts at `info`, and one that closed a swept
 /// session's connections logs that count too. Shutdown drops a pass in

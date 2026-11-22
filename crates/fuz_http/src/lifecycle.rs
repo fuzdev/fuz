@@ -20,7 +20,7 @@
 //! timeout; an upgraded WebSocket has left hyper for a detached task the
 //! drain does not see, so the process exits under it and the client reads a
 //! reset (a browser's 1006) instead of a close frame. So a router carries its
-//! [`ShutdownDuties`] — in a spine server the `fuz_auth::ConnectionCloser` and
+//! [`ServeDuties`] — in a spine server the `fuz_auth::ConnectionCloser` and
 //! the [`BackgroundWrites`] its backend holds, set on its
 //! [`crate::StackOptions`] — and when the token fires [`serve_with_shutdown`]
 //! closes every live connection ([`ShutdownCloser::close_all_connections`])
@@ -100,24 +100,31 @@
 //! routes the signal, closes the live connections, and bounds the drain; it
 //! never absorbs domain cleanup.
 //!
-//! Background upkeep runs beside the server on the same token:
+//! ## Upkeep runs beside the server
+//!
+//! Background upkeep runs beside the server on the same token, and
 //! [`spawn_periodic`] (re-exported from [`fuz_sys::periodic`]) is the loop a
-//! sweep runs on — `fuz_auth::spawn_auth_cleanup` is built on it — and
-//! [`serve_with_shutdown`] joins each task it is handed after the connection
-//! drain and before the write drain, within the same bound.
+//! sweep runs on. The upkeep a router owes is one of its [`ServeDuties`]
+//! ([`ServeDuties::with_upkeep`], an [`Upkeep`] each) — in a spine server the
+//! auth cleanup (`fuz_auth::AuthCleanup`), attached by its backend — so a
+//! router composed over a backend is never served without its sweeps.
+//! [`serve_with_shutdown`] spawns the duties' upkeep when it starts serving,
+//! and joins it, with any extra task it is handed, after the connection drain
+//! and before the write drain, within the same bound.
 //!
 //! ```no_run
 //! # use std::time::Duration;
 //! # async fn run(listener: tokio::net::TcpListener, router: fuz_http::GatedRouter) {
 //! # async fn sweep() -> Result<(), std::io::Error> { Ok(()) }
 //! let token = fuz_http::shutdown_token();
-//! let upkeep =
+//! // the router's own upkeep comes with it; an extra task is spawned here
+//! let extra =
 //!     fuz_http::spawn_periodic("sweep", Duration::from_secs(600), token.clone(), sweep);
 //! let served = fuz_http::serve_with_shutdown(
 //!     listener,
 //!     router,
 //!     token,
-//!     vec![upkeep],
+//!     vec![extra],
 //!     Duration::from_secs(10),
 //! )
 //! .await;
@@ -168,8 +175,9 @@ pub use fuz_sys::signal::shutdown_token;
 /// The periodic background task loop — a startup pass, then one per interval,
 /// until the token is cancelled — re-exported from [`fuz_sys::periodic`],
 /// where it is single-sourced beside the shutdown token it stops on. A spine
-/// server runs its sweeps on it and hands each handle to
-/// [`serve_with_shutdown`], which joins it within the shutdown's bound.
+/// server runs its sweeps on it — an [`Upkeep`] of its router's duties, or a
+/// task handed to [`serve_with_shutdown`] — and the serve joins each within
+/// the shutdown's bound.
 pub use fuz_sys::periodic::spawn_periodic;
 
 /// The token type [`shutdown_token`] returns and [`serve_with_shutdown`] /
@@ -210,7 +218,7 @@ pub trait ShutdownCloser: Send + Sync {
     fn wait_closed(&self) -> ShutdownFuture<'_>;
 }
 
-/// The closer of a router with no [`ShutdownDuties`]: closes nothing and has
+/// The closer of a router with no [`ServeDuties`]: closes nothing and has
 /// nothing to wait for.
 #[derive(Debug, Default, Clone, Copy)]
 struct NoopShutdownCloser;
@@ -311,54 +319,102 @@ impl ConnectionTimeouts {
 /// before trying again, as axum's serve does.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_secs(1);
 
-/// What serving a router owes at shutdown beyond its HTTP requests: closing
-/// its live connections, and draining its detached writes.
+/// A background task a router owes while it is served — a periodic sweep
+/// beside the server, such as the spine's auth cleanup
+/// (`fuz_auth::AuthCleanup`).
 ///
-/// Carried by the router itself — set on [`crate::StackOptions::shutdown`]
-/// and kept by the [`GatedRouter`] [`crate::compose_stack`] builds — so
-/// [`serve_with_shutdown`] takes no closer of its own and a router is always
-/// served with the duties it was composed with. A spine server gets them from
-/// its backend's stack options (`fuz_actions::server::AppBackend::stack_options`);
-/// a router composed with none ([`crate::StackOptions::without_backend`]) owes nothing,
-/// which fits only a router with no live connection and no detached write —
-/// the boot-only router.
+/// One of a router's [`ServeDuties`] ([`ServeDuties::with_upkeep`]):
+/// [`serve_with_shutdown`] calls [`Self::spawn`] when it starts serving and
+/// joins the handle at shutdown, within the drain bound. A trait object
+/// because the tasks a router owes are built above this crate (the auth
+/// cleanup needs `fuz_auth`'s pool, emitter and closer).
 ///
-/// Both halves are required: a closer with no drain, or a drain with no
-/// closer, is not a shape a server can have.
-#[derive(Clone)]
-pub struct ShutdownDuties {
-    closer: Arc<dyn ShutdownCloser>,
-    writes: Arc<BackgroundWrites>,
+/// **Object-safe** — consumed as `Arc<dyn Upkeep>`.
+pub trait Upkeep: Send + Sync {
+    /// Spawn the task on the running tokio runtime and return its handle. The
+    /// task must stop on `shutdown` — the serve joins it within the drain
+    /// bound and aborts it past that, counting it as given up.
+    fn spawn(&self, shutdown: CancellationToken) -> JoinHandle<()>;
 }
 
-impl ShutdownDuties {
+/// What serving a router owes beyond its HTTP requests: the upkeep run beside
+/// it, closing its live connections at shutdown, and draining its detached
+/// writes.
+///
+/// Carried by the router itself — set on
+/// [`crate::StackOptions::serve_duties`] and kept by the [`GatedRouter`]
+/// [`crate::compose_stack`] builds — so [`serve_with_shutdown`] takes no
+/// closer of its own and a router is always served with the duties it was
+/// composed with. A spine server gets them from its backend's stack options
+/// (`fuz_actions::server::AppBackend::stack_options`); a router composed with
+/// none ([`crate::StackOptions::without_backend`]) owes nothing, which fits
+/// only a router with no live connection, no detached write and no upkeep —
+/// the boot-only router. Each serve of the router spawns its upkeep: serve a
+/// router once — a clone served on a second listener runs a second cleanup.
+///
+/// The closer and the drain are both required: a closer with no drain, or a
+/// drain with no closer, is not a shape a server can have. The upkeep is
+/// what the server schedules, none by default.
+#[derive(Clone)]
+pub struct ServeDuties {
+    closer: Arc<dyn ShutdownCloser>,
+    writes: Arc<BackgroundWrites>,
+    upkeep: Vec<Arc<dyn Upkeep>>,
+}
+
+impl ServeDuties {
     /// The duties of a server whose live connections close through `closer`
     /// and whose detached writes are tracked by `writes` — drained last, once
     /// every request has answered and the upkeep has stopped, so the drain
-    /// sees every write those spawned.
+    /// sees every write those spawned. No upkeep until
+    /// [`Self::with_upkeep`] adds it.
     #[must_use]
     pub fn new(closer: Arc<dyn ShutdownCloser>, writes: Arc<BackgroundWrites>) -> Self {
-        Self { closer, writes }
+        Self {
+            closer,
+            writes,
+            upkeep: Vec::new(),
+        }
+    }
+
+    /// These duties with `upkeep` added: spawned when the router starts
+    /// serving and joined at shutdown, after the connection drain and before
+    /// the write drain.
+    #[must_use]
+    pub fn with_upkeep(mut self, upkeep: Arc<dyn Upkeep>) -> Self {
+        self.upkeep.push(upkeep);
+        self
+    }
+
+    /// How many upkeep tasks serving the router spawns.
+    #[must_use]
+    pub const fn upkeep_count(&self) -> usize {
+        self.upkeep.len()
     }
 }
 
-impl std::fmt::Debug for ShutdownDuties {
+impl std::fmt::Debug for ServeDuties {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ShutdownDuties")
+        f.debug_struct("ServeDuties")
             .field("writes_in_flight", &self.writes.inflight_count())
+            .field("upkeep", &self.upkeep.len())
             .finish_non_exhaustive()
     }
 }
 
-/// Serve `router` on `listener` until `token` fires, then shut down within
-/// one bound: close the router's live connections, drain its requests, join
-/// `upkeep`, and drain its detached writes.
+/// Serve `router` on `listener` with its upkeep beside it until `token`
+/// fires, then shut down within one bound.
+///
+/// The shutdown closes the router's live connections, drains its requests,
+/// joins its upkeep and `extra_upkeep`, and drains its detached writes.
 ///
 /// `router` is a [`GatedRouter`] — the output of [`crate::compose_stack`] —
 /// so every request this loop serves has passed the stack's gates; a router
 /// assembled outside the stack has no way in. It carries its
-/// [`ShutdownDuties`] (or none), so the closer and the writes drained are
-/// always the ones it was composed with.
+/// [`ServeDuties`] (or none), so the upkeep run, the closer, and the writes
+/// drained are always the ones it was composed with. The duties' upkeep is
+/// spawned on `token` before the first accept; `extra_upkeep` is the
+/// caller's own, already spawned on `token`.
 ///
 /// Each accepted connection is served by hyper (HTTP/1, with upgrades, so a
 /// WebSocket handshake hands its socket to the handler), as `axum::serve`
@@ -401,8 +457,9 @@ impl std::fmt::Debug for ShutdownDuties {
 ///    end; the cut is what lets that connection, and the registration its
 ///    body holds, go. A connection whose handler is still running, or whose
 ///    stream is still being written to its client, is not cut.
-/// 3. Join each `upkeep` task — the periodic sweeps beside the server, which
-///    stop on the same token. One still running at the bound is aborted.
+/// 3. Join each upkeep task — the duties' and `extra_upkeep`, the periodic
+///    sweeps beside the server, which stop on the same token. One still
+///    running at the bound is aborted.
 /// 4. Drain the duties' detached writes ([`BackgroundWrites::drain`]). They
 ///    follow steps 2 and 3, so every write a finished request or sweep
 ///    spawned is seen.
@@ -421,13 +478,20 @@ impl std::fmt::Debug for ShutdownDuties {
 /// None in practice — accept errors are retried, never returned, as
 /// `axum::serve` treats them — but the [`std::io::Error`] stays in the
 /// signature for consumers to map into their startup-error variant. Reaching
-/// the drain timeout is not an error. Every step above runs before this
-/// returns.
+/// the drain timeout is not an error here: it is the returned
+/// [`ServeShutdown`]'s to report ([`ServeShutdown::gave_up`]). Every step
+/// above runs before this returns.
+///
+/// # Panics
+///
+/// When called outside a tokio runtime (the upkeep is spawned on it), or
+/// when an [`Upkeep::spawn`] panics (a hand-built `fuz_auth::AuthCleanup`
+/// with a zero interval).
 pub async fn serve_with_shutdown(
     listener: TcpListener,
     router: GatedRouter,
     token: CancellationToken,
-    upkeep: Vec<JoinHandle<()>>,
+    extra_upkeep: Vec<JoinHandle<()>>,
     drain_timeout: Duration,
 ) -> Result<ServeShutdown, std::io::Error> {
     let (router, duties) = router.into_parts();
@@ -436,7 +500,7 @@ pub async fn serve_with_shutdown(
         router,
         duties.as_ref(),
         token,
-        upkeep,
+        extra_upkeep,
         drain_timeout,
         ConnectionTimeouts::DEFAULT,
     )
@@ -466,17 +530,39 @@ pub struct ServeShutdown {
     pub writes_given_up: usize,
 }
 
+impl ServeShutdown {
+    /// Whether the shutdown gave up on anything — the bound ran out before
+    /// every step finished. A server reports it as a failed exit.
+    #[must_use]
+    pub const fn gave_up(&self) -> bool {
+        self.closes_given_up
+            || self.requests_given_up > 0
+            || self.connections_given_up > 0
+            || self.upkeep_given_up > 0
+            || self.writes_given_up > 0
+    }
+}
+
 /// [`serve_with_shutdown`] over the router's parts, with each connection's
 /// deadlines given.
 async fn serve_with_timeouts(
     listener: TcpListener,
     router: Router,
-    duties: Option<&ShutdownDuties>,
+    duties: Option<&ServeDuties>,
     token: CancellationToken,
-    upkeep: Vec<JoinHandle<()>>,
+    extra_upkeep: Vec<JoinHandle<()>>,
     drain_timeout: Duration,
     timeouts: ConnectionTimeouts,
 ) -> Result<ServeShutdown, std::io::Error> {
+    // the duties' upkeep first, spawned before the first accept
+    let mut upkeep: Vec<JoinHandle<()>> = duties.map_or_else(Vec::new, |duties| {
+        duties
+            .upkeep
+            .iter()
+            .map(|task| task.spawn(token.clone()))
+            .collect()
+    });
+    upkeep.extend(extra_upkeep);
     let connections = TaskTracker::new();
     let cut = CancellationToken::new();
     // every handler running on any connection, so a drain that runs out can
@@ -959,9 +1045,9 @@ mod tests {
     }
 
     /// Duties over `closer`, with an empty write tracker.
-    fn duties(closer: &Arc<TestCloser>) -> ShutdownDuties {
+    fn duties(closer: &Arc<TestCloser>) -> ServeDuties {
         let closer: Arc<dyn ShutdownCloser> = Arc::<TestCloser>::clone(closer);
-        ShutdownDuties::new(closer, Arc::new(BackgroundWrites::default()))
+        ServeDuties::new(closer, Arc::new(BackgroundWrites::default()))
     }
 
     /// One HTTP/1.1 `GET path` on `addr`, returning the whole response.
@@ -1065,6 +1151,96 @@ mod tests {
         );
         assert_eq!(closer.close_calls.load(Ordering::SeqCst), 1);
         assert_eq!(closer.wait_finished.load(Ordering::SeqCst), 1);
+    }
+
+    /// An upkeep that records its task's start and its stop on the token.
+    #[derive(Default)]
+    struct RecordingUpkeep {
+        spawned: AtomicUsize,
+        started: Arc<Notify>,
+        stopped: Arc<AtomicBool>,
+    }
+
+    impl Upkeep for RecordingUpkeep {
+        fn spawn(&self, shutdown: CancellationToken) -> JoinHandle<()> {
+            self.spawned.fetch_add(1, Ordering::SeqCst);
+            let started = Arc::clone(&self.started);
+            let stopped = Arc::clone(&self.stopped);
+            tokio::spawn(async move {
+                started.notify_one();
+                shutdown.cancelled().await;
+                stopped.store(true, Ordering::SeqCst);
+            })
+        }
+    }
+
+    /// The upkeep a router's duties carry runs while it is served — spawned
+    /// when the serve starts, on its token — and is joined before the serve
+    /// returns: nothing the caller spawns or hands over.
+    #[tokio::test]
+    async fn the_duties_upkeep_runs_beside_the_serve_and_is_joined() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let closer = Arc::new(TestCloser::default());
+        closer.release_wait.notify_one();
+        let upkeep = Arc::new(RecordingUpkeep::default());
+        let duties = duties(&closer).with_upkeep(Arc::<RecordingUpkeep>::clone(&upkeep));
+        assert_eq!(duties.upkeep_count(), 1);
+        let token = CancellationToken::new();
+        let server = tokio::spawn(serve_with_shutdown(
+            listener,
+            GatedRouter::ungated_for_tests(Router::new(), Some(duties)),
+            token.clone(),
+            Vec::new(),
+            Duration::from_secs(30),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(10), upkeep.started.notified())
+            .await
+            .expect("the upkeep starts while the router is served");
+        assert!(!upkeep.stopped.load(Ordering::SeqCst));
+        token.cancel();
+        let given_up = tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .expect("the serve returns")
+            .unwrap()
+            .unwrap();
+        assert_eq!(given_up, ServeShutdown::default());
+        assert!(
+            upkeep.stopped.load(Ordering::SeqCst),
+            "joined before the serve returned"
+        );
+        assert_eq!(upkeep.spawned.load(Ordering::SeqCst), 1);
+    }
+
+    /// A shutdown gave up when any count is nonzero or the closes did not
+    /// finish, and only then.
+    #[test]
+    fn a_shutdown_gave_up_when_anything_was_left() {
+        assert!(!ServeShutdown::default().gave_up());
+        for given_up in [
+            ServeShutdown {
+                closes_given_up: true,
+                ..ServeShutdown::default()
+            },
+            ServeShutdown {
+                requests_given_up: 1,
+                ..ServeShutdown::default()
+            },
+            ServeShutdown {
+                connections_given_up: 1,
+                ..ServeShutdown::default()
+            },
+            ServeShutdown {
+                upkeep_given_up: 1,
+                ..ServeShutdown::default()
+            },
+            ServeShutdown {
+                writes_given_up: 1,
+                ..ServeShutdown::default()
+            },
+        ] {
+            assert!(given_up.gave_up(), "{given_up:?}");
+        }
     }
 
     /// `serve_with_shutdown` does not return until the closed connections

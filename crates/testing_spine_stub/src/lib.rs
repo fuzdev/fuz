@@ -552,9 +552,8 @@ fn load_expected_schema(path: &str) -> Result<&'static str, StartupError> {
 /// pre-migration hook), mounts the standard surface plus the `fuz_testing`
 /// seams, and serves until SIGINT/SIGTERM.
 ///
-/// No upkeep runs beside it, unlike the production spine servers: the stub
-/// is compared against the TS spine test server, which schedules no cleanup.
-/// The sweeps are covered directly by `fuz_auth`'s `tests/auth_cleanup.rs`.
+/// No upkeep runs beside it, unlike the production spine servers: its auth
+/// cleanup is `Off` (see the backend options below).
 ///
 /// # Errors
 ///
@@ -613,7 +612,14 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             // the login-security suite drives the 429 wire shape over a real
             // socket while the rest never meet it.
             rate_limiters: limiter_mode(config.enable_login_rate_limit),
-            ..fuz_testing::testing_backend_options(daemon_token_state)
+            // Off: the stub is compared against the TS spine test server,
+            // which schedules no cleanup, so a sweep here would be a
+            // difference the transcripts could see. The sweeps are covered
+            // directly by `fuz_auth`'s `tests/auth_cleanup.rs`.
+            ..fuz_testing::testing_backend_options(
+                daemon_token_state,
+                fuz_auth::AuthCleanupSchedule::Off,
+            )
         },
     )
     .await?;
@@ -911,7 +917,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             addr,
             drain_timeout,
             shutdown,
-            upkeep: None,
+            extra_upkeep: Vec::new(),
         },
     )
     .await

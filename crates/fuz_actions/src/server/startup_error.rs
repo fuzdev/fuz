@@ -50,6 +50,13 @@ pub enum StartupError {
     #[error("server error")]
     Serve(#[source] std::io::Error),
 
+    /// The shutdown's drain bound ran out with work still running — what it
+    /// gave up on, which died with the process: requests, connections, live
+    /// connection closes, upkeep tasks, detached writes. Each was logged as
+    /// it was given up on.
+    #[error("the shutdown gave up past its drain timeout: {}", describe_given_up(.0))]
+    ShutdownGivenUp(fuz_http::ServeShutdown),
+
     /// A database operation failed: the pool, a migration, a boot query.
     #[error("database error")]
     Database(#[from] fuz_db::DbError),
@@ -87,6 +94,7 @@ impl StartupError {
             Self::Config(_) | Self::TransactionIsolation { .. } => 2,
             Self::Bind { .. }
             | Self::Serve(_)
+            | Self::ShutdownGivenUp(_)
             | Self::Database(_)
             | Self::ActionRegistry(_)
             | Self::ExpectedSchema(_)
@@ -132,6 +140,11 @@ impl StartupError {
             Self::ExpectedSchema(_) => {
                 Some("regenerate expected_schema.json from a fresh migration run and rebuild")
             }
+            Self::ShutdownGivenUp(_) => Some(
+                "work still running when the drain timeout ran out was cut off; the lines \
+                 logged at shutdown name it — a handler, stream or task that does not stop \
+                 on the shutdown token, or a database too slow to finish its writes",
+            ),
             Self::Database(
                 fuz_db::DbError::Migration(_)
                 | fuz_db::DbError::InvalidIdentifier(_)
@@ -143,6 +156,32 @@ impl StartupError {
             | Self::Internal(_) => None,
         }
     }
+}
+
+/// What a shutdown gave up on, in words: each nonzero count, and the closes.
+fn describe_given_up(given_up: &fuz_http::ServeShutdown) -> String {
+    let fuz_http::ServeShutdown {
+        closes_given_up,
+        requests_given_up,
+        connections_given_up,
+        upkeep_given_up,
+        writes_given_up,
+    } = *given_up;
+    let mut parts = Vec::new();
+    for (count, what) in [
+        (requests_given_up, "request(s)"),
+        (connections_given_up, "connection(s)"),
+        (upkeep_given_up, "upkeep task(s)"),
+        (writes_given_up, "detached write(s)"),
+    ] {
+        if count > 0 {
+            parts.push(format!("{count} {what}"));
+        }
+    }
+    if closes_given_up {
+        parts.push("the live connections' closes".to_owned());
+    }
+    parts.join(", ")
 }
 
 /// `Ok` when `value`, a `default_transaction_isolation` setting, is exactly
@@ -171,7 +210,7 @@ mod tests {
 
     #[test]
     fn exit_codes_key_to_the_operator_remedy() {
-        let cases: [(StartupError, u8); 8] = [
+        let cases: [(StartupError, u8); 9] = [
             (StartupError::Config(String::new()), 2),
             (
                 StartupError::TransactionIsolation {
@@ -187,6 +226,13 @@ mod tests {
                 1,
             ),
             (StartupError::Serve(std::io::Error::other("boom")), 1),
+            (
+                StartupError::ShutdownGivenUp(fuz_http::ServeShutdown {
+                    upkeep_given_up: 1,
+                    ..fuz_http::ServeShutdown::default()
+                }),
+                1,
+            ),
             (
                 StartupError::Database(fuz_db::DbError::InvalidUrl(String::new())),
                 1,
@@ -247,6 +293,24 @@ mod tests {
                 source,
             }));
         assert!(error.hint().is_some_and(|h| h.contains("DATABASE_URL")));
+    }
+
+    /// A given-up shutdown names what it gave up on, and points at the log.
+    #[test]
+    fn a_given_up_shutdown_names_what_it_gave_up_on() {
+        let error = StartupError::ShutdownGivenUp(fuz_http::ServeShutdown {
+            closes_given_up: true,
+            requests_given_up: 2,
+            connections_given_up: 3,
+            upkeep_given_up: 0,
+            writes_given_up: 1,
+        });
+        assert_eq!(
+            error.to_string(),
+            "the shutdown gave up past its drain timeout: 2 request(s), 3 connection(s), \
+             1 detached write(s), the live connections' closes"
+        );
+        assert!(error.hint().is_some_and(|h| h.contains("shutdown token")));
     }
 
     #[test]

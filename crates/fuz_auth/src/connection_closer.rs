@@ -9,7 +9,7 @@
 //! bind [`NoopConnectionCloser`].
 //!
 //! It extends [`fuz_http::ShutdownCloser`], so the closer a server already
-//! holds is also its router's shutdown duty (`fuz_http::ShutdownDuties`),
+//! holds is also one of its router's serve duties (`fuz_http::ServeDuties`),
 //! which `fuz_http::serve_with_shutdown` closes every live connection through
 //! when the server shuts down: one capability reaches every transport for
 //! revocation and shutdown alike.
@@ -83,7 +83,7 @@ use crate::audit_emitter::AuditPostCommit;
 /// The [`ShutdownCloser`] supertrait is the shutdown half: every impl also
 /// closes all of its connections, and waits for them to finish closing, when
 /// the server stops — so an `Arc<dyn ConnectionCloser>` becomes the router's
-/// `fuz_http::ShutdownDuties` closer as it is (it upcasts to
+/// `fuz_http::ServeDuties` closer as it is (it upcasts to
 /// `Arc<dyn ShutdownCloser>`). Its `wait_closed` is the one async method, and
 /// only shutdown calls it.
 ///

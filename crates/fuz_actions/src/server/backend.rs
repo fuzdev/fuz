@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use axum::Router;
 use fuz_auth::{
-    AuditEmitter, AuthGate, ConnectionCloser, Keyring, PasswordHasher, RateLimiter,
-    RateLimiterMode, RateLimiterOptions, SharedDaemonTokenState,
+    AuditEmitter, AuthCleanupSchedule, AuthGate, ConnectionCloser, Keyring, PasswordHasher,
+    RateLimiter, RateLimiterMode, RateLimiterOptions, SharedDaemonTokenState,
 };
 use fuz_db::{MigrationNamespace, Pool};
 use fuz_http::{BackgroundWrites, BaseServerEnv, ParsedProxy, StackOptions};
@@ -145,8 +145,8 @@ impl Default for AuditSseSpec {
 }
 
 /// The swap points [`create_app_backend`] takes: the `testing_*` seams the
-/// production binary and its test sibling differ on, and the per-IP login
-/// bound.
+/// production binary and its test sibling differ on, the per-IP login
+/// bound, and the auth cleanup's schedule.
 #[expect(
     missing_debug_implementations,
     reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
@@ -169,19 +169,30 @@ pub struct SpineBackendOptions {
     /// Fired after the pool exists and before migrations. Production: `None`;
     /// a test binary's env-gated schema reset.
     pub pre_migration_hook: Option<PreMigrationHook<StartupError>>,
+    /// Whether the router served over the backend runs the auth cleanup
+    /// beside it ([`AppBackend::serve_duties`]). No default — every server
+    /// writes it out, [`Self::production`] included, so none gets or loses
+    /// the sweeps by omission. A production server:
+    /// `Every(fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL)`.
+    pub auth_cleanup: AuthCleanupSchedule,
 }
 
 impl SpineBackendOptions {
     /// The production options: `password_hasher`, every limiter enforced at
-    /// the spine defaults, no daemon token, no hook.
+    /// the spine defaults, no daemon token, no hook, and the auth cleanup on
+    /// `auth_cleanup` — a parameter, not a default, so the caller names it.
     #[must_use]
-    pub fn production(password_hasher: Arc<dyn PasswordHasher>) -> Self {
+    pub fn production(
+        password_hasher: Arc<dyn PasswordHasher>,
+        auth_cleanup: AuthCleanupSchedule,
+    ) -> Self {
         Self {
             password_hasher,
             rate_limiters: RateLimiterMode::Enforced,
             login_ip_rate_limit: fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT,
             daemon_token_state: None,
             pre_migration_hook: None,
+            auth_cleanup,
         }
     }
 }
@@ -224,6 +235,9 @@ pub struct AppBackend {
     pub trusted_proxies: Arc<Vec<ParsedProxy>>,
     pub bootstrap_token_path: Option<PathBuf>,
     pub session_cookie_name: &'static str,
+    /// The auth cleanup's schedule ([`SpineBackendOptions::auth_cleanup`]),
+    /// which [`Self::serve_duties`] attaches.
+    pub auth_cleanup: AuthCleanupSchedule,
 }
 
 impl std::fmt::Debug for AppBackend {
@@ -240,6 +254,7 @@ impl std::fmt::Debug for AppBackend {
                 "has_bootstrap_token_path",
                 &self.bootstrap_token_path.is_some(),
             )
+            .field("auth_cleanup", &self.auth_cleanup)
             .finish_non_exhaustive()
     }
 }
@@ -248,7 +263,7 @@ impl AppBackend {
     /// The server's one tracker of detached writes — the one its audit
     /// emitter was built over: the gate ([`Self::auth_gate`]) spawns its
     /// token touches on it, and shutdown (through [`Self::stack_options`]'
-    /// duties) and `_testing_drain_effects` drain it.
+    /// serve duties) and `_testing_drain_effects` drain it.
     #[must_use]
     pub fn background_writes(&self) -> &Arc<BackgroundWrites> {
         self.audit_emitter.background_writes()
@@ -278,20 +293,20 @@ impl AppBackend {
     /// it ([`BrowserGateSpec::host_gate`]), and the gate's cookie-clear hook
     /// ([`fuz_auth::AuthGate::cookie_clear_hook`]), so a server composed on
     /// these options clears an invalid session cookie under the auth scope
-    /// with nothing mounted by hand — and the backend's shutdown duties
-    /// ([`Self::shutdown_duties`]), so the router composed on them is always
-    /// served with this backend's closer and write drain.
+    /// with nothing mounted by hand — and the backend's serve duties
+    /// ([`Self::serve_duties`]), so the router composed on them is always
+    /// served with this backend's auth cleanup, closer and write drain.
     ///
     /// The one way a live router gets its duties: a router composed over
-    /// [`StackOptions::without_backend`] instead carries none, and is served with no
-    /// close and no drain.
+    /// [`StackOptions::without_backend`] instead carries none, and is served
+    /// with no cleanup, no close and no drain.
     #[must_use]
     pub fn stack_options(&self) -> StackOptions {
         StackOptions {
             host_gate: self.host_gate,
             allowed_origins_var: self.allowed_origins_var,
             cookie_clear: Some(self.auth_gate().cookie_clear_hook()),
-            shutdown: Some(self.shutdown_duties()),
+            serve_duties: Some(self.serve_duties()),
             ..StackOptions::without_backend(
                 self.allowed_origins.clone(),
                 Arc::clone(&self.trusted_proxies),
@@ -314,15 +329,26 @@ impl AppBackend {
         )
     }
 
-    /// What a router served over this backend owes at shutdown:
-    /// [`Self::connection_closer`], which closes every live connection, and
-    /// [`Self::background_writes`], drained last. Set on
+    /// What a router served over this backend owes: the auth cleanup beside
+    /// it when [`Self::auth_cleanup`] is [`AuthCleanupSchedule::Every`]
+    /// ([`fuz_auth::AuthCleanup`] over [`Self::auth_cleanup_options`]),
+    /// [`Self::connection_closer`], which closes every live connection at
+    /// shutdown, and [`Self::background_writes`], drained last. Set on
     /// [`Self::stack_options`]; a hand-built `StackOptions` for a live router
     /// takes it from here.
     #[must_use]
-    pub fn shutdown_duties(&self) -> fuz_http::ShutdownDuties {
+    pub fn serve_duties(&self) -> fuz_http::ServeDuties {
         let closer: Arc<dyn fuz_http::ShutdownCloser> = self.connection_closer();
-        fuz_http::ShutdownDuties::new(closer, Arc::clone(self.background_writes()))
+        let duties = fuz_http::ServeDuties::new(closer, Arc::clone(self.background_writes()));
+        match self.auth_cleanup {
+            AuthCleanupSchedule::Every(interval) => {
+                duties.with_upkeep(Arc::new(fuz_auth::AuthCleanup {
+                    options: self.auth_cleanup_options(),
+                    interval,
+                }))
+            }
+            AuthCleanupSchedule::Off => duties,
+        }
     }
 
     /// The WebSocket registry as a `NotificationSender`, for the
@@ -350,6 +376,8 @@ impl AppBackend {
     /// The auth cleanup's options over this backend — its pool, its emitter
     /// (so expiry audits reach the emitter's listeners), and
     /// [`Self::connection_closer`] (so a swept session's connections close).
+    /// What [`Self::serve_duties`] schedules, and what a test runs a pass
+    /// over (`fuz_auth::run_auth_cleanup`).
     #[must_use]
     pub fn auth_cleanup_options(&self) -> fuz_auth::AuthCleanupOptions {
         fuz_auth::AuthCleanupOptions {
@@ -517,8 +545,14 @@ pub fn build_app_backend(
         login_ip_rate_limit,
         daemon_token_state,
         pre_migration_hook: _,
+        auth_cleanup,
     } = options;
     let rate_limiters = *rate_limiters;
+    if *auth_cleanup == AuthCleanupSchedule::Every(Duration::ZERO) {
+        return Err(StartupError::Config(
+            "the auth cleanup's interval must be nonzero".into(),
+        ));
+    }
     // a name the `Cookie` grammar cannot carry would be written as a header
     // that reads back differently, or not at all
     if !fuz_auth::is_cookie_name(spec.session_cookie_name) {
@@ -561,6 +595,7 @@ pub fn build_app_backend(
         trusted_proxies: Arc::new(env.trusted_proxies.clone()),
         bootstrap_token_path: env.bootstrap_token_path.clone(),
         session_cookie_name: spec.session_cookie_name,
+        auth_cleanup: *auth_cleanup,
         pool,
     })
 }
@@ -682,7 +717,10 @@ mod tests {
         match create_app_backend(
             env,
             &spec,
-            SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                AuthCleanupSchedule::Off,
+            ),
         )
         .await
         {
@@ -760,7 +798,10 @@ mod tests {
             let backend = build_app_backend(
                 &env,
                 &spec,
-                &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+                &SpineBackendOptions::production(
+                    Arc::new(fuz_auth::Argon2idHasher::new()),
+                    AuthCleanupSchedule::Off,
+                ),
             )
             .expect("the core builds without the database");
             assert_eq!(backend.stack_options().host_gate, host_gate);
@@ -783,7 +824,10 @@ mod tests {
         let backend = build_app_backend(
             &env,
             &spec,
-            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            &SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                AuthCleanupSchedule::Off,
+            ),
         )
         .expect("the core builds without the database");
         let hook = backend
@@ -804,11 +848,11 @@ mod tests {
         assert_eq!(hook.clear_for("/health", &headers), None);
     }
 
-    /// The backend's stack options carry its shutdown duties, so the router
+    /// The backend's stack options carry its serve duties, so the router
     /// composed over them is served with the backend's closer and drain; the
     /// boot-only router, over `StackOptions::without_backend`, carries none.
     #[tokio::test]
-    async fn a_router_over_the_backend_options_carries_the_shutdown_duties() {
+    async fn a_router_over_the_backend_options_carries_the_serve_duties() {
         let env = wildcard_env("http://localhost", None);
         let spec = AppBackendSpec {
             session_cookie_name: "spine_test_session",
@@ -820,16 +864,68 @@ mod tests {
         let backend = build_app_backend(
             &env,
             &spec,
-            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            &SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                AuthCleanupSchedule::Off,
+            ),
         )
         .expect("the core builds without the database");
         let live = super::super::boot_only_router("duties_test_server", &backend.stack_options());
-        assert!(live.has_shutdown_duties());
+        assert!(live.has_serve_duties());
         let bare = super::super::boot_only_router(
             "duties_test_server",
             &StackOptions::without_backend(backend.allowed_origins, Arc::new(Vec::new())),
         );
-        assert!(!bare.has_shutdown_duties());
+        assert!(!bare.has_serve_duties());
+    }
+
+    /// The backend's schedule decides the upkeep its serve duties carry, and
+    /// so the router composed over its stack options: the auth cleanup for
+    /// `Every`, nothing for `Off`. A zero interval refuses the boot.
+    #[test]
+    fn the_auth_cleanup_schedule_decides_the_duties_upkeep() {
+        let env = wildcard_env("http://localhost", None);
+        let spec = AppBackendSpec {
+            session_cookie_name: "spine_test_session",
+            migration_namespaces: &[],
+            expected_schema_json: None,
+            audit_sse: None,
+            browser_gates: BrowserGateSpec::DEFAULT,
+        };
+        let build = |auth_cleanup| {
+            build_app_backend(
+                &env,
+                &spec,
+                &SpineBackendOptions::production(
+                    Arc::new(fuz_auth::Argon2idHasher::new()),
+                    auth_cleanup,
+                ),
+            )
+        };
+        for (schedule, upkeep) in [
+            (
+                AuthCleanupSchedule::Every(fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL),
+                1,
+            ),
+            (AuthCleanupSchedule::Off, 0),
+        ] {
+            let backend = build(schedule).expect("the core builds without the database");
+            assert_eq!(
+                backend.serve_duties().upkeep_count(),
+                upkeep,
+                "{schedule:?}"
+            );
+            let carried = backend
+                .stack_options()
+                .serve_duties
+                .expect("the stack options carry the duties");
+            assert_eq!(carried.upkeep_count(), upkeep, "{schedule:?}");
+        }
+        let Err(StartupError::Config(message)) = build(AuthCleanupSchedule::Every(Duration::ZERO))
+        else {
+            panic!("a zero interval builds");
+        };
+        assert!(message.contains("nonzero"), "{message}");
     }
 
     /// A session cookie name the `Cookie` grammar cannot carry refuses the
@@ -848,7 +944,10 @@ mod tests {
             let error = build_app_backend(
                 &env,
                 &spec,
-                &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+                &SpineBackendOptions::production(
+                    Arc::new(fuz_auth::Argon2idHasher::new()),
+                    AuthCleanupSchedule::Off,
+                ),
             )
             .expect_err("the name is refused");
             assert!(
@@ -888,7 +987,10 @@ mod tests {
         let backend = build_app_backend(
             &env,
             &spec,
-            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            &SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                AuthCleanupSchedule::Off,
+            ),
         )
         .expect("the core builds without the database");
         let request = Some(Duration::from_millis(250));
@@ -941,7 +1043,10 @@ mod tests {
         let backend = build_app_backend(
             &env,
             &spec,
-            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            &SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                AuthCleanupSchedule::Off,
+            ),
         )
         .expect("the core builds without the database");
 
@@ -1002,7 +1107,10 @@ mod tests {
         let backend = build_app_backend(
             &env,
             &spec,
-            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+            &SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                AuthCleanupSchedule::Off,
+            ),
         )
         .expect("the core builds without the database");
         register_audit_listeners(&backend);
@@ -1097,7 +1205,10 @@ mod tests {
                     audit_sse: Some(AuditSseSpec { keep_alive }),
                     browser_gates: BrowserGateSpec::DEFAULT,
                 },
-                &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+                &SpineBackendOptions::production(
+                    Arc::new(fuz_auth::Argon2idHasher::new()),
+                    AuthCleanupSchedule::Off,
+                ),
             )
         };
 
@@ -1175,7 +1286,10 @@ mod tests {
                         max_attempts,
                         ..fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT
                     },
-                    ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
+                    ..SpineBackendOptions::production(
+                        Arc::new(fuz_auth::Argon2idHasher::new()),
+                        AuthCleanupSchedule::Off,
+                    )
                 },
             )
             .expect("the core builds without the database")
@@ -1224,7 +1338,10 @@ mod tests {
                 &spec,
                 &SpineBackendOptions {
                     rate_limiters,
-                    ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
+                    ..SpineBackendOptions::production(
+                        Arc::new(fuz_auth::Argon2idHasher::new()),
+                        AuthCleanupSchedule::Off,
+                    )
                 },
             )
             .expect("the core builds without the database");

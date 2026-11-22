@@ -18,14 +18,14 @@
 //! ([`register_audit_sse_listener`](crate::register_audit_sse_listener)) only
 //! broadcasts.
 //!
-//! It is also the closer a consumer hands its scheduled auth cleanup
+//! It is also the closer the scheduled auth cleanup closes through
 //! (`fuz_auth::AuthCleanupOptions::connection_closer`): the session sweep writes
 //! no audit row, so its direct close is the sweep's only one — a repeat of the
 //! close each connection already makes at its credential's deadline — and it
 //! has to reach both transports for the same reason.
 //!
 //! And it is the server's shutdown closer, as the [`ShutdownCloser`] its
-//! `ConnectionCloser` extends, carried by the router (`fuz_http::ShutdownDuties`)
+//! `ConnectionCloser` extends, carried by the router (`fuz_http::ServeDuties`)
 //! to `fuz_http::serve_with_shutdown`: on shutdown it closes every WebSocket
 //! and every stream, and waits for both registries to finish.
 

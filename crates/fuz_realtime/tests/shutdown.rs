@@ -485,7 +485,7 @@ fn gated(router: axum::Router, closer: Arc<dyn ShutdownCloser>) -> fuz_http::Gat
         [fuz_http::RouteGroup::new("test", router, cap)],
         fuz_http::RouteGroup::new("fallback", axum::Router::new(), cap),
         &fuz_http::StackOptions {
-            shutdown: Some(fuz_http::ShutdownDuties::new(closer, writes)),
+            serve_duties: Some(fuz_http::ServeDuties::new(closer, writes)),
             ..fuz_http::StackOptions::without_backend(
                 fuz_http::AllowedOrigins::parse("https://app.example").unwrap(),
                 Arc::new(Vec::new()),

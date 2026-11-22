@@ -13,7 +13,7 @@
 //! write is spawned through the one tracker, which counts it in flight until
 //! its task ends, and the two barriers that must see the writes land await it: a server's
 //! graceful shutdown ([`crate::serve_with_shutdown`], through the router's
-//! [`crate::ShutdownDuties`]) and the `_testing_drain_effects` test action.
+//! [`crate::ServeDuties`]) and the `_testing_drain_effects` test action.
 //!
 //! A server's backend owns its one tracker (`fuz_actions::server::AppBackend`'s
 //! `background_writes`); its `fuz_auth::AuditEmitter` is built over it and its

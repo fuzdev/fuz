@@ -278,7 +278,10 @@ mod tests {
             },
             &SpineBackendOptions {
                 rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
-                ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
+                ..SpineBackendOptions::production(
+                    Arc::new(fuz_auth::Argon2idHasher::new()),
+                    fuz_auth::AuthCleanupSchedule::Off,
+                )
             },
         )
         .expect("the core builds without the database")

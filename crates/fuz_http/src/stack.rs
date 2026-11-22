@@ -112,7 +112,7 @@ use crate::body_limit::body_limit_layer;
 use crate::cookie_clear::{CookieClearHook, cookie_clear_layer};
 use crate::host::{HostGate, host_layer};
 use crate::ip_resolve::client_ip_middleware;
-use crate::lifecycle::ShutdownDuties;
+use crate::lifecycle::ServeDuties;
 use crate::origin::{AllowedOrigins, origin_layer};
 use crate::parsed_proxy::ParsedProxy;
 use crate::rest_error::{internal_error_response, method_not_allowed_response};
@@ -248,14 +248,14 @@ impl RouteGroup {
     }
 }
 
-/// What every group of a [`compose_stack`] router shares, and what the router
-/// owes at shutdown.
+/// What every group of a [`compose_stack`] router shares, and what serving
+/// the router owes.
 ///
 /// A spine server builds these from its backend
 /// (`fuz_actions::server::AppBackend::stack_options`), so the stack's origin
 /// check and the auth gate's in-handler one read the same allowlist, an
 /// invalid session cookie is cleared, and the router carries the backend's
-/// [`ShutdownDuties`]. A server with no backend (a boot-only router) uses
+/// [`ServeDuties`]. A server with no backend (a boot-only router) uses
 /// [`StackOptions::without_backend`], which sets none of the three.
 #[derive(Debug, Clone)]
 pub struct StackOptions {
@@ -283,20 +283,20 @@ pub struct StackOptions {
     /// its auth gate's hook (`fuz_auth::AuthGate::cookie_clear_hook`), which
     /// clears an invalid session cookie under the auth scope.
     pub cookie_clear: Option<CookieClearHook>,
-    /// What serving the router owes at shutdown — its live connections'
-    /// closer and its detached writes — kept by the [`GatedRouter`] and
-    /// discharged by [`crate::serve_with_shutdown`]. `None` owes nothing,
-    /// which fits only a router with no live connection and no detached
-    /// write: one composed with `None` around a WebSocket, an SSE stream, or a
-    /// route that spawns a write is served with no close and no drain, which
-    /// no type here can refuse.
-    pub shutdown: Option<ShutdownDuties>,
+    /// What serving the router owes — the upkeep run beside it, its live
+    /// connections' closer and its detached writes — kept by the
+    /// [`GatedRouter`] and discharged by [`crate::serve_with_shutdown`].
+    /// `None` owes nothing, which fits only a router with no live
+    /// connection, no detached write and no upkeep: one composed with `None`
+    /// around a WebSocket, an SSE stream, or a route that spawns a write is
+    /// served with no close and no drain, which no type here can refuse.
+    pub serve_duties: Option<ServeDuties>,
 }
 
 impl StackOptions {
     /// Options for a router with no backend behind it: the given allowlist
     /// (read from [`ALLOWED_ORIGINS_VAR`]) and trusted proxies, request
-    /// tracing on, the host gate on, no cookie-clear hook, and no shutdown
+    /// tracing on, the host gate on, no cookie-clear hook, and no serve
     /// duties.
     ///
     /// Right for the boot-only router, which has no live connection and no
@@ -315,7 +315,7 @@ impl StackOptions {
             host_gate: true,
             request_tracing: true,
             cookie_clear: None,
-            shutdown: None,
+            serve_duties: None,
         }
     }
 }
@@ -327,34 +327,34 @@ impl StackOptions {
 /// layer, and it is not a `tower` service, so it cannot be nested or
 /// mounted inside another router either. It is served by
 /// [`crate::serve_with_shutdown`], which takes nothing else, and it carries
-/// the [`ShutdownDuties`] it was composed with
-/// ([`StackOptions::shutdown`]), which that serve discharges. Cloning is
+/// the [`ServeDuties`] it was composed with
+/// ([`StackOptions::serve_duties`]), which that serve discharges. Cloning is
 /// cheap (an `axum::Router` is `Arc`-backed).
 #[derive(Clone)]
 pub struct GatedRouter {
     router: Router,
-    shutdown: Option<ShutdownDuties>,
+    serve_duties: Option<ServeDuties>,
 }
 
 impl std::fmt::Debug for GatedRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatedRouter")
-            .field("shutdown_duties", &self.shutdown)
+            .field("serve_duties", &self.serve_duties)
             .finish_non_exhaustive()
     }
 }
 
 impl GatedRouter {
-    /// The composed router and its shutdown duties, for the serve loop.
-    pub(crate) fn into_parts(self) -> (Router, Option<ShutdownDuties>) {
-        (self.router, self.shutdown)
+    /// The composed router and its serve duties, for the serve loop.
+    pub(crate) fn into_parts(self) -> (Router, Option<ServeDuties>) {
+        (self.router, self.serve_duties)
     }
 
-    /// Whether the router carries [`ShutdownDuties`] — set when its
-    /// [`StackOptions::shutdown`] was.
+    /// Whether the router carries [`ServeDuties`] — set when its
+    /// [`StackOptions::serve_duties`] was.
     #[must_use]
-    pub const fn has_shutdown_duties(&self) -> bool {
-        self.shutdown.is_some()
+    pub const fn has_serve_duties(&self) -> bool {
+        self.serve_duties.is_some()
     }
 
     /// Wrap a router that did not go through [`compose_stack`] — for this
@@ -362,9 +362,12 @@ impl GatedRouter {
     #[cfg(test)]
     pub(crate) const fn ungated_for_tests(
         router: Router,
-        shutdown: Option<ShutdownDuties>,
+        serve_duties: Option<ServeDuties>,
     ) -> Self {
-        Self { router, shutdown }
+        Self {
+            router,
+            serve_duties,
+        }
     }
 
     /// The composed router, to drive in-process (`tower::ServiceExt::oneshot`)
@@ -458,7 +461,7 @@ pub fn compose_stack(
     };
     GatedRouter {
         router,
-        shutdown: options.shutdown.clone(),
+        serve_duties: options.serve_duties.clone(),
     }
 }
 

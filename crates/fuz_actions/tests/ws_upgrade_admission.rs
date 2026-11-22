@@ -1229,7 +1229,7 @@ async fn an_upgrade_in_flight_at_shutdown_is_refused_with_1001_before_serve_retu
             let gate = fuz_testing::testing_auth_gate(pool_for_stack);
             let duty_closer: Arc<dyn ShutdownCloser> = closer;
             let stack_options = fuz_http::StackOptions {
-                shutdown: Some(fuz_http::ShutdownDuties::new(
+                serve_duties: Some(fuz_http::ServeDuties::new(
                     duty_closer,
                     gate.background_writes,
                 )),

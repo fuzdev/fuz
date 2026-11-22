@@ -20,8 +20,9 @@
 //!   RPC, WS, and the auth set), and [`compile_action_registry`].
 //! - [`serve_until_shutdown`] (bind → upkeep → serve → one bounded shutdown:
 //!   close and drain the connections, join the upkeep, drain the detached
-//!   writes) over a router that carries its shutdown duties
-//!   ([`AppBackend::stack_options`]), with [`spawn_upkeep`], [`boot_only`]
+//!   writes; a shutdown that gave up is an error) over a router that carries
+//!   its serve duties — the auth cleanup among them
+//!   ([`AppBackend::stack_options`]), with [`UpkeepTask`], [`boot_only`]
 //!   (the no-database branch, over [`boot_only_router`]), and
 //!   [`SpineRunOptions`], which a consumer's `RunAppOptions` embeds.
 //! - [`StartupError`] with the exit-code policy, and
@@ -48,8 +49,8 @@ pub use backend::{
 };
 pub use route_states::{AuthRestRoutes, compile_action_registry};
 pub use serve::{
-    NOT_FOUND_TEXT, ServeOptions, SpineRunOptions, UpkeepOptions, UpkeepTask, boot_only,
-    boot_only_router, fallback_group, not_found_response, probe_router, serve_until_shutdown,
-    spawn_upkeep, unmatched_route_response,
+    NOT_FOUND_TEXT, ServeOptions, SpineRunOptions, UpkeepTask, boot_only, boot_only_router,
+    fallback_group, not_found_response, probe_router, serve_until_shutdown,
+    unmatched_route_response,
 };
 pub use startup_error::{REQUIRED_TRANSACTION_ISOLATION, StartupError};

@@ -222,9 +222,9 @@ pub use audit_log_queries::{
 pub use auth_action_context::{AccountActionContext, AuthenticatedActionContext};
 pub use auth_action_entry::{AUTH_ACTION_ENTRY_REGISTRIES, AuthActionEntry, auth_action_entry};
 pub use auth_cleanup::{
-    AuthCleanupOptions, AuthCleanupResult, DEFAULT_AUTH_CLEANUP_INTERVAL,
-    cleanup_expired_role_grant_offers, cleanup_expired_sessions, run_auth_cleanup,
-    spawn_auth_cleanup,
+    AuthCleanup, AuthCleanupOptions, AuthCleanupResult, AuthCleanupSchedule,
+    DEFAULT_AUTH_CLEANUP_INTERVAL, cleanup_expired_role_grant_offers, cleanup_expired_sessions,
+    run_auth_cleanup, spawn_auth_cleanup,
 };
 pub use auth_gate::{AUTH_MIDDLEWARE_PATH, AuthGate, OriginChecked, auth_middleware_applies};
 pub use bootstrap::{

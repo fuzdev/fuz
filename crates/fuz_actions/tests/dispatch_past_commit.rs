@@ -173,7 +173,7 @@ async fn serve(
     JoinHandle<Result<ServeShutdown, std::io::Error>>,
 ) {
     let stack_options = fuz_http::StackOptions {
-        shutdown: Some(fuz_http::ShutdownDuties::new(closer, Arc::clone(writes))),
+        serve_duties: Some(fuz_http::ServeDuties::new(closer, Arc::clone(writes))),
         ..fuz_http::StackOptions::without_backend(
             gate(pool, writes).allowed_origins,
             Arc::new(Vec::new()),

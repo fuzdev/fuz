@@ -152,7 +152,7 @@ pub use jsonrpc_error::{
 };
 pub use lifecycle::{
     CancellationToken, DEFAULT_DRAIN_TIMEOUT, HEADER_READ_TIMEOUT, SHUTDOWN_CLOSE_TIMEOUT,
-    ServeShutdown, ShutdownCloser, ShutdownDuties, ShutdownFuture, WRITE_PROGRESS_TIMEOUT,
+    ServeDuties, ServeShutdown, ShutdownCloser, ShutdownFuture, Upkeep, WRITE_PROGRESS_TIMEOUT,
     serve_with_shutdown, shutdown_token, spawn_periodic,
 };
 pub use origin::{

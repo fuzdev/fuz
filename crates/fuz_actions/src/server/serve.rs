@@ -1,5 +1,5 @@
 //! Serving: the run options a consumer embeds, the probes and the boot-only
-//! router, the upkeep beside the server, and [`serve_until_shutdown`].
+//! router, the extra upkeep beside the server, and [`serve_until_shutdown`].
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,14 +40,16 @@ pub struct SpineRunOptions {
 
 impl SpineRunOptions {
     /// The production options at `default_addr`
-    /// ([`SpineBackendOptions::production`], the default drain timeout).
+    /// ([`SpineBackendOptions::production`] with the caller's
+    /// `auth_cleanup`, the default drain timeout).
     #[must_use]
     pub fn production(
         password_hasher: Arc<dyn fuz_auth::PasswordHasher>,
+        auth_cleanup: fuz_auth::AuthCleanupSchedule,
         default_addr: SocketAddr,
     ) -> Self {
         Self {
-            backend: SpineBackendOptions::production(password_hasher),
+            backend: SpineBackendOptions::production(password_hasher, auth_cleanup),
             default_addr,
             drain_timeout: fuz_http::DEFAULT_DRAIN_TIMEOUT,
         }
@@ -122,8 +124,9 @@ pub fn fallback_group() -> RouteGroup {
 /// The probes ([`probe_router`]) and the fallback, through the same stack as
 /// the full router (1 MiB cap, origin-checked). Without a database there is no
 /// backend, so `stack_options` comes from the env's allowlist and proxies
-/// ([`StackOptions::without_backend`]), and the router carries no shutdown duties — it
-/// has no live connection to close and no detached write to drain.
+/// ([`StackOptions::without_backend`]), and the router carries no serve duties — it
+/// has no upkeep to run, no live connection to close and no detached write to
+/// drain.
 #[must_use]
 pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions) -> GatedRouter {
     compose_stack(
@@ -171,59 +174,21 @@ pub fn boot_only(
     ))
 }
 
-/// A periodic task the server runs beside itself, spawned once the listener
-/// is bound: it takes the shutdown token and returns its handle.
+/// A server's own task beside it, spawned once the listener is bound: it
+/// takes the shutdown token and returns its handle.
+///
+/// A disk fact store's `fuz_fact::spawn_orphan_temp_sweeper`, an
+/// invite-expiry sweep. The backend's auth cleanup is not one: it rides on
+/// the router (`fuz_http::ServeDuties`).
 ///
 /// The task must stop on the token — the shutdown joins it within its one
 /// bound and aborts it past that.
 pub type UpkeepTask = Box<dyn FnOnce(CancellationToken) -> JoinHandle<()> + Send>;
 
-/// What [`spawn_upkeep`] schedules.
-#[expect(
-    missing_debug_implementations,
-    reason = "a boxed-closure field has no `Debug`"
-)]
-pub struct UpkeepOptions {
-    /// The spine's auth cleanup ([`fuz_auth::spawn_auth_cleanup`]), every
-    /// [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`]: expired sessions deleted
-    /// and their connections closed, expired role-grant offers audited once.
-    /// Built by `AppBackend::auth_cleanup_options`.
-    pub auth_cleanup: fuz_auth::AuthCleanupOptions,
-    /// The consumer's own tasks on the same token — a disk fact store's
-    /// `fuz_fact::spawn_orphan_temp_sweeper`, an invite-expiry sweep.
-    pub extra: Vec<UpkeepTask>,
-}
-
-/// Spawn the upkeep tasks.
-///
-/// Each runs a startup pass and then one per interval until `shutdown`
-/// fires. For the auth cleanup, cancelling drops a pass in progress, so its
-/// handle resolves at once; a consumer's own task resolves when it stops on
-/// the token. Call it once migrations have run — the startup passes read the
-/// schema.
-///
-/// # Panics
-///
-/// When called outside a tokio runtime.
-#[must_use]
-pub fn spawn_upkeep(options: UpkeepOptions, shutdown: &CancellationToken) -> Vec<JoinHandle<()>> {
-    let UpkeepOptions {
-        auth_cleanup,
-        extra,
-    } = options;
-    let mut handles = vec![fuz_auth::spawn_auth_cleanup(
-        auth_cleanup,
-        fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
-        shutdown.clone(),
-    )];
-    handles.extend(extra.into_iter().map(|task| task(shutdown.clone())));
-    handles
-}
-
 /// What [`serve_until_shutdown`] serves with, beside the router.
 #[expect(
     missing_debug_implementations,
-    reason = "`UpkeepOptions` holds boxed closures, which have no `Debug`"
+    reason = "`UpkeepTask` is a boxed closure, which has no `Debug`"
 )]
 pub struct ServeOptions {
     /// Names the startup and shutdown sentinels (`<name> listening on …`).
@@ -233,21 +198,24 @@ pub struct ServeOptions {
     pub drain_timeout: Duration,
     /// The process's shutdown token (`fuz_http::shutdown_token`).
     pub shutdown: CancellationToken,
-    /// The upkeep to run beside the server, from the bind until shutdown —
-    /// `None` for a boot-only server, which has nothing to sweep.
-    pub upkeep: Option<UpkeepOptions>,
+    /// The server's own tasks to run beside it, from the bind until
+    /// shutdown, on the same token as the router's upkeep. Empty for most:
+    /// the spine's auth cleanup is the router's
+    /// ([`super::AppBackend::serve_duties`]), not one of these.
+    pub extra_upkeep: Vec<UpkeepTask>,
 }
 
 /// Bind, start the upkeep, and serve `router` until the shutdown token fires,
 /// then shut down within one drain timeout.
 ///
-/// The router carries what its shutdown owes (`fuz_http::ShutdownDuties`):
-/// a router composed over [`super::AppBackend::stack_options`] closes the
+/// The router carries what serving it owes (`fuz_http::ServeDuties`): a
+/// router composed over [`super::AppBackend::stack_options`] runs the
+/// backend's auth cleanup beside it (when its schedule is on), closes the
 /// backend's live connections and drains its detached writes, and the
-/// boot-only router ([`boot_only_router`]) owes nothing. The drain timeout
-/// is counted from when the serve sees the token — the moment it fires —
-/// and bounds, in
-/// order (`fuz_http::serve_with_shutdown`):
+/// boot-only router ([`boot_only_router`]) owes nothing. The router's upkeep
+/// and [`ServeOptions::extra_upkeep`] start once the listener is bound. The
+/// drain timeout is counted from when the serve sees the token — the moment
+/// it fires — and bounds, in order (`fuz_http::serve_with_shutdown`):
 ///
 /// 1. Every live WebSocket closed with 1001 and every SSE stream ended, every
 ///    HTTP request already dispatched answered, and every connection
@@ -259,28 +227,27 @@ pub struct ServeOptions {
 ///    handler at shutdown and refuses its reply; here a dispatch before its
 ///    first commit is dropped and rolls back, and one past it finishes.
 /// 2. The upkeep joined. The spine's auth cleanup stops on the token at once;
-///    a consumer's own task ([`UpkeepOptions::extra`]) should too, and one
-///    still running at the bound is aborted.
+///    an extra task should too, and one still running at the bound is
+///    aborted.
 /// 3. The backend's detached writes (`AppBackend::background_writes`)
 ///    drained: a failure row or a token touch, the post-commit effects of a
 ///    dispatch, the write of a request that answered in step 1. They follow
 ///    steps 1 and 2, so every write those spawned is seen.
 ///
-/// What is still running when the bound runs out is given up on and counted
-/// in the log — handlers still running and connections still open, closes
-/// not finished, upkeep tasks aborted, writes still in flight — and dies with
-/// the runtime. Two `eprintln!` sentinels, which no log filter suppresses,
-/// mark the bind and the end. A token that fired during boot ends this
-/// before the bind, with neither sentinel.
+/// What is still running when the bound runs out is given up on, logged —
+/// handlers still running and connections still open, closes not finished,
+/// upkeep tasks aborted, writes still in flight — and dies with the runtime,
+/// and the serve returns [`StartupError::ShutdownGivenUp`] with the counts,
+/// so the process exits `1`. Two `eprintln!` sentinels, which no log filter
+/// suppresses, mark the bind and a clean end (`<name> shutdown complete`,
+/// absent after a give-up). A token that fired during boot ends this before
+/// the bind, with neither sentinel.
 ///
 /// # Errors
 ///
-/// [`StartupError::Config`] when `upkeep` is set but the router carries no
-/// shutdown duties — upkeep means a backend, so the router was composed over
-/// `StackOptions::without_backend` where it needed
-/// [`super::AppBackend::stack_options`], and would serve with no close and
-/// no drain; [`StartupError::Bind`] when the listener cannot bind;
-/// [`StartupError::Serve`] when the serve loop fails.
+/// [`StartupError::Bind`] when the listener cannot bind;
+/// [`StartupError::Serve`] when the serve loop fails;
+/// [`StartupError::ShutdownGivenUp`] when the shutdown's bound ran out.
 pub async fn serve_until_shutdown(
     router: GatedRouter,
     options: ServeOptions,
@@ -290,15 +257,8 @@ pub async fn serve_until_shutdown(
         addr,
         drain_timeout,
         shutdown,
-        upkeep,
+        extra_upkeep,
     } = options;
-    if upkeep.is_some() && !router.has_shutdown_duties() {
-        return Err(StartupError::Config(format!(
-            "{server_name}: a router served with upkeep has a backend, but carries no shutdown \
-             duties — compose it over `AppBackend::stack_options`, not \
-             `StackOptions::without_backend`"
-        )));
-    }
     if shutdown.is_cancelled() {
         tracing::info!("{server_name}: shutdown signalled during boot; not serving");
         return Ok(());
@@ -307,10 +267,17 @@ pub async fn serve_until_shutdown(
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
     eprintln!("{server_name} listening on http://{addr}");
-    let upkeep = upkeep.map_or_else(Vec::new, |upkeep| spawn_upkeep(upkeep, &shutdown));
-    fuz_http::serve_with_shutdown(listener, router, shutdown, upkeep, drain_timeout)
-        .await
-        .map_err(StartupError::Serve)?;
+    let extra_upkeep = extra_upkeep
+        .into_iter()
+        .map(|task| task(shutdown.clone()))
+        .collect();
+    let given_up =
+        fuz_http::serve_with_shutdown(listener, router, shutdown, extra_upkeep, drain_timeout)
+            .await
+            .map_err(StartupError::Serve)?;
+    if given_up.gave_up() {
+        return Err(StartupError::ShutdownGivenUp(given_up));
+    }
     eprintln!("{server_name} shutdown complete");
     Ok(())
 }
@@ -560,7 +527,7 @@ mod tests {
                 addr,
                 drain_timeout: Duration::from_secs(1),
                 shutdown: CancellationToken::new(),
-                upkeep: None,
+                extra_upkeep: Vec::new(),
             },
         )
         .await
@@ -588,7 +555,7 @@ mod tests {
                     addr: "127.0.0.1:0".parse().expect("addr"),
                     drain_timeout: Duration::from_secs(1),
                     shutdown,
-                    upkeep: None,
+                    extra_upkeep: Vec::new(),
                 },
             ),
         )
@@ -597,54 +564,52 @@ mod tests {
         .expect("a clean end");
     }
 
-    /// A server handed upkeep has a backend, so a router with no shutdown
-    /// duties is one composed over the bare options by mistake: refused
-    /// before it binds, rather than served with no close and no drain.
+    /// A shutdown whose bound runs out is a failed serve: the counts come
+    /// back as `StartupError::ShutdownGivenUp`, which exits `1` — here an
+    /// extra upkeep task that never stops on the token, past a short bound.
     #[tokio::test]
-    async fn upkeep_beside_a_router_with_no_duties_is_refused() {
-        let env = BaseServerEnv::from_vars(
-            &|k| match k {
-                "DATABASE_URL" => Some("postgres://spine:spine@127.0.0.1:1/unused".to_owned()),
-                "SECRET_FUZ_COOKIE_KEYS" => Some("0123456789abcdef0123456789abcdef".to_owned()),
-                "FUZ_ALLOWED_ORIGINS" => Some("http://localhost".to_owned()),
-                _ => None,
-            },
-            fuz_http::ServerEnvOptions {
-                trusted_proxies_var: "FUZ_TEST_TRUSTED_PROXIES",
-            },
-        )
-        .expect("the env reads");
-        let backend = super::super::build_app_backend(
-            &env,
-            &boot_only_spec(false),
-            &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
-        )
-        .expect("the core builds without the database");
-        let bare = StackOptions::without_backend(
+    async fn a_shutdown_that_gave_up_is_an_error_that_exits_1() {
+        let stack_options = StackOptions::without_backend(
             fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
             Arc::new(Vec::new()),
         );
-        let served = serve_until_shutdown(
-            boot_only_router("duties_test_server", &bare),
+        let shutdown = CancellationToken::new();
+        let (spawned_tx, spawned_rx) = tokio::sync::oneshot::channel::<()>();
+        let hung: UpkeepTask = Box::new(move |_shutdown| {
+            let _ = spawned_tx.send(());
+            tokio::spawn(std::future::pending::<()>())
+        });
+        let served = tokio::spawn(serve_until_shutdown(
+            boot_only_router("given_up_test_server", &stack_options),
             ServeOptions {
-                server_name: "duties_test_server",
+                server_name: "given_up_test_server",
                 addr: "127.0.0.1:0".parse().expect("addr"),
-                drain_timeout: Duration::from_secs(1),
-                shutdown: CancellationToken::new(),
-                upkeep: Some(UpkeepOptions {
-                    auth_cleanup: backend.auth_cleanup_options(),
-                    extra: Vec::new(),
-                }),
+                drain_timeout: Duration::from_millis(50),
+                shutdown: shutdown.clone(),
+                extra_upkeep: vec![hung],
             },
-        );
+        ));
+        tokio::time::timeout(Duration::from_secs(10), spawned_rx)
+            .await
+            .expect("the extra upkeep is spawned once bound")
+            .expect("the task sent");
+        shutdown.cancel();
         let error = tokio::time::timeout(Duration::from_secs(10), served)
             .await
-            .expect("refused at once, not served")
-            .expect_err("a live server with no duties is refused");
-        let StartupError::Config(message) = &error else {
-            panic!("expected a config error, got {error:?}");
+            .expect("the serve ends")
+            .expect("the serve task ran")
+            .expect_err("a shutdown that gave up is an error");
+        let StartupError::ShutdownGivenUp(given_up) = &error else {
+            panic!("expected a given-up shutdown, got {error:?}");
         };
-        assert!(message.contains("shutdown duties"), "{message}");
+        assert_eq!(
+            *given_up,
+            fuz_http::ServeShutdown {
+                upkeep_given_up: 1,
+                ..fuz_http::ServeShutdown::default()
+            }
+        );
+        assert_eq!(error.exit_code(), 1);
     }
 
     /// A token that fired during boot ends the serve before it binds: no
@@ -668,7 +633,7 @@ mod tests {
                 addr: held.local_addr().expect("the bound address"),
                 drain_timeout: Duration::from_secs(1),
                 shutdown,
-                upkeep: None,
+                extra_upkeep: Vec::new(),
             },
         )
         .await
@@ -750,7 +715,7 @@ mod tests {
         );
     }
 
-    /// A router whose shutdown duties are `writes` (and a closer with no
+    /// A router whose serve duties are `writes` (and a closer with no
     /// connections), with `GET /block` running `handler`.
     fn live_router<F, Fut>(writes: &Arc<BackgroundWrites>, handler: F) -> GatedRouter
     where
@@ -760,7 +725,7 @@ mod tests {
         let closer: Arc<dyn fuz_http::ShutdownCloser> = Arc::new(fuz_auth::NoopConnectionCloser);
         let writes = Arc::clone(writes);
         let stack_options = StackOptions {
-            shutdown: Some(fuz_http::ShutdownDuties::new(closer, writes)),
+            serve_duties: Some(fuz_http::ServeDuties::new(closer, writes)),
             ..StackOptions::without_backend(
                 fuz_http::AllowedOrigins::parse("http://localhost").expect("the allowlist parses"),
                 Arc::new(Vec::new()),
