@@ -162,17 +162,28 @@ impl BootstrapKeeperResolved for DaemonTokenKeeperResolved {
 
 /// Resolve the already-bootstrapped keeper account (if any) into `state` at boot.
 ///
-/// Best-effort: on a fresh, not-yet-bootstrapped DB there is no keeper and a
-/// transient pool error simply leaves `keeper_account_id` unset — the
-/// post-bootstrap [`DaemonTokenKeeperResolved`] callback fills it in when the
-/// keeper is created. This covers the already-bootstrapped-DB case, where
-/// bootstrap won't fire on this boot.
+/// Best-effort: on a fresh, not-yet-bootstrapped DB there is no keeper, and a
+/// failed pool checkout or query logs a warning (the TS twin's message) and
+/// leaves `keeper_account_id` unset — boot continues, and the post-bootstrap
+/// [`DaemonTokenKeeperResolved`] callback fills it in when the keeper is
+/// created. This covers the already-bootstrapped-DB case, where bootstrap
+/// won't fire on this boot.
 pub async fn resolve_keeper_into(state: &SharedDaemonTokenState, pool: &Pool) {
-    if let Ok(client) = pool.get().await
-        && let Ok(Some(account_id)) = query_keeper_account_id(&client).await
-    {
-        state.write().keeper_account_id = Some(account_id);
-        tracing::info!(%account_id, "daemon token: keeper account resolved");
+    let resolved = match pool.get().await {
+        Ok(client) => query_keeper_account_id(&client)
+            .await
+            .map_err(|e| fuz_sys::cli::format_error_chain(&e)),
+        Err(e) => Err(fuz_sys::cli::format_error_chain(&e)),
+    };
+    match resolved {
+        Ok(Some(account_id)) => {
+            state.write().keeper_account_id = Some(account_id);
+            tracing::info!(%account_id, "daemon token: keeper account resolved");
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, "daemon token: resolving the keeper account failed");
+        }
     }
 }
 
@@ -273,5 +284,54 @@ mod tests {
         };
         // ct_eq returns Choice(0) when lengths differ
         assert!(!validate_daemon_token("abcd", &state));
+    }
+
+    /// A buffer a `fmt` subscriber writes into.
+    #[derive(Clone, Default)]
+    struct LogCapture(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A failed boot read warns with the TS twin's message and the error
+    /// chain, and leaves the keeper unset without failing the boot.
+    #[tokio::test]
+    async fn a_failed_keeper_read_warns_and_leaves_the_keeper_unset() {
+        let pool = fuz_db::create_pool(
+            "postgres://nobody@127.0.0.1:1/nothing",
+            &fuz_db::PoolOptions::default(),
+        )
+        .expect("a lazily-built pool needs no server");
+        let state: SharedDaemonTokenState = Arc::new(RwLock::new(state_with_secrets()));
+        let capture = LogCapture::default();
+        let writer = capture.clone();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(move || writer.clone())
+                .with_ansi(false)
+                .finish(),
+        );
+
+        resolve_keeper_into(&state, &pool).await;
+
+        assert_eq!(state.read().keeper_account_id, None);
+        let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        let warns: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains(" WARN "))
+            .collect();
+        assert_eq!(warns.len(), 1, "{logged}");
+        assert!(
+            warns[0].contains("daemon token: resolving the keeper account failed"),
+            "{logged}"
+        );
+        assert!(warns[0].contains("error="), "{logged}");
     }
 }
