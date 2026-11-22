@@ -30,6 +30,13 @@ WITH
 		FROM invite i
 		LEFT JOIN actor a ON a.id = i.created_by
 		WHERE i.claimed_at IS NULL
+	),
+	token_issued AS (
+		SELECT t.id, t.account_id, t.created_at,
+			(SELECT MIN(al.seq) FROM audit_log al
+				WHERE al.event_type = 'token_create' AND al.outcome = 'success'
+				  AND al.metadata->>'token_id' = t.id) AS create_seq
+		FROM api_token t
 	)
 SELECT 'credential_of_tombstoned_account' AS invariant, jsonb_build_object('kind', v.kind, 'id', v.id, 'account_id', v.account_id)::text AS row FROM (SELECT 'auth_session' AS kind, LEFT(s.id, 12) AS id, s.account_id
 			FROM auth_session s JOIN account ac ON ac.id = s.account_id
@@ -134,11 +141,12 @@ SELECT 'credential_outlived_account_removal' AS invariant, jsonb_build_object('k
 		  AND r.created_at >= s.created_at
 	)
 			UNION ALL
-			SELECT 'api_token' AS kind, t.id, t.account_id
-			FROM api_token t
+			SELECT 'api_token' AS kind, ti.id, ti.account_id
+			FROM token_issued ti
 			WHERE EXISTS (
 		SELECT 1 FROM removal r
-		WHERE r.account_id = t.account_id
+		WHERE r.account_id = ti.account_id
 		  AND r.event_type IN ('account_delete')
-		  AND r.created_at >= t.created_at
+		  AND CASE WHEN ti.create_seq IS NULL THEN r.created_at >= ti.created_at
+						ELSE r.seq > ti.create_seq END
 	)) v
