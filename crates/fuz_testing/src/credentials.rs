@@ -136,7 +136,7 @@ pub async fn mint_session_cookie(
     client
         .execute(
             "INSERT INTO auth_session (id, account_id, expires_at)
-             VALUES ($1, $2, NOW() + INTERVAL '1 day')",
+             VALUES ($1, $2, NOW() + INTERVAL '86400 seconds')",
             &[&token_hash.as_str(), &account_id],
         )
         .await

@@ -191,6 +191,21 @@ async fn signup_succeeds_with_open_signup_and_creates_actor() {
         .expect("actor count");
     let count: i64 = row.get(0);
     assert_eq!(count, 1, "exactly one actor per account");
+
+    // the success row names the new account and its actor, as the TS spine's does
+    options.audit.drain_inflight().await;
+    let audit = client
+        .query_one(
+            "SELECT account_id, actor_id FROM audit_log
+             WHERE event_type = 'signup' AND outcome = 'success'",
+            &[],
+        )
+        .await
+        .expect("signup audit row");
+    let audit_account: Option<uuid::Uuid> = audit.get(0);
+    let audit_actor: Option<uuid::Uuid> = audit.get(1);
+    assert_eq!(audit_account, Some(success.account.id));
+    assert_eq!(audit_actor, Some(success.actor.id));
 }
 
 #[tokio::test]

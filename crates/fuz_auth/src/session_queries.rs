@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::credential_deadline::{EXPIRES_IN_MS_SQL, remaining_from_db_ms};
 use crate::hash::hash_session_token;
-use crate::session_cookie::generate_session_token;
+use crate::session_cookie::{SESSION_AGE_MAX, generate_session_token};
 use crate::session_schema::{AuthSessionRow, SessionListRow};
 use fuz_db::{col, iso8601_timestamp_expr, qualify_columns};
 
@@ -273,7 +273,17 @@ pub async fn create_capped_session(
     Ok(CappedSession { token, evicted })
 }
 
-/// Create a new auth session.
+// the literal in `query_create_session` is the cookie's lifetime
+const _: () = assert!(
+    SESSION_AGE_MAX == 2_592_000,
+    "update the session insert's interval"
+);
+
+/// Create a new auth session, expiring [`SESSION_AGE_MAX`] seconds after the
+/// database's `NOW()`. Elapsed seconds, not `'30 days'`: a day interval is
+/// calendar time in the session's time zone, so a session crossing a DST
+/// change would live an hour more or less. Twin of `fuz_app`'s
+/// `query_create_session` (`AUTH_SESSION_LIFETIME_SQL`), same statement.
 ///
 /// **Private on purpose** — the raw INSERT without the cap is the defect
 /// [`create_capped_session`] exists to prevent, so it isn't reachable from
@@ -292,7 +302,7 @@ async fn query_create_session(
     client
         .execute(
             "INSERT INTO auth_session (id, account_id, expires_at)
-             VALUES ($1, $2, NOW() + INTERVAL '30 days')",
+             VALUES ($1, $2, NOW() + INTERVAL '2592000 seconds')",
             &[&token_hash, account_id],
         )
         .await?;
