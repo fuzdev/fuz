@@ -12,7 +12,7 @@
 //!
 //! ## Wire parity
 //!
-//! Byte-identical to the TS reference (`fuz_app`'s `create_sse_response` +
+//! Byte-identical to the TS reference (`fuz_app`'s `create_sse_stream` +
 //! `create_audit_log_sse`) so the cross-backend SSE suite sees one contract
 //! on both backends:
 //!
@@ -50,7 +50,7 @@
 //! [`SSE_KEEP_ALIVE_COMMENT`], so a proxy that cuts a connection idle past its
 //! read timeout (nginx's default is 60 s) keeps an open stream open;
 //! `EventSource` ignores comments. Per stream, from its admission, whether or
-//! not data frames were written in between — the TS `create_sse_response`'s
+//! not data frames were written in between — the TS `create_sse_stream`'s
 //! `setInterval`, with the same bytes. A consumer sets another interval, or
 //! turns keep-alives off, with [`SseRegistry::with_keep_alive`].
 //!

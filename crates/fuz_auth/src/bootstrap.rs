@@ -136,12 +136,13 @@ fn bootstrap_token_from_file(bytes: Vec<u8>) -> Option<Vec<u8>> {
 /// Carries the session — its raw token and its `Set-Cookie` line, signed
 /// inside the bootstrap transaction — and the created account/actor rows; the
 /// HTTP wrapper (`bootstrap_routes.rs`) builds the wire response from these.
-/// `Debug` redacts the token and the cookie.
+/// `Debug` redacts the token and the cookie. Twin of `fuz_app`'s
+/// `BootstrapAccountSuccess`.
 pub struct BootstrapSuccess {
     /// The raw session token (its hash is the `auth_session` row's id).
     pub session_token: String,
     /// The `Set-Cookie` line carrying the signed session cookie, written in
-    /// the transaction. Twin of `fuz_app`'s `session_cookie_value`.
+    /// the transaction.
     pub set_cookie: String,
     pub account: AccountRow,
     pub actor: ActorRow,
@@ -251,7 +252,7 @@ impl std::fmt::Debug for BootstrapOptions {
 /// - not bootstrapped and the file unreadable: a `warn` with the reason (and
 ///   the `error` [`BOOTSTRAP_TOKEN_MIN_BYTES`] logs for a short one).
 ///
-/// Twin of `fuz_app`'s `check_bootstrap_status`, which logs the same states
+/// Twin of `fuz_app`'s `is_bootstrap_available`, which logs the same states
 /// at the same levels.
 ///
 /// # Errors
