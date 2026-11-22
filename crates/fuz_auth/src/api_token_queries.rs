@@ -1,6 +1,11 @@
 //! Queries against the `api_token` table.
 
+use std::sync::Arc;
+
+use tokio::task::JoinHandle;
+
 use crate::api_token_schema::{ApiTokenListRow, ApiTokenMintedRow, ApiTokenRow};
+use crate::background_writes::BackgroundWrites;
 use crate::credential_deadline::{EXPIRES_IN_MS_SQL, remaining_from_db_ms};
 use crate::token_scope::TokenScopeDocument;
 use fuz_db::{col, iso8601_timestamp_column, iso8601_timestamp_expr, qualify_columns};
@@ -194,24 +199,36 @@ pub async fn query_api_token_touch(
     Ok(())
 }
 
-/// Spawn a fire-and-forget [`query_api_token_touch`] on a background task.
+/// Spawn a fire-and-forget [`query_api_token_touch`] on `background_writes`.
 ///
 /// The request path never blocks on the `last_used_at` / `last_used_ip` write,
-/// and a pool/query failure is logged (not propagated). Owns `token_id` + `ip`
-/// internally, so callers pass borrows that needn't outlive the task. The
-/// single home for "record a token use" — shared by the spine bearer resolve
-/// and the forge git-auth path (which would otherwise duplicate this block).
-pub fn spawn_api_token_touch(pool: &deadpool_postgres::Pool, token_id: &str, ip: &str) {
+/// and a pool/query failure is logged (not propagated). The write is tracked
+/// like an audit failure row: a server's shutdown drain and the
+/// `_testing_drain_effects` barrier await it
+/// ([`BackgroundWrites::drain`]), so pass the server's tracker
+/// (`fuz_actions::server::AppBackend`'s); a tracker nothing drains loses the
+/// write at shutdown.
+/// Owns `token_id` + `ip` internally, so callers pass borrows that needn't
+/// outlive the task; no caller awaits the returned handle (a test may).
+/// The single home for "record a token use" — shared by the
+/// spine bearer resolve and the forge git-auth path. The TS twin flushes its
+/// touch with the request's `pending_effects`.
+pub fn spawn_api_token_touch(
+    background_writes: &Arc<BackgroundWrites>,
+    pool: &deadpool_postgres::Pool,
+    token_id: &str,
+    ip: &str,
+) -> JoinHandle<()> {
     let pool = pool.clone();
     let token_id = token_id.to_owned();
     let ip = ip.to_owned();
-    tokio::spawn(async move {
+    background_writes.spawn(async move {
         if let Ok(client) = pool.get().await
             && let Err(e) = query_api_token_touch(&client, &token_id, &ip).await
         {
             tracing::warn!(error = %fuz_sys::cli::format_error_chain(&e), "api token touch failed");
         }
-    });
+    })
 }
 
 /// Insert a new API token row and return its mint-time timestamps

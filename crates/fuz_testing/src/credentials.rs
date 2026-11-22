@@ -86,9 +86,10 @@ pub const TESTING_ALLOWED_ORIGIN: &str = "http://localhost:5173";
 /// A fixture [`AuthGate`] over `pool`.
 ///
 /// It holds [`testing_keyring`], no daemon-token state,
-/// [`SESSION_COOKIE_NAME`], and an allowlist of [`TESTING_ALLOWED_ORIGIN`]
-/// alone. A suite that needs another field sets it
-/// with the struct-update syntax
+/// [`SESSION_COOKIE_NAME`], an allowlist of [`TESTING_ALLOWED_ORIGIN`] alone,
+/// and a tracker of its own for the bearer leg's token touch (a suite that
+/// drains another tracker passes it instead). A suite that needs another
+/// field sets it with the struct-update syntax
 /// (`AuthGate { daemon_token_state: Some(state), ..testing_auth_gate(pool) }`).
 ///
 /// # Panics
@@ -103,6 +104,7 @@ pub fn testing_auth_gate(pool: Pool) -> AuthGate {
         session_cookie_name: SESSION_COOKIE_NAME,
         allowed_origins: fuz_http::AllowedOrigins::parse(TESTING_ALLOWED_ORIGIN)
             .expect("a loopback origin is a valid allowlist"),
+        background_writes: Arc::default(),
     }
 }
 

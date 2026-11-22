@@ -221,7 +221,7 @@ pub async fn seed_role_grant_direct(
 /// settle, since emit is fire-and-forget).
 #[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub fn build_audit(pool: Pool) -> Arc<AuditEmitter> {
-    Arc::new(AuditEmitter::new(pool))
+    Arc::new(AuditEmitter::new(pool, Arc::default()))
 }
 
 /// Default no-op connection closer for handler tests.

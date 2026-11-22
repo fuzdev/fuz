@@ -49,9 +49,12 @@ pub struct ExtraActionSpecsRuntime {
     /// keeper's cookie under this so the harness jars it under the same name
     /// the live server reads.
     pub session_cookie_name: &'static str,
-    /// The audit emitter — the live server's instance, whose in-flight writes
-    /// `_testing_drain_effects` awaits.
+    /// The audit emitter — the live server's instance.
     pub audit_emitter: Arc<fuz_auth::AuditEmitter>,
+    /// The server's tracker of detached writes (the audit emitter's pool
+    /// writes, the gate's token touches), which `_testing_drain_effects`
+    /// awaits.
+    pub background_writes: Arc<fuz_auth::BackgroundWrites>,
 }
 
 /// Factory that constructs extra action specs to fold into the registry after

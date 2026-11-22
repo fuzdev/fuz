@@ -345,7 +345,7 @@ async fn setup_with_account_budget(max_attempts: Option<u32>) -> Harness {
     let options = PerformActionOptions {
         pool: pool.clone(),
         registry: Arc::new(build_registry(&effect_fired)),
-        audit: Arc::new(AuditEmitter::new(pool.clone())),
+        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
         connection_closer: Arc::new(NoopConnectionCloser),
         notification_sender: Arc::new(NoopNotificationSender),
         // This suite drives HTTP-shaped dispatch (no socket); the Noop peer
@@ -678,7 +678,7 @@ async fn role_gate_denies_a_scoped_admin_403() {
 /// Dispatch options over the standard auth spec set with no-op side channels —
 /// the spine surface a consumer mounts, for the escalation cases.
 fn plain_auth_spec_options(pool: &Pool) -> PerformActionOptions {
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let connection_closer: Arc<dyn fuz_auth::ConnectionCloser> = Arc::new(NoopConnectionCloser);
     let specs = fuz_actions::auth_adapter::build_auth_spec_set(
         Arc::clone(&audit),
@@ -1233,7 +1233,7 @@ fn auth_spec_options(
     pool: &Pool,
     connection_closer: Arc<dyn fuz_auth::ConnectionCloser>,
 ) -> PerformActionOptions {
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let specs = fuz_actions::auth_adapter::build_auth_spec_set(
         Arc::clone(&audit),
         Arc::clone(&connection_closer),

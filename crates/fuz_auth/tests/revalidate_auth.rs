@@ -92,9 +92,9 @@ async fn resolve_session(pool: &Pool, account_id: Uuid) -> ResolvedAuth {
     resolved
 }
 
-/// Mint a full-scope API token for `account_id`, resolve it, and wait for the
-/// `last_used_at` touch the resolve spawned to land — so no touch is still in
-/// flight when a case looks at the row.
+/// Mint a full-scope API token for `account_id`, resolve it, and drain the
+/// gate's tracker — so the `last_used_at` touch the resolve spawned has landed
+/// and no touch is still in flight when a case looks at the row.
 async fn resolve_api_token(pool: &Pool, account_id: Uuid) -> ResolvedAuth {
     let minted = mint_api_token(pool, account_id, &TokenScopeDocument::full()).await;
     let mut headers = HeaderMap::new();
@@ -102,17 +102,21 @@ async fn resolve_api_token(pool: &Pool, account_id: Uuid) -> ResolvedAuth {
         AUTHORIZATION,
         format!("Bearer {}", minted.token).parse().unwrap(),
     );
-    let resolved = resolve(pool, &headers, None).await;
+    let gate = fuz_testing::testing_auth_gate(pool.clone());
+    let resolved = gate
+        .preflight(&headers, fuz_http::UNRESOLVED_CLIENT_IP)
+        .await
+        .expect("the fixture sends no foreign origin")
+        .expect("the fixture credential authenticates");
     assert_eq!(resolved.credential_type(), CredentialType::ApiToken);
     assert_eq!(resolved.api_token_id(), Some(minted.id.as_str()));
-    let touched = async {
-        while !token_was_touched(pool, &minted.id).await {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(5), touched)
+    tokio::time::timeout(Duration::from_secs(5), gate.background_writes.drain())
         .await
-        .expect("the resolve walk's token touch lands");
+        .expect("the drain settles once the touch does");
+    assert!(
+        token_was_touched(pool, &minted.id).await,
+        "the drain awaited the resolve walk's token touch"
+    );
     resolved
 }
 

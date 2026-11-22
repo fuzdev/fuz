@@ -562,9 +562,16 @@ The rules a change must keep:
 - On the REST routes a failed pool checkout answers `fuz_http`'s flat 503
   `service_unavailable` and any other internal failure its flat 500 — a
   refused success audit row included, since it is written in the request's
-  transaction. A failure row is spawned on the pool, never holding the answer;
-  the spine's shutdown (`serve_until_shutdown`) waits for those still being
-  written, bounded by the drain timeout, and logs any it gives up on.
+  transaction. A failure row is spawned on the pool, never holding the answer,
+  and so is the bearer leg's `api_token` use (`spawn_api_token_touch`) and
+  the bootstrap's burn-and-commit — all on the one tracker of detached
+  writes, `BackgroundWrites`, that `AppBackend` owns, its audit emitter is
+  built over, and its `AuthGate` holds. The spine's shutdown
+  (`serve_until_shutdown`) and `_testing_drain_effects` wait for those still
+  running, the shutdown bounded by the drain timeout, logging any it gives up
+  on. `testing_spine_stub` also settles them before each HTTP answer
+  (`await_background_writes_layer`), as the TS test binary does with
+  `await_pending_effects`.
   A failed credential read ends the walk with
   `CredentialReadFault`'s answer — the 503 for a failed checkout, the
   plain-text 500 (the TS twin's Hono default) for a failed query — never a

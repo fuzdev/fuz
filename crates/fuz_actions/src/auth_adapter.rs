@@ -583,7 +583,7 @@ mod tests {
             &fuz_db::PoolOptions::default(),
         )
         .expect("pool");
-        Arc::new(AuditEmitter::new(pool))
+        Arc::new(AuditEmitter::new(pool, Arc::default()))
     }
 
     fn closer() -> Arc<dyn ConnectionCloser> {

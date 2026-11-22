@@ -622,7 +622,7 @@ async fn a_bearer_stream_on_a_widened_gate_closes_on_token_revoke() {
     let pool = fresh_db_pool().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
-    let emitter = Arc::new(AuditEmitter::new(pool.clone()));
+    let emitter = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     register_audit_sse_listener(&emitter, &registry);
     let closer: Arc<dyn ConnectionCloser> = Arc::<SseRegistry>::clone(&registry);
     register_revocation_guard(&emitter, &closer);
@@ -764,7 +764,7 @@ fn revocation_harness(pool: Pool, keyring: &Arc<Keyring>) -> RevocationHarness {
     let registry = Arc::new(SseRegistry::new());
     let ws = Arc::new(ConnectionRegistry::new());
     let connection_closer = RealtimeCloser::connection_closer(&ws, &registry);
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     register_audit_sse_listener(&audit, &registry);
     register_revocation_guard(&audit, &connection_closer);
 

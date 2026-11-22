@@ -30,7 +30,7 @@ fn build_options(pool: Pool) -> SignupOptions {
     // Signup's failure rows are fire-and-forget `emit` writes, so reading
     // `audit_log` without draining races the spawned INSERT (a success row
     // commits with the signup).
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     SignupOptions {
         pool,
         password_hasher: hasher,
@@ -554,7 +554,7 @@ async fn signup_rate_limit_bypasses_deadline_floor() {
     // under it.
     let pool = fresh_db_pool().await;
     let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2idHasher::new());
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = Arc::new(RateLimiter::new(RateLimiterOptions {
         max_attempts: 1,
         window_ms: 60_000,

@@ -109,7 +109,7 @@ fn build_self_service(eligible_roles: &[&str]) -> Vec<ActionSpec> {
     )
     .unwrap();
     fuz_actions::auth_adapter::build_self_service_role_specs(
-        Arc::new(fuz_auth::AuditEmitter::new(pool)),
+        Arc::new(fuz_auth::AuditEmitter::new(pool, Arc::default())),
         Arc::new(fuz_auth::NoopConnectionCloser),
         eligible_roles.iter().map(|r| (*r).to_owned()).collect(),
     )
@@ -225,7 +225,7 @@ fn dead_pool_rpc_state(registry: ActionRegistry) -> fuz_actions::ActionDispatch 
     fuz_actions::ActionDispatch {
         gate: fuz_testing::testing_auth_gate(pool.clone()),
         registry: Arc::new(registry),
-        audit: Arc::new(fuz_auth::AuditEmitter::new(pool)),
+        audit: Arc::new(fuz_auth::AuditEmitter::new(pool, Arc::default())),
         connection_closer: Arc::new(fuz_auth::NoopConnectionCloser),
         notification_sender: Arc::new(fuz_auth::NoopNotificationSender),
         rate_limits: fuz_actions::ActionRateLimits::defaults(

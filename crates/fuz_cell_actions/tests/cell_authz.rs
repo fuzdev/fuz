@@ -243,7 +243,7 @@ fn options_from(pool: &Pool, cell_options: CellSpecSetOptions) -> PerformActionO
     PerformActionOptions {
         pool: pool.clone(),
         registry: Arc::new(ActionRegistry::compile(specs).expect("compile cell specs")),
-        audit: Arc::new(AuditEmitter::new(pool.clone())),
+        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
         connection_closer: Arc::new(NoopConnectionCloser),
         notification_sender: Arc::new(NoopNotificationSender),
         peer: fuz_realtime::noop_action_peer(),

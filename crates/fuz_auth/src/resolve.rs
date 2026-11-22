@@ -25,6 +25,8 @@
 //! Both walks are crate-private: a surface reaches them through
 //! [`crate::AuthGate`], which holds the origin allowlist beside them.
 
+use std::sync::Arc;
+
 use crate::account_queries::query_account_by_id;
 use crate::account_schema::AccountRow;
 use crate::actor_queries::{
@@ -35,6 +37,7 @@ use crate::api_token::hash_api_token;
 use crate::api_token_queries::{
     query_api_token_live_account, query_validate_api_token, spawn_api_token_touch,
 };
+use crate::background_writes::BackgroundWrites;
 use crate::credential_deadline::credential_deadline_after;
 use crate::credential_headers::{read_bearer_token, read_daemon_token};
 use crate::credential_type::CredentialType;
@@ -319,7 +322,8 @@ impl ResolvedAuth {
 /// `&str`, not an `Option`: the touch has no "skip the column" form, so a
 /// handler with no `ClientIp` extension in scope passes
 /// [`fuz_http::ClientIp::as_str_or_unresolved`]'s sentinel rather
-/// than erasing the address an earlier request recorded.
+/// than erasing the address an earlier request recorded. The touch is spawned
+/// on `background_writes`, the gate's tracker.
 pub(crate) async fn resolve_auth_from_headers(
     headers: &axum::http::HeaderMap,
     keyring: &Keyring,
@@ -327,6 +331,7 @@ pub(crate) async fn resolve_auth_from_headers(
     daemon_token_state: Option<&SharedDaemonTokenState>,
     cookie_name: &str,
     client_ip: &str,
+    background_writes: &Arc<BackgroundWrites>,
 ) -> Result<Option<ResolvedAuth>, CredentialReadFault> {
     if let Some(state) = daemon_token_state
         && let Some(resolved) = resolve_daemon_token_from_headers(headers, state, pool).await?
@@ -339,7 +344,7 @@ pub(crate) async fn resolve_auth_from_headers(
         return Ok(Some(resolved));
     }
 
-    resolve_bearer_from_headers(headers, pool, client_ip).await
+    resolve_bearer_from_headers(headers, pool, client_ip, background_writes).await
 }
 
 /// Resolve cookie session under `cookie_name` (default `fuz_session`).
@@ -419,6 +424,7 @@ async fn resolve_bearer_from_headers(
     headers: &axum::http::HeaderMap,
     pool: &deadpool_postgres::Pool,
     client_ip: &str,
+    background_writes: &Arc<BackgroundWrites>,
 ) -> Result<Option<ResolvedAuth>, CredentialReadFault> {
     const UNAVAILABLE: CredentialReadFault =
         CredentialReadFault::new(CredentialType::ApiToken, CredentialFaultKind::Unavailable);
@@ -466,8 +472,9 @@ async fn resolve_bearer_from_headers(
         return Ok(None);
     };
 
-    // Fire-and-forget last-used-at + last-used-ip update.
-    spawn_api_token_touch(pool, &token_row.id, client_ip);
+    // Fire-and-forget last-used-at + last-used-ip update, tracked so the
+    // shutdown drain and `_testing_drain_effects` await it.
+    spawn_api_token_touch(background_writes, pool, &token_row.id, client_ip);
 
     Ok(Some(ResolvedAuth {
         account,
@@ -735,6 +742,7 @@ pub(crate) async fn build_public_request_context(
     daemon_token_state: Option<&SharedDaemonTokenState>,
     cookie_name: &str,
     client_ip: &str,
+    background_writes: &Arc<BackgroundWrites>,
 ) -> Result<Option<RequestActorContext>, PublicContextFault> {
     let Some(resolved) = resolve_auth_from_headers(
         headers,
@@ -743,6 +751,7 @@ pub(crate) async fn build_public_request_context(
         daemon_token_state,
         cookie_name,
         client_ip,
+        background_writes,
     )
     .await?
     else {

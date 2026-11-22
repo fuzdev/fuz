@@ -113,6 +113,7 @@ pub mod resolve;
 pub mod audit_emitter;
 pub mod audit_event_type;
 pub mod audit_listener;
+pub mod background_writes;
 pub mod connection_closer;
 pub mod notification_sender;
 pub mod revocation_guard;
@@ -226,6 +227,7 @@ pub use auth_cleanup::{
     spawn_auth_cleanup,
 };
 pub use auth_gate::{AUTH_MIDDLEWARE_PATH, AuthGate, OriginChecked, auth_middleware_applies};
+pub use background_writes::BackgroundWrites;
 pub use bootstrap::{
     BOOTSTRAP_TOKEN_LENGTH_MAX, BOOTSTRAP_TOKEN_MIN_BYTES, BootstrapInput, BootstrapOptions,
     bootstrap_handler, is_bootstrap_available,

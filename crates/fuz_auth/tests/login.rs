@@ -223,7 +223,7 @@ async fn login_rejects_invalid_input() {
     // *before* any DB lookup or password verify, never falling through to a
     // lookup-miss 401.
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db()));
+    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
     let state = build_state(pool_no_db(), hasher, audit, None, None);
 
     let oversized_password = "a".repeat(PASSWORD_LENGTH_MAX + 1);
@@ -267,7 +267,7 @@ async fn login_rejects_unknown_body_field() {
     // `invalid_request_body` (not axum's default 422, not a silent ignore),
     // before any DB / verify work.
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db()));
+    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
     let state = build_state(pool_no_db(), hasher, audit, None, None);
 
     let body = Bytes::from(
@@ -292,7 +292,7 @@ async fn login_answers_invalid_json_body_for_a_non_object_body() {
     // anything but an object, is `invalid_json_body` — never the schema
     // refusal `invalid_request_body`.
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db()));
+    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
     let state = build_state(pool_no_db(), hasher, audit, None, None);
 
     for body in ["{", "", "[]", "null", "5"] {
@@ -325,7 +325,7 @@ async fn login_rejects_disallowed_origin() {
     let state = AccountRouteState {
         gate: fuz_testing::testing_auth_gate(pool_no_db()),
         password_hasher: hasher,
-        audit: Arc::new(AuditEmitter::new(pool_no_db())),
+        audit: Arc::new(AuditEmitter::new(pool_no_db(), Arc::default())),
         connection_closer,
         bootstrap_available: Arc::new(AtomicBool::new(false)),
         login_ip_rate_limiter: None,
@@ -358,7 +358,7 @@ async fn login_refuses_bodies_a_browser_sends_without_a_preflight() {
     // same-site (another localhost port), so the handler refuses it before
     // the body is read
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db()));
+    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
     let state = build_state(pool_no_db(), hasher, audit, None, None);
 
     let mut text_plain = HeaderMap::new();
@@ -389,7 +389,7 @@ async fn login_missing_account_verifies_against_dummy_hash() {
     // shadow of the wall-clock property: the recorded hash is the dummy.
     let pool = fresh_db_pool().await;
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool, hasher, audit, None, None);
 
     let response = call_login(&state, Some("1.2.3.4"), "ghost", "any-password-123").await;
@@ -412,7 +412,7 @@ async fn login_username_ceiling_counts_utf16_code_units() {
     // through to the lookup: a miss 401 against the dummy hash, not a 400.
     let pool = fresh_db_pool().await;
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool, hasher, audit, None, None);
 
     let username = "\u{00FC}".repeat(200);
@@ -440,7 +440,7 @@ async fn login_wrong_password_verifies_against_real_hash() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool, hasher, audit, None, None);
 
     let response = call_login(&state, Some("1.2.3.4"), "alice", "wrong-password").await;
@@ -471,7 +471,7 @@ async fn login_by_email_case_insensitively_resolves_account() {
         seed_account_with_email_and_hash(&pool, "alice", "Alice@Example.com", "stored-hash-alice")
             .await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let response = call_login(
@@ -520,7 +520,7 @@ async fn login_by_username_still_resolves_when_account_has_email() {
     seed_account_with_email_and_hash(&pool, "alice", "alice@example.com", "stored-hash-alice")
         .await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool, hasher, audit, None, None);
 
     let response = call_login(&state, Some("1.2.3.4"), "alice", "correct-password").await;
@@ -543,7 +543,7 @@ async fn login_failure_records_rate_limit() {
     let pool = fresh_db_pool().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let one = || {
         Arc::new(RateLimiter::new(RateLimiterOptions {
             max_attempts: 1,
@@ -597,7 +597,7 @@ async fn login_success_resets_rate_limit() {
     let pool = fresh_db_pool().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let account_limiter = Arc::new(RateLimiter::new(RateLimiterOptions {
         max_attempts: 3,
         window_ms: 60_000,
@@ -634,7 +634,7 @@ async fn login_success_records_nothing_on_the_ip_bucket() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = limiter_of(1);
     let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
 
@@ -657,7 +657,7 @@ async fn login_burst_of_correct_logins_all_succeed_past_the_ip_cap() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = limiter_of(3);
     let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
 
@@ -692,7 +692,7 @@ async fn login_ip_budget_survives_interleaved_successes() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "attacker", "stored-hash-attacker").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let max_attempts = 3_u32;
     let ip_limiter = Arc::new(RateLimiter::new(RateLimiterOptions {
         max_attempts,
@@ -752,7 +752,7 @@ async fn login_failure_missing_account_audits_without_account_id() {
     // (there is no account to attribute it to).
     let pool = fresh_db_pool().await;
     let (hasher, _) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool.clone(), hasher, Arc::clone(&audit), None, None);
 
     let response = call_login(&state, Some("9.9.9.9"), "Ghost", "any-password-123").await;
@@ -797,7 +797,7 @@ async fn login_failure_wrong_password_audits_with_account_id() {
     let pool = fresh_db_pool().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool.clone(), hasher, Arc::clone(&audit), None, None);
 
     let response = call_login(&state, Some("9.9.9.9"), "alice", "wrong-password").await;
@@ -837,7 +837,7 @@ async fn login_success_audits_and_creates_session() {
     let pool = fresh_db_pool().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let response = call_login(&state, Some("9.9.9.9"), "alice", "correct-password").await;
@@ -902,7 +902,7 @@ async fn login_beyond_the_cap_evicts_the_oldest_sessions() {
     let pool = fresh_db_pool().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let mut state = build_state(pool.clone(), hasher, audit, None, None);
     let closer = Arc::new(RecordingCloser::default());
     state.connection_closer = Arc::<RecordingCloser>::clone(&closer);
@@ -1057,7 +1057,7 @@ async fn login_closes_an_evicted_session_after_the_eviction_commits() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let mut state = build_state(pool.clone(), hasher, audit, None, None);
     let closer = Arc::new(CommitProbingCloser {
         pool: pool.clone(),
@@ -1180,7 +1180,7 @@ async fn login_rate_limited_short_circuits_before_verify() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = Arc::new(RateLimiter::new(RateLimiterOptions {
         max_attempts: 1,
         window_ms: 60_000,
@@ -1229,7 +1229,7 @@ async fn login_burst_gets_at_most_the_ip_cap_past_the_limiter() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = limiter_of(3);
     let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
 
@@ -1242,7 +1242,7 @@ async fn login_burst_gets_at_most_the_account_cap_past_the_limiter() {
     let pool = fresh_db_pool().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let account_limiter = limiter_of(3);
     let state = build_state(
         pool,
@@ -1290,7 +1290,7 @@ async fn login_missing_account_401_takes_at_least_the_floor() {
     // expensive found-wrong-password sibling below.
     let pool = fresh_db_pool().await;
     let (hasher, _) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool, hasher, audit, None, None);
 
     let t0 = std::time::Instant::now();
@@ -1315,7 +1315,7 @@ async fn login_wrong_password_401_takes_at_least_the_floor() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool, hasher, audit, None, None);
 
     let t0 = std::time::Instant::now();
@@ -1340,7 +1340,7 @@ async fn login_zero_floor_401_does_not_wait() {
     let pool = fresh_db_pool().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = AccountRouteState {
         login_fail_floor_ms: 0,
         login_fail_jitter_ms: 0,

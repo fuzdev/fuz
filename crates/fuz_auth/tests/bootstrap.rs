@@ -219,7 +219,7 @@ fn build_options(
         // positive assertion (it usually wins) and fatal for a negative one,
         // which is what `bootstrap_probe_after_success_writes_no_audit_row`
         // needs.
-        audit: Arc::new(AuditEmitter::new(pool)),
+        audit: Arc::new(AuditEmitter::new(pool, Arc::default())),
         bootstrap_available,
         token_store,
         on_keeper_resolved,

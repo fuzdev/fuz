@@ -78,7 +78,7 @@ pub fn testing_reset_specs(
             session_cookie_name: runtime.session_cookie_name,
             reset_state,
         }),
-        crate::create_testing_drain_effects_action_spec(Arc::clone(&runtime.audit_emitter)),
+        crate::create_testing_drain_effects_action_spec(Arc::clone(&runtime.background_writes)),
         crate::create_testing_db_invariants_action_spec(),
     ])
 }

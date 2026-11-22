@@ -882,7 +882,11 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         .nest("/api", api)
         .merge(audit_route)
         .merge(fact_routes)
-        .merge(ready.unwrap_or_default());
+        .merge(ready.unwrap_or_default())
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(backend.background_writes()),
+            await_background_writes_layer,
+        ));
 
     // One group, the whole surface under the 1 MiB default cap and the origin
     // check — `/health` and `/ready` included, as on the TS spine, which checks
@@ -911,6 +915,30 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         },
     )
     .await
+}
+
+/// Test-only: answer each HTTP request only once the backend's detached
+/// writes have settled — the stub's twin of the TS test binary's
+/// `await_pending_effects: true`.
+///
+/// Production answers a refused request before its failure audit row lands
+/// (the row is spawned, never awaited), so the next request's row can take a
+/// lower `seq` and two requests' rows land in either order; the TS test
+/// binary flushes a request's effects before answering, which orders them.
+/// The cross-backend suites compare those rows by `seq`, so the stub settles
+/// them the same way. A diverging-from-production symbol on purpose: no
+/// production server mounts it. It waits on the whole tracker
+/// (`AppBackend::background_writes`), a concurrent request's writes
+/// included, which a test binary can afford. A WebSocket's frames are
+/// untouched — only the upgrade's answer waits — as on the TS binary.
+async fn await_background_writes_layer(
+    axum::extract::State(background_writes): axum::extract::State<Arc<fuz_auth::BackgroundWrites>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let response = next.run(request).await;
+    background_writes.drain().await;
+    response
 }
 
 async fn health() -> Json<serde_json::Value> {

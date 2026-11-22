@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use axum::Router;
 use fuz_auth::{
-    AuditEmitter, AuthGate, ConnectionCloser, Keyring, PasswordHasher, RateLimiter,
-    RateLimiterMode, RateLimiterOptions, SharedDaemonTokenState,
+    AuditEmitter, AuthGate, BackgroundWrites, ConnectionCloser, Keyring, PasswordHasher,
+    RateLimiter, RateLimiterMode, RateLimiterOptions, SharedDaemonTokenState,
 };
 use fuz_db::{MigrationNamespace, Pool};
 use fuz_http::{BaseServerEnv, ParsedProxy, StackOptions};
@@ -245,12 +245,22 @@ impl std::fmt::Debug for AppBackend {
 }
 
 impl AppBackend {
+    /// The server's one tracker of detached writes — the one its audit
+    /// emitter was built over: the gate ([`Self::auth_gate`]) spawns its
+    /// token touches on it, and shutdown ([`Self::serve_backend`]) and
+    /// `_testing_drain_effects` drain it.
+    #[must_use]
+    pub fn background_writes(&self) -> &Arc<BackgroundWrites> {
+        self.audit_emitter.background_writes()
+    }
+
     /// The front door every credentialed route checks a request at — the
     /// origin allowlist beside the credential walk (daemon token → cookie →
     /// bearer) over the server's session cookie. Build it once and clone it
     /// into every route state, and read the stack's options from the same
     /// backend ([`Self::stack_options`]), so the stack's origin check and the
-    /// in-handler one read one allowlist.
+    /// in-handler one read one allowlist. The gate spawns its token touches
+    /// on [`Self::background_writes`], so the shutdown drain covers them.
     #[must_use]
     pub fn auth_gate(&self) -> AuthGate {
         AuthGate {
@@ -259,6 +269,7 @@ impl AppBackend {
             daemon_token_state: self.daemon_token_state.clone(),
             session_cookie_name: self.session_cookie_name,
             allowed_origins: self.allowed_origins.clone(),
+            background_writes: Arc::clone(self.background_writes()),
         }
     }
 
@@ -298,13 +309,13 @@ impl AppBackend {
 
     /// What [`super::serve_until_shutdown`] serves over: this backend's
     /// [`Self::connection_closer`], which shutdown closes every live
-    /// connection through, its audit emitter, whose spawned writes shutdown
+    /// connection through, [`Self::background_writes`], which shutdown
     /// drains, and `upkeep` to run beside the server.
     #[must_use]
     pub fn serve_backend(&self, upkeep: Option<super::UpkeepOptions>) -> super::ServeBackend {
         super::ServeBackend::new(
             self.connection_closer(),
-            Arc::clone(&self.audit_emitter),
+            Arc::clone(self.background_writes()),
             upkeep,
         )
     }
@@ -327,6 +338,7 @@ impl AppBackend {
             daemon_token_state: self.daemon_token_state.clone(),
             session_cookie_name: self.session_cookie_name,
             audit_emitter: Arc::clone(&self.audit_emitter),
+            background_writes: Arc::clone(self.background_writes()),
         }
     }
 
@@ -523,7 +535,8 @@ pub fn build_app_backend(
     )?;
     let keyring = Arc::new(build_keyring(env.cookie_keys.as_deref())?);
     let audit_emitter = Arc::new(
-        AuditEmitter::new(pool.clone()).with_checkout_timeout(env.db_audit_checkout_timeout),
+        AuditEmitter::new(pool.clone(), Arc::new(BackgroundWrites::default()))
+            .with_checkout_timeout(env.db_audit_checkout_timeout),
     );
     Ok(AppBackend {
         login_ip_rate_limiter: rate_limiters.limiter(*login_ip_rate_limit),
@@ -857,7 +870,8 @@ mod tests {
         );
     }
 
-    /// The backend's emitter tracks its pool writes: a fire-and-forget write
+    /// The backend's emitter tracks its pool writes, and its gate spawns token
+    /// touches on the same tracker: a fire-and-forget write
     /// still in flight (here, stuck dialing a server that accepts the
     /// connection and never answers) holds the drain — what shutdown and
     /// `_testing_drain_effects` wait on — until the write ends.
@@ -897,6 +911,12 @@ mod tests {
             &SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
         )
         .expect("the core builds without the database");
+
+        // the gate rides the emitter's tracker, so one drain covers both
+        assert!(Arc::ptr_eq(
+            &backend.auth_gate().background_writes,
+            backend.background_writes()
+        ));
 
         let write = backend
             .audit_emitter

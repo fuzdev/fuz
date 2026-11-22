@@ -473,7 +473,7 @@ impl ConnectionCloser for ProbingCloser {
 /// one-origin allowlist (a request with no `Origin` is allowed).
 fn account_state(pool: Pool, hasher: Arc<dyn PasswordHasher>) -> AccountRouteState {
     AccountRouteState {
-        audit: Arc::new(AuditEmitter::new(pool.clone())),
+        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
         gate: fuz_testing::testing_auth_gate(pool),
         password_hasher: hasher,
         connection_closer: Arc::new(NoopConnectionCloser),
@@ -534,7 +534,7 @@ fn bootstrap_state(
     let gate = fuz_testing::testing_auth_gate(pool.clone());
     BootstrapRouteState {
         options: Arc::new(BootstrapOptions {
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             pool,
             password_hasher: StubHasher::accepting(),
             bootstrap_available: Arc::new(AtomicBool::new(available)),
@@ -561,7 +561,7 @@ fn signup_state(pool: Pool) -> SignupRouteState {
         options: Arc::new(SignupOptions {
             keyring: Arc::clone(&gate.keyring),
             session_cookie_name: gate.session_cookie_name,
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             pool,
             password_hasher: StubHasher::accepting(),
             signup_ip_rate_limiter: None,
@@ -1284,7 +1284,7 @@ fn limited_signup_router(pool: Pool, ip: &Arc<RateLimiter>, account: &Arc<RateLi
         options: Arc::new(SignupOptions {
             keyring: Arc::clone(&gate.keyring),
             session_cookie_name: gate.session_cookie_name,
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             pool,
             password_hasher: StubHasher::accepting(),
             signup_ip_rate_limiter: Some(Arc::clone(ip)),

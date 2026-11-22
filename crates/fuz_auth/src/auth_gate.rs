@@ -46,6 +46,7 @@ use axum::response::Response;
 use deadpool_postgres::Pool;
 use fuz_http::{AllowedOrigins, CookieClearHook};
 
+use crate::background_writes::BackgroundWrites;
 use crate::daemon_token::SharedDaemonTokenState;
 use crate::keyring::Keyring;
 use crate::request_context::RequestActorContext;
@@ -147,6 +148,11 @@ pub struct AuthGate {
     /// The validated origin allowlist [`check_origin`](Self::check_origin)
     /// reads.
     pub allowed_origins: AllowedOrigins,
+    /// The tracker the bearer leg spawns its token touch on — the server's
+    /// own (`fuz_actions::server::AppBackend`'s, which its audit emitter is
+    /// built over), so the shutdown drain and `_testing_drain_effects` await
+    /// the touch with the audit writes.
+    pub background_writes: Arc<BackgroundWrites>,
 }
 
 impl std::fmt::Debug for AuthGate {
@@ -275,6 +281,7 @@ impl AuthGate {
             self.daemon_token_state.as_ref(),
             self.session_cookie_name,
             client_ip,
+            &self.background_writes,
         )
         .await
     }
@@ -328,6 +335,7 @@ impl AuthGate {
             self.daemon_token_state.as_ref(),
             self.session_cookie_name,
             client_ip,
+            &self.background_writes,
         )
         .await
     }
@@ -380,6 +388,7 @@ mod tests {
             daemon_token_state: None,
             session_cookie_name: "fuz_session",
             allowed_origins: AllowedOrigins::parse("https://app.example").expect("an allowlist"),
+            background_writes: Arc::default(),
         }
     }
 

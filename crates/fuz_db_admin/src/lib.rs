@@ -1054,7 +1054,7 @@ mod origin_gate_tests {
             credential_gate: CredentialGate::SESSION_ONLY,
             browsable_tables: &["scratch"],
             non_deletable_tables: &[],
-            audit: Arc::new(AuditEmitter::new(pool)),
+            audit: Arc::new(AuditEmitter::new(pool, Arc::default())),
         }
     }
 
@@ -1293,7 +1293,7 @@ mod row_delete_pg_tests {
     /// attribution assertions.
     fn test_audit(pool: &Pool) -> (Arc<AuditEmitter>, uuid::Uuid) {
         (
-            Arc::new(AuditEmitter::new(pool.clone())),
+            Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             uuid::Uuid::from_u128(0xdb_ad),
         )
     }
@@ -2040,7 +2040,7 @@ mod row_delete_pg_tests {
             credential_gate: CredentialGate::SESSION_ONLY,
             browsable_tables: TEST_BROWSABLE,
             non_deletable_tables: &[],
-            audit: Arc::new(AuditEmitter::new(pool)),
+            audit: Arc::new(AuditEmitter::new(pool, Arc::default())),
         }
     }
 

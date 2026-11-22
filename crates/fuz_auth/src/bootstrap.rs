@@ -453,7 +453,9 @@ pub async fn bootstrap_handler(
     // nothing created, and the window open. Everything from the pool checkout
     // to the success row's listener fan-out is on the task, so no await point
     // of it is the request's to cancel. A panic on the task answers the 500.
-    let write = tokio::spawn(bootstrap_write(
+    // The task rides the server's tracker (the emitter's), so a shutdown
+    // drains a write a dropped request left running.
+    let write = options.audit.background_writes().spawn(bootstrap_write(
         options.clone(),
         Arc::clone(token_store),
         canonical_username,

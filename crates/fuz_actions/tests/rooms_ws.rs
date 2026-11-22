@@ -187,7 +187,7 @@ async fn serve(pool: &Pool, limits: Limits) -> Server {
         dispatch: fuz_actions::ActionDispatch {
             gate: fuz_testing::testing_auth_gate(pool.clone()),
             registry: Arc::new(ActionRegistry::compile(specs).unwrap()),
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             connection_closer: Arc::new(NoopConnectionCloser),
             notification_sender,
             rate_limits,

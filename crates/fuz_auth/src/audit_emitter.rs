@@ -28,13 +28,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use deadpool_postgres::{GenericClient, Pool};
 use futures::future::BoxFuture;
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::audit_event_schema::AuditLogEvent;
@@ -44,6 +41,7 @@ use crate::audit_event_type::{
 };
 use crate::audit_listener::{AuditListenerFn, AuditListenerId};
 use crate::audit_log_queries::{audit_log_columns, decode_audit_log_row};
+use crate::background_writes::BackgroundWrites;
 use crate::credential_type::CredentialType;
 use fuz_http::{JsonrpcError, internal_error_with_source};
 
@@ -243,50 +241,6 @@ impl AuditLogInput {
     }
 }
 
-/// In-flight tracker for fire-and-forget `emit` writes.
-///
-/// Counts outstanding pool-routed audit tasks so [`AuditEmitter::drain_inflight`]
-/// can await them — what a server's graceful shutdown waits on so a spawned
-/// failure row lands before the runtime drops its task, and the deterministic
-/// barrier behind the `_testing_drain_effects` test action. Always on: an
-/// atomic increment and decrement per pool write.
-#[derive(Debug, Default)]
-struct InflightAuditWrites {
-    pending: AtomicUsize,
-    drain_notify: Notify,
-}
-
-/// One tracked [`AuditEmitter::emit`] write: counted in flight from
-/// [`Self::acquire`] until the guard drops.
-///
-/// Settling in `Drop` rather than at the end of the spawned task's body is
-/// what lets a drain finish when that body never reaches its end — a
-/// listener that panics under unwinding, a task aborted or dropped with its
-/// runtime before it ran. Otherwise the count would stay up and
-/// [`AuditEmitter::drain_inflight`] would wait forever.
-struct InflightWriteGuard {
-    emitter: Arc<AuditEmitter>,
-}
-
-impl InflightWriteGuard {
-    /// Count one write in flight.
-    fn acquire(emitter: &Arc<AuditEmitter>) -> Self {
-        emitter.inflight.pending.fetch_add(1, Ordering::SeqCst);
-        Self {
-            emitter: Arc::clone(emitter),
-        }
-    }
-}
-
-impl Drop for InflightWriteGuard {
-    fn drop(&mut self) {
-        let inflight = &self.emitter.inflight;
-        if inflight.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
-            inflight.drain_notify.notify_waiters();
-        }
-    }
-}
-
 /// Bound audit-emit capability.
 ///
 /// Constructed once at startup with the consumer's [`Pool`], wrapped in
@@ -304,9 +258,9 @@ pub struct AuditEmitter {
     /// lets [`Self::remove_listener`] take out one registration of a
     /// listener registered twice.
     listeners: RwLock<Vec<(AuditListenerId, AuditListenerFn)>>,
-    /// The pool writes in flight. Stored by value — each write's
-    /// [`InflightWriteGuard`] reaches it through an `Arc<Self>`.
-    inflight: InflightAuditWrites,
+    /// The tracker this emitter's pool writes are spawned on — the server's
+    /// one, which its backend owns and its [`crate::AuthGate`] holds too.
+    background_writes: Arc<BackgroundWrites>,
 }
 
 impl std::fmt::Debug for AuditEmitter {
@@ -319,13 +273,18 @@ impl std::fmt::Debug for AuditEmitter {
 }
 
 impl AuditEmitter {
+    /// An emitter writing through `pool`, its pool writes spawned on
+    /// `background_writes` — the server's tracker, which its backend owns
+    /// (`fuz_actions::server::AppBackend::background_writes`), so the
+    /// shutdown drain and `_testing_drain_effects` await them. A test passes
+    /// `Arc::default()`.
     #[must_use]
-    pub fn new(pool: Pool) -> Self {
+    pub fn new(pool: Pool, background_writes: Arc<BackgroundWrites>) -> Self {
         Self {
             pool,
             checkout_timeout: fuz_db::DEFAULT_AUDIT_CHECKOUT_TIMEOUT,
             listeners: RwLock::new(Vec::new()),
-            inflight: InflightAuditWrites::default(),
+            background_writes,
         }
     }
 
@@ -346,43 +305,45 @@ impl AuditEmitter {
         self.checkout_timeout
     }
 
-    /// How many [`Self::emit`] writes are in flight — spawned and not yet
-    /// ended. What a shutdown whose drain bound ran out reports as given up.
+    /// The tracker this emitter was built over ([`Self::new`]), which every
+    /// [`Self::emit`] pool write is spawned on.
     #[must_use]
-    pub fn inflight_count(&self) -> usize {
-        self.inflight.pending.load(Ordering::SeqCst)
+    pub const fn background_writes(&self) -> &Arc<BackgroundWrites> {
+        &self.background_writes
     }
 
-    /// Await every fire-and-forget [`Self::emit`] write in flight.
+    /// How many writes on [`Self::background_writes`] are in flight —
+    /// spawned and not yet ended: this emitter's pool writes and anything
+    /// else on the same tracker (a server's token touches, its bootstrap
+    /// write).
+    #[must_use]
+    pub fn inflight_count(&self) -> usize {
+        self.background_writes.inflight_count()
+    }
+
+    /// Await every detached write on [`Self::background_writes`] — each
+    /// fire-and-forget [`Self::emit`] write in flight, and on a server's
+    /// tracker its token touches and bootstrap write too.
     ///
     /// Waits until no tracked write is outstanding, so a write that starts
     /// while the drain is waiting (an emit from a post-commit effect) is
     /// awaited too; one that starts after the drain resolves is not. Once it
     /// resolves, a following `audit_log_list` observes every row whose `emit`
-    /// ran before the drain was called. A tracked write is the whole spawned
-    /// task — the INSERT and the listener fan-out of the row it wrote — and
-    /// it stops counting when that task ends however it ends: finished,
-    /// unwound by a panicking listener, or aborted.
+    /// ran before the drain was called. A tracked emit is the whole spawned
+    /// task — the INSERT and the listener fan-out of the row it wrote — and it
+    /// stops counting when that task ends however it ends: finished, unwound
+    /// by a panicking listener, or aborted.
     /// [`Self::emit_in_tx`] is not tracked: its row commits with the
     /// caller's transaction, and its fan-out runs from the post-commit drain.
     ///
-    /// A server's graceful shutdown awaits it, bounded, so a failure row
-    /// spawned just before the signal lands before the runtime drops its task
-    /// (`fuz_actions::server::serve_until_shutdown`); the
-    /// `_testing_drain_effects` test action awaits it before an audit read.
-    /// Twin of the TS `AuditEmitter.drain_inflight` in `fuz_app`, which also
-    /// waits for zero rather than for a snapshot.
+    /// The same wait as [`BackgroundWrites::drain`] on the tracker, which a
+    /// server's shutdown (`fuz_actions::server::serve_until_shutdown`) and the
+    /// `_testing_drain_effects` test action await directly. Twin of the TS
+    /// `AuditEmitter.drain_inflight` in `fuz_app`, which also waits for zero
+    /// rather than for a snapshot; the TS token touch rides its request's
+    /// `pending_effects` instead.
     pub async fn drain_inflight(&self) {
-        let inflight = &self.inflight;
-        loop {
-            // Arm the waiter before re-checking the count so a `notify_waiters`
-            // between the load and the await can't be missed.
-            let notified = inflight.drain_notify.notified();
-            if inflight.pending.load(Ordering::SeqCst) == 0 {
-                return;
-            }
-            notified.await;
-        }
+        self.background_writes.drain().await;
     }
 
     /// Register an audit-event listener at the end of the chain.
@@ -438,24 +399,18 @@ impl AuditEmitter {
     /// [`Self::emit_in_tx`] instead. See [`crate::AUDIT_EVENT_SPECS`]
     /// for the per-event routing policy.
     ///
-    /// The write runs on a detached tokio task, counted in flight until it
-    /// ends; no spine handler awaits the returned `JoinHandle<()>`, so the
-    /// row never holds a response. Dropping the handle doesn't cancel the
-    /// task, but the runtime shutting down does — mid-checkout or mid-INSERT,
-    /// with nothing logged — so a server's shutdown awaits
-    /// [`Self::drain_inflight`], bounded, before it lets the runtime go. A
-    /// reader that must see the row (a test) drains the same way.
+    /// The write runs on a detached tokio task, counted in flight on
+    /// [`Self::background_writes`] until it ends; no spine handler awaits
+    /// the returned `JoinHandle<()>`, so the row never holds a response.
+    /// Dropping the handle doesn't cancel the task, but the runtime shutting
+    /// down does — mid-checkout or mid-INSERT, with nothing logged — so a
+    /// server's shutdown drains the tracker, bounded, before it lets the
+    /// runtime go. A reader that must see the row (a test) drains the same
+    /// way ([`Self::drain_inflight`]).
     pub fn emit(self: &Arc<Self>, input: AuditLogInput) -> JoinHandle<()> {
         let emitter = Arc::clone(self);
-        // Register the in-flight write BEFORE spawning so a concurrent
-        // `drain_inflight` can never observe a count that omits it.
-        let inflight = InflightWriteGuard::acquire(self);
-        tokio::spawn(async move {
-            // held for the task's life: the count settles when the task ends
-            // however it ends — done, panicked, or aborted before it ran
-            let _inflight = inflight;
-            emitter.write_and_notify(input).await;
-        })
+        self.background_writes
+            .spawn(async move { emitter.write_and_notify(input).await })
     }
 
     /// In-tx audit write — INSERT against the supplied `db` client.
@@ -918,7 +873,7 @@ mod listener_tests {
             &fuz_db::PoolOptions::default(),
         )
         .expect("a lazily-built pool needs no server");
-        Arc::new(AuditEmitter::new(pool))
+        Arc::new(AuditEmitter::new(pool, Arc::default()))
     }
 
     fn event() -> Arc<AuditLogEvent> {
@@ -1079,7 +1034,7 @@ mod drain_tests {
             &fuz_db::PoolOptions::default(),
         )
         .expect("a lazily-built pool needs no server");
-        let emitter = Arc::new(AuditEmitter::new(pool));
+        let emitter = Arc::new(AuditEmitter::new(pool, Arc::default()));
         // the current-thread test runtime doesn't run the task until this
         // test yields, so the abort lands before its first poll
         let handle = emitter.emit(AuditLogInput::for_event(AuditEventType::Login));

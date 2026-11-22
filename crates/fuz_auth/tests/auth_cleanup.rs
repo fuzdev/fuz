@@ -164,7 +164,7 @@ fn options_with_closer(pool: &Pool) -> (AuthCleanupOptions, Arc<RecordingCloser>
     (
         AuthCleanupOptions {
             pool: pool.clone(),
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             connection_closer: Arc::<RecordingCloser>::clone(&closer),
         },
         closer,
@@ -204,7 +204,7 @@ async fn remaining_sessions(pool: &Pool) -> Vec<String> {
 /// Options over the test pool, with a listener recording every fanned-out
 /// event. The offer cases close nothing, so the closer is the no-op.
 fn options_recording(pool: &Pool) -> (AuthCleanupOptions, Arc<Mutex<Vec<Arc<AuditLogEvent>>>>) {
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let events: Arc<Mutex<Vec<Arc<AuditLogEvent>>>> = Arc::default();
     let sink = Arc::clone(&events);
     audit.add_listener(Arc::new(move |event| {
@@ -799,7 +799,7 @@ async fn the_session_sweep_closes_only_after_the_delete_commits() {
     });
     let options = AuthCleanupOptions {
         pool: pool.clone(),
-        audit: Arc::new(AuditEmitter::new(pool.clone())),
+        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
         connection_closer: Arc::<CommitProbingCloser>::clone(&closer),
     };
     assert_eq!(cleanup_expired_sessions(&options).await.unwrap(), 2);
@@ -1019,7 +1019,7 @@ async fn listeners_fire_only_after_the_commit() {
     )
     .await;
 
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     // `(audit row visible, offer stamp visible)` per event
     let observed: Arc<Mutex<Vec<(bool, bool)>>> = Arc::default();
     let sink = Arc::clone(&observed);
@@ -1112,7 +1112,7 @@ async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelle
     )
     .await;
 
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let (tx, mut swept) = tokio::sync::mpsc::unbounded_channel::<Arc<AuditLogEvent>>();
     audit.add_listener(Arc::new(move |event| {
         // the receiver outlives the task; a send after the test's last

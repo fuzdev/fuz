@@ -50,7 +50,7 @@ fn emitter() -> Arc<AuditEmitter> {
         &fuz_db::PoolOptions::default(),
     )
     .expect("lazy pool");
-    Arc::new(AuditEmitter::new(pool))
+    Arc::new(AuditEmitter::new(pool, Arc::default()))
 }
 
 fn event(

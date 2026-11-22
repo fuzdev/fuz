@@ -111,7 +111,7 @@ async fn setup() -> Harness {
     let options = PerformActionOptions {
         pool: pool.clone(),
         registry: Arc::new(ActionRegistry::compile(vec![spec]).expect("compile registry")),
-        audit: Arc::new(AuditEmitter::new(pool.clone())),
+        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
         connection_closer: Arc::new(NoopConnectionCloser),
         notification_sender: Arc::new(NoopNotificationSender),
         peer: fuz_realtime::noop_action_peer(),

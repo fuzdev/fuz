@@ -128,7 +128,7 @@ fn build_state(pool: Pool, hasher: Arc<LatchHasher>) -> AccountRouteState {
     AccountRouteState {
         gate: fuz_testing::testing_auth_gate(pool.clone()),
         password_hasher: hasher,
-        audit: Arc::new(AuditEmitter::new(pool)),
+        audit: Arc::new(AuditEmitter::new(pool, Arc::default())),
         connection_closer,
         bootstrap_available: Arc::new(AtomicBool::new(false)),
         login_ip_rate_limiter: None,

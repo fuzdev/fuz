@@ -932,7 +932,7 @@ fn ws_app(
         dispatch: fuz_actions::ActionDispatch {
             gate: fuz_testing::testing_auth_gate(pool.clone()),
             registry: Arc::new(ActionRegistry::compile([]).unwrap()),
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             connection_closer: Arc::new(NoopConnectionCloser),
             notification_sender: Arc::new(NoopNotificationSender),
             rate_limits: fuz_actions::ActionRateLimits::defaults(
@@ -1346,7 +1346,7 @@ fn bounded_state(pool: &Pool, registry: &Arc<ConnectionRegistry>, keeper: Uuid) 
                 ActionRegistry::compile([create_testing_flood_notifications_action_spec()])
                     .unwrap(),
             ),
-            audit: Arc::new(AuditEmitter::new(pool.clone())),
+            audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
             connection_closer: Arc::new(NoopConnectionCloser),
             notification_sender: Arc::new(NoopNotificationSender),
             rate_limits: fuz_actions::ActionRateLimits::defaults(

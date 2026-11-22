@@ -30,7 +30,7 @@ use fuz_auth::{AuditEmitter, AuditEventType, AuditListenerFn, AuditLogInput};
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_panicking_listener_still_settles_the_drain() {
     let pool = common::fresh_db_pool().await;
-    let emitter = Arc::new(AuditEmitter::new(pool));
+    let emitter = Arc::new(AuditEmitter::new(pool, Arc::default()));
     let heard = Arc::new(AtomicBool::new(false));
     let listener: AuditListenerFn = {
         let heard = Arc::clone(&heard);
@@ -104,8 +104,10 @@ async fn a_pool_write_waits_for_the_audit_checkout_bound() {
     let pool = one_client_pool();
 
     // the long bound: the write outlasts the held client
-    let emitter =
-        Arc::new(AuditEmitter::new(pool.clone()).with_checkout_timeout(Duration::from_secs(5)));
+    let emitter = Arc::new(
+        AuditEmitter::new(pool.clone(), Arc::default())
+            .with_checkout_timeout(Duration::from_secs(5)),
+    );
     let held = pool.get().await.expect("the one client");
     let handle = emitter.emit(AuditLogInput::for_event(AuditEventType::Login).failure());
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -118,8 +120,10 @@ async fn a_pool_write_waits_for_the_audit_checkout_bound() {
     );
 
     // the short bound: the write gives up while the client is held
-    let emitter =
-        Arc::new(AuditEmitter::new(pool.clone()).with_checkout_timeout(Duration::from_millis(50)));
+    let emitter = Arc::new(
+        AuditEmitter::new(pool.clone(), Arc::default())
+            .with_checkout_timeout(Duration::from_millis(50)),
+    );
     let held = pool.get().await.expect("the one client");
     emitter
         .emit(AuditLogInput::for_event(AuditEventType::Logout).failure())

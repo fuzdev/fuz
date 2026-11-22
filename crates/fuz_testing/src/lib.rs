@@ -110,9 +110,7 @@ mod auth_gate_tests {
 
     use std::sync::Arc;
 
-    use fuz_auth::{
-        AuditEmitter, AuthAxis, CredentialGate, CredentialType, DaemonTokenState, Keyring,
-    };
+    use fuz_auth::{AuthAxis, CredentialGate, CredentialType, DaemonTokenState, Keyring};
     use parking_lot::RwLock;
 
     use super::{
@@ -133,17 +131,6 @@ mod auth_gate_tests {
         Arc::new(Keyring::new("test-cookie-key-not-a-real-secret").expect("one valid key"))
     }
 
-    /// A never-connected lazy pool — `create_pool` builds the deadpool config
-    /// without dialing Postgres, and the drain handler (its only consumer)
-    /// never runs in this test.
-    fn unused_pool() -> deadpool_postgres::Pool {
-        fuz_db::create_pool(
-            "postgresql://test@localhost/test",
-            &fuz_db::PoolOptions::default(),
-        )
-        .expect("lazy pool builds")
-    }
-
     fn daemon_token_state() -> Arc<RwLock<DaemonTokenState>> {
         // Never validated here — these tests read only `.auth` off the specs.
         super::daemon_token_state("", None)
@@ -161,7 +148,7 @@ mod auth_gate_tests {
                 session_cookie_name: "fuz_session",
                 reset_state: None,
             }),
-            create_testing_drain_effects_action_spec(Arc::new(AuditEmitter::new(unused_pool()))),
+            create_testing_drain_effects_action_spec(Arc::default()),
             create_testing_mint_session_action_spec(test_keyring(), "fuz_session"),
             create_testing_put_fact_action_spec(),
             create_testing_schema_snapshot_action_spec(),
