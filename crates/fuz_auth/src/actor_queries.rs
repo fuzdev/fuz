@@ -361,6 +361,9 @@ pub async fn query_actor_undelete(
 
 /// Look up active (non-revoked, non-expired) role grants for an actor.
 ///
+/// Oldest first; grants of one instant (bootstrap's keeper and admin) by role,
+/// scope and id — the admin account list's order, and the TS twin's.
+///
 /// Tombstone-blind — call only off a resolved active actor.
 ///
 /// # Errors
@@ -374,7 +377,7 @@ pub async fn query_role_grant_find_active_for_actor(
         "SELECT {columns} FROM role_grant
          WHERE actor_id = $1
            AND {active}
-         ORDER BY created_at",
+         ORDER BY created_at, role, scope_id, id",
         columns = role_grant_row_columns(),
         active = crate::role_grant_active_sql("role_grant"),
     );
@@ -425,9 +428,9 @@ pub async fn query_active_actor_holds_any_global_role(
 ///
 /// Returns the full [`RoleGrantSummary`] shape (`id, role, scope_kind,
 /// scope_id, created_at, expires_at, granted_by`), mirroring TS
-/// `RoleGrantSummaryJson`. Same active filter and projection
-/// (`role_grant_summary_columns`) as the admin account-listing query
-/// (`query_admin_account_list`), scoped to one actor. Used by
+/// `RoleGrantSummaryJson`. Same active filter, projection
+/// (`role_grant_summary_columns`) and order as the admin account-listing
+/// query (`query_admin_account_list`), scoped to one actor. Used by
 /// `GET /api/account/status` (which returns the full summary), distinct
 /// from [`query_role_grant_find_active_for_actor`] (the narrow `RoleGrantRow` the
 /// per-request auth context carries for ACL checks).
@@ -444,7 +447,7 @@ pub async fn query_role_grant_summaries_for_actor(
          FROM role_grant
          WHERE actor_id = $1
            AND {active}
-         ORDER BY created_at",
+         ORDER BY created_at, role, scope_id, id",
         columns = role_grant_summary_columns("role_grant"),
         active = crate::role_grant_active_sql("role_grant"),
     );
