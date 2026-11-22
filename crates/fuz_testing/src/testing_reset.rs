@@ -89,6 +89,19 @@ use serde_json::{Value, json};
 /// 401.
 const DEFAULT_TEST_PASSWORD: &str = "test-password-123";
 
+/// Restamps a seeded account's session at the wall clock, run right after
+/// the account is seeded. The reset seeds every account in one transaction,
+/// where `NOW()` is one instant, so the seeded sessions would tie on
+/// `created_at` and a list ordered by it (`admin_session_list`) would break
+/// the tie by the random session hash — a different order per run and per
+/// spine. Stamped in seed order, they list the same on both. Byte for byte
+/// the statement of `fuz_app`'s TS reset (`RESET_SESSION_CLOCK_STAMP_SQL`);
+/// the actor twin is [`query_create_actor_with_clock_timestamp`]. Kept a
+/// plain string literal, since `fuz_app`'s conformance copy test reads it out
+/// of this source.
+const RESET_SESSION_CLOCK_STAMP_SQL: &str =
+    "UPDATE auth_session SET created_at = clock_timestamp() WHERE account_id = $1";
+
 /// Type-erased reset-state callback future, borrowing the reset
 /// transaction for `'a`.
 ///
@@ -501,6 +514,9 @@ where
         .await
         .map_err(|e| internal_error_with_source("create_capped_session", &e))?
         .into_token_for_new_account();
+    db.execute(RESET_SESSION_CLOCK_STAMP_SQL, &[&account.id])
+        .await
+        .map_err(|e| internal_error_with_source("restamp session created_at", &e))?;
     // the response carries just the signed value (TS callers thread it into
     // their own cookie jar under the cookie's name)
     let cookie_value = signed_session_cookie_value(keyring, &session_token, cookie_name)
