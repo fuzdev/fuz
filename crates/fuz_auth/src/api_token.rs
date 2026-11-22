@@ -11,12 +11,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 /// literal).
 pub const API_TOKEN_PREFIX: &str = "secret_fuz_token_";
 
-/// Prefix on the public token id (e.g. `tok_abC0_d-3xyzA`).
+/// Prefix on the public token id (e.g. `tok_abC0_d-3xyzA`). Twin of
+/// `fuz_app`'s `API_TOKEN_ID_PREFIX`.
 pub const API_TOKEN_ID_PREFIX: &str = "tok_";
 
-/// Number of base64url chars taken from the raw token body for the
-/// public id.
-const ID_PREFIX_LEN: usize = 12;
+/// Length of the public id's body — the raw token body's first characters.
+/// Twin of `fuz_app`'s `API_TOKEN_ID_BODY_LENGTH`.
+pub const API_TOKEN_ID_BODY_LENGTH: usize = 12;
 
 /// Number of random bytes encoded into the raw token body — 32 bytes /
 /// 256 bits of entropy (matches `fuz_app`'s default).
@@ -53,6 +54,25 @@ pub fn is_api_token_shaped(raw: &str) -> bool {
 #[must_use]
 pub fn hash_api_token(token: &str) -> String {
     blake3::hash(token.as_bytes()).to_hex().to_string()
+}
+
+/// The public id of a raw API token: [`API_TOKEN_ID_PREFIX`] and the first
+/// [`API_TOKEN_ID_BODY_LENGTH`] characters of the body after
+/// [`API_TOKEN_PREFIX`].
+///
+/// Twin of `fuz_app`'s `to_api_token_id` (`auth/api_token.ts`): both spines
+/// derive the id the same way, so a token minted by either names the same id
+/// on both. `None` when `token` is not [`is_api_token_shaped`], where the TS
+/// twin throws — a caller holds a minted or prechecked token.
+#[must_use]
+pub fn to_api_token_id(token: &str) -> Option<String> {
+    if !is_api_token_shaped(token) {
+        return None;
+    }
+    let body_start = API_TOKEN_PREFIX.len();
+    // a shaped token is ASCII, so the byte range is a char range
+    let id_body = token.get(body_start..body_start + API_TOKEN_ID_BODY_LENGTH)?;
+    Some(format!("{API_TOKEN_ID_PREFIX}{id_body}"))
 }
 
 /// A freshly generated API token.
@@ -95,11 +115,13 @@ pub fn generate_api_token() -> GeneratedApiToken {
         reason = "OS RNG availability is a platform invariant"
     )]
     getrandom::fill(&mut bytes).expect("getrandom should always succeed on supported platforms");
-    let raw = URL_SAFE_NO_PAD.encode(bytes);
-    let token = format!("{API_TOKEN_PREFIX}{raw}");
+    let token = format!("{API_TOKEN_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes));
     let token_hash = hash_api_token(&token);
-    let id_body: String = raw.chars().take(ID_PREFIX_LEN).collect();
-    let id = format!("{API_TOKEN_ID_PREFIX}{id_body}");
+    #[expect(
+        clippy::expect_used,
+        reason = "a generated token is API-token shaped by construction"
+    )]
+    let id = to_api_token_id(&token).expect("a generated token is API-token shaped");
     GeneratedApiToken {
         token,
         id,
@@ -124,8 +146,15 @@ mod tests {
         );
 
         assert!(g.id.starts_with(API_TOKEN_ID_PREFIX));
-        assert_eq!(g.id.len(), API_TOKEN_ID_PREFIX.len() + ID_PREFIX_LEN);
-        assert_eq!(&g.id[API_TOKEN_ID_PREFIX.len()..], &body[..ID_PREFIX_LEN]);
+        assert_eq!(
+            g.id.len(),
+            API_TOKEN_ID_PREFIX.len() + API_TOKEN_ID_BODY_LENGTH
+        );
+        assert_eq!(
+            &g.id[API_TOKEN_ID_PREFIX.len()..],
+            &body[..API_TOKEN_ID_BODY_LENGTH]
+        );
+        assert!(crate::is_valid_token_id(&g.id), "{}", g.id);
 
         assert_eq!(g.token_hash.len(), 64);
         assert_eq!(
@@ -195,6 +224,39 @@ mod tests {
         ];
         for (name, value) in refused {
             assert!(!is_api_token_shaped(&value), "{name}: {value:?}");
+        }
+    }
+
+    /// The id is the prefix and the body's first characters, whatever they
+    /// are — a fixed token pins the derivation byte for byte.
+    #[test]
+    fn to_api_token_id_takes_the_body_head() {
+        let token = format!(
+            "{API_TOKEN_PREFIX}abC0_d-3xyzA{}",
+            "Z".repeat(TOKEN_BODY_LEN - API_TOKEN_ID_BODY_LENGTH)
+        );
+        assert_eq!(to_api_token_id(&token).as_deref(), Some("tok_abC0_d-3xyzA"));
+        for _ in 0..50 {
+            let g = generate_api_token();
+            assert_eq!(to_api_token_id(&g.token), Some(g.id));
+        }
+    }
+
+    /// Anything not API-token shaped has no id — a bare body, an id, a
+    /// truncated or padded token.
+    #[test]
+    fn to_api_token_id_refuses_what_is_not_a_token() {
+        let valid = format!("{API_TOKEN_PREFIX}{}", "A".repeat(TOKEN_BODY_LEN));
+        for value in [
+            String::new(),
+            API_TOKEN_PREFIX.to_owned(),
+            valid[API_TOKEN_PREFIX.len()..].to_owned(),
+            valid[..valid.len() - 1].to_owned(),
+            format!("{valid}A"),
+            format!("{valid}\n"),
+            "tok_AAAAAAAAAAAA".to_owned(),
+        ] {
+            assert_eq!(to_api_token_id(&value), None, "{value:?}");
         }
     }
 

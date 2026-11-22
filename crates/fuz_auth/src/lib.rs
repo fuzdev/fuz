@@ -198,8 +198,8 @@ pub use actor_schema::ActorRow;
 pub use actor_search_action_specs::{ActorSearchActionSpecs, ERROR_ACTOR_SEARCH_SCOPE_REQUIRED};
 pub use admin_action_specs::AdminActionSpecs;
 pub use api_token::{
-    API_TOKEN_ID_PREFIX, API_TOKEN_LEN, API_TOKEN_PREFIX, GeneratedApiToken, generate_api_token,
-    hash_api_token, is_api_token_shaped,
+    API_TOKEN_ID_BODY_LENGTH, API_TOKEN_ID_PREFIX, API_TOKEN_LEN, API_TOKEN_PREFIX,
+    GeneratedApiToken, generate_api_token, hash_api_token, is_api_token_shaped, to_api_token_id,
 };
 pub use api_token_schema::{ApiTokenListRow, ApiTokenRow};
 pub use app_settings_schema::AppSettings;
@@ -269,10 +269,9 @@ pub use password::{
 pub use password_argon2::Argon2idHasher;
 pub use password_hasher::{HashedPassword, PasswordHashError, PasswordHasher};
 pub use primitive_schemas::{
-    EMAIL_LENGTH_MAX, FACT_HASH_HEX_LENGTH, FACT_HASH_PREFIX, TOKEN_ID_PREFIX,
-    TOKEN_ID_SUFFIX_LENGTH, USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN, USERNAME_PROVIDED_LENGTH_MAX,
-    canonical_username_for_creation, is_valid_email, is_valid_fact_hash, is_valid_token_id,
-    is_valid_username_for_creation,
+    EMAIL_LENGTH_MAX, FACT_HASH_HEX_LENGTH, FACT_HASH_PREFIX, USERNAME_LENGTH_MAX,
+    USERNAME_LENGTH_MIN, USERNAME_PROVIDED_LENGTH_MAX, canonical_username_for_creation,
+    is_valid_email, is_valid_fact_hash, is_valid_token_id, is_valid_username_for_creation,
 };
 pub use rate_limiter::{
     DEFAULT_ACTION_ACCOUNT_RATE_LIMIT, DEFAULT_ACTION_IP_RATE_LIMIT,

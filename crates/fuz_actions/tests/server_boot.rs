@@ -279,7 +279,7 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
     use std::time::Duration;
 
     use fuz_actions::server::{
-        ServeOptions, boot_only_router, build_app_backend, serve_until_shutdown,
+        ServeMode, ServeOptions, boot_only_router, build_app_backend, serve_until_shutdown,
     };
     use fuz_auth::{AuditEventType, AuditLogInput};
     use fuz_testing::TestingTableLock;
@@ -302,13 +302,16 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
         Arc::new(Vec::new()),
     );
     serve_until_shutdown(
-        boot_only_router("audit_drain_test_server", &stack_options),
+        // the probes serve live here, over the backend whose write is held
+        ServeMode::Live {
+            router: boot_only_router("audit_drain_test_server", &stack_options).into_gated_router(),
+            backend: backend.serve_backend(None),
+        },
         ServeOptions {
             server_name: "audit_drain_test_server",
             addr: "127.0.0.1:0".parse().expect("addr"),
             drain_timeout: Duration::from_secs(10),
             shutdown,
-            backend: Some(backend.serve_backend(None)),
         },
     )
     .await

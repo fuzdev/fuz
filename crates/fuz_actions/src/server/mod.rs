@@ -19,7 +19,8 @@
 //!   [`crate::ActionRateLimits`] (the action limiter pair, one budget across
 //!   RPC, WS, and the auth set), and [`compile_action_registry`].
 //! - [`serve_until_shutdown`] (bind → upkeep → serve → join → drain the
-//!   audit writes in flight), over a [`ServeBackend`], with
+//!   audit writes in flight), over a [`ServeMode`] — a full router with its
+//!   [`ServeBackend`], or the [`BootOnlyRouter`] alone — with
 //!   [`spawn_upkeep`], [`boot_only`] (the no-database branch, over
 //!   [`boot_only_router`]), and [`SpineRunOptions`], which a consumer's
 //!   `RunAppOptions` embeds.
@@ -47,8 +48,8 @@ pub use backend::{
 };
 pub use route_states::{AuthRestRoutes, compile_action_registry};
 pub use serve::{
-    NOT_FOUND_TEXT, ServeBackend, ServeOptions, SpineRunOptions, UpkeepOptions, UpkeepTask,
-    boot_only, boot_only_router, fallback_group, not_found_response, probe_router,
-    serve_until_shutdown, spawn_upkeep, unmatched_route_response,
+    BootOnlyRouter, NOT_FOUND_TEXT, ServeBackend, ServeMode, ServeOptions, SpineRunOptions,
+    UpkeepOptions, UpkeepTask, boot_only, boot_only_router, fallback_group, not_found_response,
+    probe_router, serve_until_shutdown, spawn_upkeep, unmatched_route_response,
 };
 pub use startup_error::{REQUIRED_TRANSACTION_ISOLATION, StartupError};

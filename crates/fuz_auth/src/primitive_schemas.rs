@@ -15,6 +15,8 @@
 //! accepts longer / odder strings so future format changes don't lock
 //! out legitimate users mid-window.
 
+use crate::api_token::{API_TOKEN_ID_BODY_LENGTH, API_TOKEN_ID_PREFIX};
+
 /// Minimum username length on creation (3 chars: start + middle + end).
 pub const USERNAME_LENGTH_MIN: usize = 3;
 
@@ -178,19 +180,13 @@ pub fn is_valid_fact_hash(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Prefix every public API token id carries. Mirrors the TS
-/// `API_TOKEN_PREFIX`-derived id shape minted by `generate_api_token`.
-pub const TOKEN_ID_PREFIX: &str = "tok_";
-
-/// Number of base64url characters following [`TOKEN_ID_PREFIX`].
-pub const TOKEN_ID_SUFFIX_LENGTH: usize = 12;
-
 /// Whether `s` is a valid public API token id — the id `account_token_create`
 /// hands back and `account_token_revoke` takes.
 ///
 /// Twin of the TS `ApiTokenId` schema (`pipe(string, regex(API_TOKEN_ID_REGEX))`
 /// in `auth/api_token.ts`), whose regex is `^tok_[A-Za-z0-9_-]{12}$`: the
-/// literal `tok_` prefix followed by exactly twelve base64url characters
+/// literal [`API_TOKEN_ID_PREFIX`] followed by exactly
+/// [`API_TOKEN_ID_BODY_LENGTH`] base64url characters
 /// (ASCII alphanumerics plus `_` and `-`). Nothing else — no other length, no
 /// `+` or `/`, no padding, no surrounding whitespace.
 ///
@@ -206,13 +202,13 @@ pub const TOKEN_ID_SUFFIX_LENGTH: usize = 12;
 /// dependency, and a byte scan is faster than a DFA compile.
 #[must_use]
 pub fn is_valid_token_id(s: &str) -> bool {
-    let Some(suffix) = s.strip_prefix(TOKEN_ID_PREFIX) else {
+    let Some(suffix) = s.strip_prefix(API_TOKEN_ID_PREFIX) else {
         return false;
     };
     // `len()` is byte length; the base64url class below is ASCII-only, so a
     // multibyte character fails the class check rather than slipping the
     // count.
-    suffix.len() == TOKEN_ID_SUFFIX_LENGTH
+    suffix.len() == API_TOKEN_ID_BODY_LENGTH
         && suffix
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
@@ -359,10 +355,13 @@ mod tests {
         // the constants so the length bound and the literals can't drift.
         for filler in ['_', '-'] {
             let id = format!(
-                "{TOKEN_ID_PREFIX}{}",
-                filler.to_string().repeat(TOKEN_ID_SUFFIX_LENGTH)
+                "{API_TOKEN_ID_PREFIX}{}",
+                filler.to_string().repeat(API_TOKEN_ID_BODY_LENGTH)
             );
-            assert_eq!(id.len(), TOKEN_ID_PREFIX.len() + TOKEN_ID_SUFFIX_LENGTH);
+            assert_eq!(
+                id.len(),
+                API_TOKEN_ID_PREFIX.len() + API_TOKEN_ID_BODY_LENGTH
+            );
             assert!(is_valid_token_id(&id), "{id}");
         }
     }

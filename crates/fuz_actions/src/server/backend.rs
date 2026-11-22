@@ -307,7 +307,7 @@ impl AppBackend {
         )
     }
 
-    /// What [`super::serve_until_shutdown`] serves over: this backend's
+    /// The backend half of a [`super::ServeMode::Live`]: this backend's
     /// [`Self::connection_closer`], which shutdown closes every live
     /// connection through, [`Self::background_writes`], which shutdown
     /// drains, and `upkeep` to run beside the server.

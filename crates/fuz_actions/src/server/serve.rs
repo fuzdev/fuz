@@ -117,14 +117,38 @@ pub fn fallback_group() -> RouteGroup {
     )
 }
 
+/// The router a server serves with no database: the probes and the fallback,
+/// and nothing live.
+///
+/// Its own type so [`serve_until_shutdown`] can never serve a full router as
+/// boot-only — only [`boot_only_router`] (and [`boot_only`] over it) builds
+/// one, and [`ServeMode::BootOnly`] takes nothing else, so through
+/// [`serve_until_shutdown`] a router with live mounts always serves with its
+/// backend's closer and drain ([`ServeMode::Live`]). The guarantee is this
+/// function's, not the transport's: `fuz_http::serve_with_shutdown`, the
+/// public primitive below it, takes any closer.
+/// The converse is harmless and open: [`Self::into_gated_router`] lets the
+/// probes serve live.
+#[derive(Clone, Debug)]
+pub struct BootOnlyRouter(GatedRouter);
+
+impl BootOnlyRouter {
+    /// The router as a plain [`GatedRouter`] — to serve live, or beside a full
+    /// router in a test.
+    #[must_use]
+    pub fn into_gated_router(self) -> GatedRouter {
+        self.0
+    }
+}
+
 /// The router a server serves with no database.
 ///
 /// The probes ([`probe_router`]) and the fallback, through the same stack as
 /// the full router (1 MiB cap, origin-checked). Without a database there is no
 /// `AuthGate`, so `stack_options` comes from the env's allowlist and proxies.
 #[must_use]
-pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions) -> GatedRouter {
-    compose_stack(
+pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions) -> BootOnlyRouter {
+    BootOnlyRouter(compose_stack(
         [RouteGroup::new(
             "probes",
             probe_router(server_name),
@@ -132,7 +156,7 @@ pub fn boot_only_router(server_name: &'static str, stack_options: &StackOptions)
         )],
         fallback_group(),
         stack_options,
-    )
+    ))
 }
 
 /// The boot-only branch, for a server started with no `DATABASE_URL`: the
@@ -153,7 +177,7 @@ pub fn boot_only(
     env: &BaseServerEnv,
     spec: &AppBackendSpec,
     server_name: &'static str,
-) -> Result<GatedRouter, StartupError> {
+) -> Result<BootOnlyRouter, StartupError> {
     spec.browser_gates.admit_origin_wildcards(env)?;
     tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api/*, no /ready)");
     Ok(boot_only_router(
@@ -214,11 +238,9 @@ pub fn spawn_upkeep(options: UpkeepOptions, shutdown: &CancellationToken) -> Vec
     handles
 }
 
-/// What [`serve_until_shutdown`] serves with.
-#[expect(
-    missing_debug_implementations,
-    reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
-)]
+/// What [`serve_until_shutdown`] serves with, beside the router and backend
+/// ([`ServeMode`]).
+#[derive(Debug)]
 pub struct ServeOptions {
     /// Names the startup and shutdown sentinels (`<name> listening on …`).
     pub server_name: &'static str,
@@ -226,14 +248,32 @@ pub struct ServeOptions {
     pub drain_timeout: Duration,
     /// The process's shutdown token (`fuz_http::shutdown_token`).
     pub shutdown: CancellationToken,
-    /// What the server serves over: its closer, its tracker of detached
-    /// writes, its upkeep (`AppBackend::serve_backend`). `None` in boot-only mode, which
-    /// mounts nothing live, writes no audit row, and runs no upkeep.
-    pub backend: Option<ServeBackend>,
 }
 
-/// The backend half of [`ServeOptions`], built by `AppBackend::serve_backend`
-/// so the closer and the tracker are always the backend's own.
+/// What [`serve_until_shutdown`] serves: a full router always with its
+/// backend, or the boot-only router alone.
+#[expect(
+    missing_debug_implementations,
+    reason = "`ServeBackend` has no `Debug`"
+)]
+pub enum ServeMode {
+    /// A server with a database: its router, and the backend it serves over
+    /// — the closer shutdown closes every live connection through, the
+    /// tracker of detached writes shutdown drains, the upkeep beside it.
+    /// The router and the backend must come from the same `AppBackend`;
+    /// the types don't enforce it.
+    Live {
+        router: GatedRouter,
+        backend: ServeBackend,
+    },
+    /// A server with no database ([`boot_only`]): mounts nothing live,
+    /// writes no audit row, runs no upkeep, so it has no closer or drain.
+    BootOnly(BootOnlyRouter),
+}
+
+/// The backend half of [`ServeMode::Live`], built by
+/// `AppBackend::serve_backend` so the closer and the tracker are always the
+/// backend's own.
 #[expect(
     missing_debug_implementations,
     reason = "Arc-of-dyn and boxed-closure fields have no `Debug`"
@@ -251,7 +291,7 @@ pub struct ServeBackend {
 }
 
 impl ServeBackend {
-    /// The backend half of [`ServeOptions`] — `pub(crate)` so only
+    /// The backend half of [`ServeMode::Live`] — `pub(crate)` so only
     /// `AppBackend::serve_backend` builds one.
     pub(crate) fn new(
         connection_closer: Arc<dyn ConnectionCloser>,
@@ -269,24 +309,26 @@ impl ServeBackend {
 /// Bind, start the upkeep, serve until the shutdown token fires, then join
 /// the upkeep and drain the background writes in flight.
 ///
-/// On the token, `fuz_http::serve_with_shutdown` closes every live WebSocket
-/// with 1001 and ends every SSE stream through the closer, then drains
-/// in-flight requests, bounded by the drain timeout. It returns only once the
-/// token has fired, so the upkeep is already stopping. Then the backend's
-/// detached writes (`AppBackend::background_writes`) are awaited, bounded by
-/// the drain timeout again: a failure row or a token touch spawned by a
-/// request that just answered lands rather than dying with the runtime, and
-/// the writes given up on past the bound are counted in the log. A request
-/// still running past the request drain may spawn a write after this drain
-/// resolves; that write is lost, uncounted. Two `eprintln!` sentinels, which no log filter suppresses, mark the bind and
-/// the end.
+/// A [`ServeMode::BootOnly`] router has no backend: no upkeep, no closer,
+/// nothing to drain. For a [`ServeMode::Live`] one, on the token,
+/// `fuz_http::serve_with_shutdown` closes every live WebSocket with 1001 and
+/// ends every SSE stream through the closer, then drains in-flight requests,
+/// bounded by the drain timeout. It returns only once the token has fired, so
+/// the upkeep is already stopping. Then the backend's detached writes
+/// (`AppBackend::background_writes`) are awaited, bounded by the drain
+/// timeout again: a failure row or a token touch spawned by a request that
+/// just answered lands rather than dying with the runtime, and the writes
+/// given up on past the bound are counted in the log. A request still running
+/// past the request drain may spawn a write after this drain resolves; that
+/// write is lost, uncounted. Two `eprintln!` sentinels, which no log filter
+/// suppresses, mark the bind and the end.
 ///
 /// # Errors
 ///
 /// [`StartupError::Bind`] when the listener cannot bind;
 /// [`StartupError::Serve`] when the serve loop fails.
 pub async fn serve_until_shutdown(
-    router: GatedRouter,
+    mode: ServeMode,
     options: ServeOptions,
 ) -> Result<(), StartupError> {
     let ServeOptions {
@@ -294,18 +336,26 @@ pub async fn serve_until_shutdown(
         addr,
         drain_timeout,
         shutdown,
-        backend,
     } = options;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
-    let (connection_closer, background_writes, upkeep) = match backend {
-        Some(ServeBackend {
-            connection_closer,
-            background_writes,
+    let (router, connection_closer, background_writes, upkeep) = match mode {
+        ServeMode::Live {
+            router,
+            backend:
+                ServeBackend {
+                    connection_closer,
+                    background_writes,
+                    upkeep,
+                },
+        } => (
+            router,
+            Some(connection_closer),
+            Some(background_writes),
             upkeep,
-        }) => (Some(connection_closer), Some(background_writes), upkeep),
-        None => (None, None, None),
+        ),
+        ServeMode::BootOnly(router) => (router.into_gated_router(), None, None, None),
     };
     let upkeep = upkeep.map(|upkeep| spawn_upkeep(upkeep, &shutdown));
 
@@ -392,6 +442,7 @@ mod tests {
                 .expect("the peer parses"),
         ));
         let response = boot_only_router("probe_test_server", &stack_options)
+            .into_gated_router()
             .into_router_for_testing()
             .oneshot(request)
             .await
@@ -509,7 +560,7 @@ mod tests {
         }
     }
 
-    async fn boot_only_status(router: GatedRouter, host: &str) -> StatusCode {
+    async fn boot_only_status(router: BootOnlyRouter, host: &str) -> StatusCode {
         let mut request = Request::builder()
             .uri("/health")
             .header(header::HOST, host)
@@ -521,6 +572,7 @@ mod tests {
                 .expect("the peer parses"),
         ));
         router
+            .into_gated_router()
             .into_router_for_testing()
             .oneshot(request)
             .await
@@ -594,13 +646,12 @@ mod tests {
             Arc::new(Vec::new()),
         );
         let error = serve_until_shutdown(
-            boot_only_router("bind_test_server", &stack_options),
+            ServeMode::BootOnly(boot_only_router("bind_test_server", &stack_options)),
             ServeOptions {
                 server_name: "bind_test_server",
                 addr,
                 drain_timeout: Duration::from_secs(1),
                 shutdown: CancellationToken::new(),
-                backend: None,
             },
         )
         .await
@@ -622,13 +673,12 @@ mod tests {
         tokio::time::timeout(
             Duration::from_secs(10),
             serve_until_shutdown(
-                boot_only_router("cancel_test_server", &stack_options),
+                ServeMode::BootOnly(boot_only_router("cancel_test_server", &stack_options)),
                 ServeOptions {
                     server_name: "cancel_test_server",
                     addr: "127.0.0.1:0".parse().expect("addr"),
                     drain_timeout: Duration::from_secs(1),
                     shutdown,
-                    backend: None,
                 },
             ),
         )

@@ -35,7 +35,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use fuz_actions::ActionRateLimits;
 use fuz_actions::server::{
-    AppBackendSpec, BootedAppBackend, ServeOptions, SpineBackendOptions, StartupError,
+    AppBackendSpec, BootedAppBackend, ServeMode, ServeOptions, SpineBackendOptions, StartupError,
     compile_action_registry, create_app_backend, serve_until_shutdown,
 };
 use fuz_auth::actor_queries::query_active_actor_holds_any_global_role;
@@ -905,13 +905,15 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     );
 
     serve_until_shutdown(
-        router,
+        ServeMode::Live {
+            router,
+            backend: backend.serve_backend(None),
+        },
         ServeOptions {
             server_name: SERVER_NAME,
             addr,
             drain_timeout,
             shutdown,
-            backend: Some(backend.serve_backend(None)),
         },
     )
     .await
