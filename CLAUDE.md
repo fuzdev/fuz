@@ -442,7 +442,13 @@ CI. Lints: `unsafe_code = "forbid"`; clippy `all` + `pedantic` + `nursery` +
 `panic` / `todo` / `unwrap_used` (test carve-outs in `clippy.toml`) and extra
 rustc lints.
 `clippy.toml` disallows `std::env::home_dir` — every `$HOME` read goes through
-`fuz_sys::home_dir`. `fuzi`, `fuzi_core` and `fuz_archive` carry their own
+`fuz_sys::home_dir` — and the lenient request readers (axum's `Path`,
+`RawPathParams`, `Query` and `Form`, `form_urlencoded::parse`,
+`Url::query_pairs`): a handler reads through `fuz_http::RouteParams`, which
+carries the one production `#[expect]`, and `fuz_http::read_query_pairs`.
+`fuz_http/tests/request_reads_census.rs` pins those entries in every
+`clippy.toml`, holds their positive controls, and lists every in-source
+suppression. `fuzi`, `fuzi_core` and `fuz_archive` carry their own
 `clippy.toml` (the exec-free disallows), which replaces the root one rather
 than merging; `fuzi_core/tests/exec_free.rs` checks they carry its settings
 and stay byte-identical.

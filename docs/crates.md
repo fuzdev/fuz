@@ -460,7 +460,13 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   REST route and the WS upgrade, the `invalid_request` envelope on the RPC
   `GET`. Both spines are held to `request_target_conformance.json`, a
   byte-identical copy of fuz_app's. A consumer's own handler reads through
-  these too; axum's `Query` and `Path` decode leniently.
+  these too; axum's `Query` and `Path` decode leniently. In this workspace
+  clippy holds it: the workspace `clippy.toml` disallows axum's `Path`,
+  `RawPathParams`, `Query` and `Form`, `form_urlencoded::parse` and
+  `Url::query_pairs` (`RouteParams` carries the one production `#[expect]`), and
+  `fuz_http/tests/request_reads_census.rs` pins those entries in every
+  `clippy.toml`, holds their positive controls, and lists every
+  in-source suppression.
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with write-progress

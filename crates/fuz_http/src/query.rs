@@ -25,7 +25,7 @@
 //!
 //! A pair with an empty name (`?=x`) is not a key on the TS side: the TS
 //! twin's query record skips a pair whose decoded name is empty,
-//! so a strict schema is never shown one. axum's extractor keeps it, as
+//! so a strict schema is never shown one. [`read_query_pairs`] keeps it, as
 //! `("", "x")`, and [`assert_known_query_keys`] passes over it.
 
 use axum::response::Response;
@@ -141,15 +141,14 @@ mod tests {
         assert_eq!(query_first(&p, "acting"), Some("a"));
     }
 
-    /// The same rule from the raw query string, through the extractor the
-    /// handlers take — pinning which spellings reach the helper with an empty
-    /// name. Each verdict is the one the TS twin's strict `{acting}` schema
-    /// gives the record Hono's `c.req.query()` builds from that string.
+    /// The same rule from the raw query string, through
+    /// [`read_query_pairs`](crate::read_query_pairs) as the handlers read it —
+    /// pinning which spellings reach the helper with an empty name. Each
+    /// verdict is the one the TS twin's strict `{acting}` query schema gives
+    /// that string: a refused read (an escape that doesn't decode) is the same
+    /// `invalid_query_params` as an undeclared key.
     #[test]
     fn raw_query_spellings_get_the_twin_verdict() {
-        use axum::extract::Query;
-        use axum::http::Uri;
-
         let cases = [
             // no pair at all
             ("", true),
@@ -168,20 +167,20 @@ mod tests {
             ("foo=", false),
             ("=x&foo=1", false),
             ("a&=x", false),
-            // a name that only looks empty: one space, one `%`, one NUL
+            // a name that only looks empty: one space, one NUL
             ("+=x", false),
             ("%20=x", false),
-            ("%=x", false),
             ("%00=x", false),
+            // a name that doesn't decode: the read itself refuses
+            ("%=x", false),
         ];
         for (raw, accepted) in cases {
-            let uri: Uri = format!("/r?{raw}").parse().expect("uri parses");
-            let Query(p) = Query::<Vec<(String, String)>>::try_from_uri(&uri)
-                .expect("the raw-pairs extractor never rejects");
+            let read = crate::read_query_pairs(Some(raw));
             assert_eq!(
-                assert_known_query_keys(&p, &["acting"]).is_ok(),
+                read.as_ref()
+                    .is_ok_and(|p| assert_known_query_keys(p, &["acting"]).is_ok()),
                 accepted,
-                "?{raw} → {p:?}"
+                "?{raw} → {read:?}"
             );
         }
     }

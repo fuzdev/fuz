@@ -17,7 +17,7 @@
 //! through [`RouteParams`], whose every rejection is the flat
 //! `invalid_route_params` body — never axum's plain-text one.
 
-use axum::extract::{FromRequestParts, Path};
+use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::response::Response;
 use serde::de::DeserializeOwned;
@@ -139,17 +139,22 @@ pub fn read_query_pairs(query: Option<&str>) -> Result<Vec<(String, String)>, Pe
 /// deserialize, a missing one — answers the flat
 /// `400 {"error":"invalid_route_params"}` its TS twin's params stage answers.
 ///
-/// It wraps axum's [`Path`], whose own rejection is a plain-text body and
-/// whose decoding leaves a malformed escape (`%G0`, a bare `%`) in the value
-/// as text. The whole path is checked rather than each param's segments: the
-/// router matches the raw path, so a literal segment holding an escape matches
-/// no route, and on a matched route every escape is inside a param.
+/// It wraps axum's [`Path`](axum::extract::Path), whose own rejection is a
+/// plain-text body and whose decoding leaves a malformed escape (`%G0`, a bare
+/// `%`) in the value as text. The whole path is checked rather than each
+/// param's segments: the router matches the raw path, so a literal segment
+/// holding an escape matches no route, and on a matched route every escape is
+/// inside a param.
 ///
 /// Params are the first phase on both spines, ahead of the query and auth, so
 /// a handler takes this as its first extractor that can refuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RouteParams<T>(pub T);
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "the strict path-param reader wraps axum's `Path` after checking every escape"
+)]
 impl<T, S> FromRequestParts<S> for RouteParams<T>
 where
     T: DeserializeOwned + Send,
@@ -166,9 +171,9 @@ where
         {
             return Err(invalid_route_params_response());
         }
-        Path::<T>::from_request_parts(parts, state)
+        axum::extract::Path::<T>::from_request_parts(parts, state)
             .await
-            .map(|Path(params)| Self(params))
+            .map(|axum::extract::Path(params)| Self(params))
             .map_err(|_| invalid_route_params_response())
     }
 }
