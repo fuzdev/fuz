@@ -27,6 +27,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::account_queries::query_account_lock_live;
 use crate::action_auth::AuthSpec;
 use crate::action_rate_limit::RateLimitClass;
 use crate::actor_queries::query_create_role_grant;
@@ -44,7 +45,7 @@ use crate::role_grant_offer_action_specs::{
 use crate::role_grant_offer_queries::query_revoke_role_grant;
 use fuz_http::{
     InputShape, JsonrpcError, forbidden, internal_error_with_source, invalid_input_params,
-    method_not_found, reject_unknown_keys,
+    method_not_found, reject_unknown_keys, unauthenticated,
 };
 
 /// `data.reason` (403) when the caller asks to self-toggle a role outside the
@@ -161,6 +162,21 @@ async fn handle_self_service_role_set(
 
     let actor_id = ctx.auth.actor.id;
     let account_id = ctx.auth.account.id;
+
+    // The credential was resolved before the transaction, so a delete or a
+    // purge of the account can commit in between: a toggle after it would
+    // write a grant (or revoke one) on the tombstone, back on an undelete, or
+    // meet a purged actor's foreign key. The account row first — the class
+    // order's first row, which a delete's tombstone and a purge's `DELETE`
+    // write — refuses it as the dead credential it now is, or makes a removal
+    // still to commit wait for the toggle. Both branches, before the no-op
+    // answers: a removed account is told it is removed. Mirrors the TS twin.
+    if !query_account_lock_live(db, &account_id)
+        .await
+        .map_err(|e| internal_error_with_source("self-service role account lock failed", &e))?
+    {
+        return Err(unauthenticated());
+    }
 
     // Global (scope_id = NULL) grant lookup against the in-memory snapshot —
     // no DB roundtrip. Mirrors TS `has_scoped_role(auth, role, null)`. The

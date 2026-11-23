@@ -18,7 +18,14 @@
 //! its cap take turns: the second waits on the first's commit and then counts
 //! the first's row, so the account ends at the cap, not one over. A password
 //! change held in its verify across a delete changes nothing: its write is
-//! refused on the tombstone, and the old password holds after the undelete.
+//! refused on the tombstone, and the old password holds after the undelete. A
+//! password change outlived after its credential is read — held at the next
+//! checkout ([`CheckoutLatch`]) while another session's change commits or the
+//! account is purged — is a lost race (`concurrent_change`), charged to both
+//! limiters, whichever password it sends. One whose session dies after its
+//! hash read — a delete then an undelete, or a logout, while its verify is
+//! held, or a logout while its write waits on the account row — changes
+//! nothing either: it reads the session again under the account lock.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/credential_mint_race.db.test.ts`.
 //!
@@ -51,8 +58,9 @@ use fuz_auth::role_grant_schema::RoleGrantRow;
 use fuz_auth::{
     AccountActionContext, AccountActionSpecs, AccountRouteState, AccountRow, AuditEmitter,
     ConnectionCloser, CredentialType, DEFAULT_MAX_SESSIONS, HashedPassword, NoopAuditPostCommit,
-    NoopConnectionCloser, PasswordHashError, PasswordHasher, RequestContext, create_capped_session,
-    hash_session_token, login_handler, password_handler,
+    NoopConnectionCloser, PasswordHashError, PasswordHasher, RateLimiter, RateLimiterOptions,
+    RequestContext, create_capped_session, hash_session_token, login_handler, logout_handler,
+    password_handler,
 };
 use fuz_db::Pool;
 use serde_json::{Value, json};
@@ -500,6 +508,459 @@ async fn a_password_change_held_across_a_delete_changes_nothing() {
         StatusCode::OK,
         "the old password still holds after the undelete"
     );
+}
+
+// -- A password change outlived after its credential is read -------------------
+
+/// A latch on a pool's checkouts: armed with [`CheckoutLatch::hold_after`], the
+/// checkout after `skip` more waits until the test releases it — the window
+/// between a handler's credential read and its next database read, made exact.
+#[derive(Default)]
+struct CheckoutLatch {
+    armed: Mutex<Option<(usize, Latch)>>,
+}
+
+impl CheckoutLatch {
+    fn hold_after(&self, skip: usize) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (reached_tx, reached_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.armed.lock().unwrap() = Some((
+            skip,
+            Latch {
+                reached: reached_tx,
+                release: release_rx,
+            },
+        ));
+        (reached_rx, release_tx)
+    }
+
+    /// The latch this checkout waits on, if it is the armed one.
+    fn take_for_checkout(&self) -> Option<Latch> {
+        let mut armed = self.armed.lock().unwrap();
+        match armed.as_mut() {
+            Some((0, _)) => armed.take().map(|(_, latch)| latch),
+            Some((skip, _)) => {
+                *skip -= 1;
+                None
+            }
+            None => None,
+        }
+    }
+}
+
+/// A pool on the suite's database whose checkouts pass `latch`.
+fn latched_pool(latch: &Arc<CheckoutLatch>) -> Pool {
+    use deadpool_postgres::{ClientWrapper, Hook, Manager, Runtime};
+    let config: tokio_postgres::Config = common::test_url().parse().expect("test URL parses");
+    let hook = || {
+        let latch = Arc::clone(latch);
+        Hook::async_fn(move |_: &mut ClientWrapper, _| {
+            let held = latch.take_for_checkout();
+            Box::pin(async move {
+                if let Some(held) = held {
+                    let _ = held.reached.send(());
+                    let _ = held.release.await;
+                }
+                Ok(())
+            })
+        })
+    };
+    Pool::builder(Manager::new(config, tokio_postgres::NoTls))
+        .runtime(Runtime::Tokio1)
+        .post_create(hook())
+        .post_recycle(hook())
+        .build()
+        .expect("latched pool builds")
+}
+
+/// How many attempts each login limiter of [`limited_state`] admits.
+const LIMIT: u32 = 5;
+
+/// A route state whose credential reads and handler reads run on `gate_pool`,
+/// its audit rows on `pool`, with both login limiters at [`LIMIT`].
+fn limited_state(pool: &Pool, gate_pool: Pool) -> AccountRouteState {
+    let limiter = || {
+        Some(Arc::new(RateLimiter::new(RateLimiterOptions {
+            max_attempts: LIMIT,
+            window_ms: 60_000,
+            max_keys: None,
+        })))
+    };
+    AccountRouteState {
+        gate: fuz_testing::testing_auth_gate(gate_pool),
+        login_ip_rate_limiter: limiter(),
+        login_account_rate_limiter: limiter(),
+        ..build_state(pool.clone(), Arc::new(LatchHasher::default()))
+    }
+}
+
+/// Whether `limiter` has one attempt recorded against `key`: at [`LIMIT`] − 1
+/// more it still admits, and one past that it refuses.
+fn charged_once(limiter: Option<&Arc<RateLimiter>>, key: &str) -> bool {
+    let limiter = limiter.expect("a limiter");
+    for _ in 0..LIMIT - 1 {
+        limiter.record(key);
+    }
+    !limiter.check(key).is_allowed()
+}
+
+async fn change_password_with(
+    state: &AccountRouteState,
+    cookie: &str,
+    current_password: &str,
+    new_password: &str,
+) -> Answer {
+    let body = Bytes::from(
+        serde_json::to_vec(&json!({
+            "current_password": current_password,
+            "new_password": new_password,
+        }))
+        .unwrap(),
+    );
+    read_answer(
+        password_handler(State(state.clone()), None, json_headers(Some(cookie)), body).await,
+    )
+    .await
+}
+
+/// The `password_change` failure rows of `account_id`, by reason.
+async fn change_failures(
+    state: &AccountRouteState,
+    pool: &Pool,
+    account_id: &uuid::Uuid,
+) -> Vec<Option<String>> {
+    state.audit.drain_inflight().await;
+    let client = pool.get().await.unwrap();
+    client
+        .query(
+            "SELECT metadata->>'reason' FROM audit_log
+             WHERE event_type = 'password_change' AND outcome = 'failure' AND account_id = $1",
+            &[account_id],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+const OTHER_PASSWORD: &str = "other-password-race-3";
+
+/// A password change whose credential is read, then outlived: held at the
+/// checkout after its credential leg's while another session's change of the
+/// same account commits and revokes it. It is a lost race (`concurrent_change`),
+/// charged to both limiters, whichever password it sends — never verified
+/// against the new hash, and never landing with it. Twin of the TS cases.
+async fn a_password_change_outlived_by_another_after_its_credential_is_read(sent: &str) {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let plain = build_state(pool.clone(), Arc::new(LatchHasher::default()));
+    let latch = Arc::new(CheckoutLatch::default());
+    let state = limited_state(&pool, latched_pool(&latch));
+    let first = login(&plain, "victim", OLD_PASSWORD).await;
+    let second = login(&plain, "victim", OLD_PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(second.status, StatusCode::OK);
+
+    let (reached, release) = latch.hold_after(1);
+    let held = tokio::spawn({
+        let state = state.clone();
+        let cookie = first.cookie();
+        let sent = sent.to_owned();
+        async move { change_password_with(&state, &cookie, &sent, NEW_PASSWORD).await }
+    });
+    reached.await.unwrap();
+    let other = change_password_with(&plain, &second.cookie(), OLD_PASSWORD, OTHER_PASSWORD).await;
+    assert_eq!(other.status, StatusCode::OK, "the other change");
+    release.send(()).unwrap();
+    let raced = held.await.unwrap();
+
+    assert_eq!(
+        raced.status,
+        StatusCode::UNAUTHORIZED,
+        "the outlived change"
+    );
+    assert_eq!(raced.body, json!({"error": "invalid_credentials"}));
+    assert_eq!(
+        change_failures(&state, &pool, &account_id).await,
+        [Some("concurrent_change".to_owned())],
+        "audited as a lost race"
+    );
+    assert!(
+        charged_once(
+            state.login_account_rate_limiter.as_ref(),
+            &account_id.to_string()
+        ),
+        "charged to the account"
+    );
+    assert!(
+        charged_once(
+            state.login_ip_rate_limiter.as_ref(),
+            &fuz_http::rate_limit_ip_key(fuz_http::UNRESOLVED_CLIENT_IP)
+        ),
+        "charged to the address"
+    );
+    assert_eq!(
+        login(&plain, "victim", OTHER_PASSWORD).await.status,
+        StatusCode::OK,
+        "the other change's password holds"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_outlived_after_its_credential_is_read_is_a_lost_race_sending_the_old_password()
+ {
+    a_password_change_outlived_by_another_after_its_credential_is_read(OLD_PASSWORD).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_outlived_after_its_credential_is_read_is_a_lost_race_sending_the_new_one()
+ {
+    a_password_change_outlived_by_another_after_its_credential_is_read(OTHER_PASSWORD).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_whose_account_is_purged_after_its_credential_is_read_is_a_lost_race() {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let admin = seed_admin_with_grant(&pool).await;
+    let plain = build_state(pool.clone(), Arc::new(LatchHasher::default()));
+    let latch = Arc::new(CheckoutLatch::default());
+    let state = limited_state(&pool, latched_pool(&latch));
+    let first = login(&plain, "victim", OLD_PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK);
+
+    let (reached, release) = latch.hold_after(1);
+    let held = tokio::spawn({
+        let state = state.clone();
+        let cookie = first.cookie();
+        async move { change_password(&state, &cookie).await }
+    });
+    reached.await.unwrap();
+    admin_action(
+        &pool,
+        &admin,
+        "account_purge",
+        &json!({"account_id": account_id, "confirm": true}),
+    )
+    .await;
+    release.send(()).unwrap();
+    let raced = held.await.unwrap();
+
+    assert_eq!(
+        raced.status,
+        StatusCode::UNAUTHORIZED,
+        "the change after the purge"
+    );
+    assert_eq!(raced.body, json!({"error": "invalid_credentials"}));
+    assert_eq!(
+        change_failures(&state, &pool, &account_id).await,
+        [Some("concurrent_change".to_owned())],
+        "audited as a lost race"
+    );
+    assert!(
+        charged_once(
+            state.login_account_rate_limiter.as_ref(),
+            &account_id.to_string()
+        ),
+        "charged to the account"
+    );
+    assert!(
+        charged_once(
+            state.login_ip_rate_limiter.as_ref(),
+            &fuz_http::rate_limit_ip_key(fuz_http::UNRESOLVED_CLIENT_IP)
+        ),
+        "charged to the address"
+    );
+}
+
+// -- A password change whose session dies after its hash read -----------------
+
+async fn logout(state: &AccountRouteState, cookie: &str) -> Answer {
+    read_answer(logout_handler(State(state.clone()), None, json_headers(Some(cookie))).await).await
+}
+
+/// A change that lost because the session it was made on died after it read
+/// its hash: 401 `invalid_credentials`, one `concurrent_change` failure row,
+/// and the old password still the one that logs in.
+async fn assert_change_lost_to_dead_session(
+    state: &AccountRouteState,
+    pool: &Pool,
+    account_id: &uuid::Uuid,
+    answer: &Answer,
+    label: &str,
+) {
+    assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{label}");
+    assert_eq!(
+        answer.body,
+        json!({"error": "invalid_credentials"}),
+        "{label}"
+    );
+    state.audit.drain_inflight().await;
+    let client = pool.get().await.unwrap();
+    let changes: Vec<(String, Option<String>)> = client
+        .query(
+            "SELECT outcome, metadata->>'reason' FROM audit_log
+             WHERE event_type = 'password_change' AND account_id = $1",
+            &[account_id],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        changes,
+        [("failure".to_owned(), Some("concurrent_change".to_owned()))],
+        "{label}: audited as a lost race, never as a change"
+    );
+    drop(client);
+    assert_eq!(
+        login(state, "victim", NEW_PASSWORD).await.status,
+        StatusCode::UNAUTHORIZED,
+        "{label}: not changed"
+    );
+    assert_eq!(
+        login(state, "victim", OLD_PASSWORD).await.status,
+        StatusCode::OK,
+        "{label}: the old password holds"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_held_across_a_delete_and_an_undelete_changes_nothing() {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let admin = seed_admin_with_grant(&pool).await;
+    let hasher = Arc::new(LatchHasher::default());
+    let state = build_state(pool.clone(), Arc::clone(&hasher));
+    let first = login(&state, "victim", OLD_PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK);
+
+    // its hash read through its live session, its verify held
+    let (reached, release) = hasher.hold();
+    let held = tokio::spawn({
+        let state = state.clone();
+        let cookie = first.cookie();
+        async move { change_password(&state, &cookie).await }
+    });
+    reached.await.unwrap();
+    let target = json!({"account_id": account_id});
+    admin_action(&pool, &admin, "account_delete", &target).await;
+    admin_action(&pool, &admin, "account_undelete", &target).await;
+    release.send(()).unwrap();
+    // the account is live again and holds the verified hash, but the delete
+    // revoked the session the change was made on
+    let raced = held.await.unwrap();
+    assert_change_lost_to_dead_session(&state, &pool, &account_id, &raced, "across the undelete")
+        .await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_held_across_a_logout_of_its_session_changes_nothing() {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let hasher = Arc::new(LatchHasher::default());
+    let state = build_state(pool.clone(), Arc::clone(&hasher));
+    let first = login(&state, "victim", OLD_PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK);
+
+    let (reached, release) = hasher.hold();
+    let held = tokio::spawn({
+        let state = state.clone();
+        let cookie = first.cookie();
+        async move { change_password(&state, &cookie).await }
+    });
+    reached.await.unwrap();
+    assert_eq!(
+        logout(&state, &first.cookie()).await.status,
+        StatusCode::OK,
+        "the logout"
+    );
+    release.send(()).unwrap();
+    let raced = held.await.unwrap();
+    assert_change_lost_to_dead_session(&state, &pool, &account_id, &raced, "across the logout")
+        .await;
+}
+
+/// A logout committing while the change waits on the account row — a
+/// transaction holding the row the change's update needs — is seen: the change
+/// reads its session again once it holds the row, so it is refused rather than
+/// committing for a session already revoked. A check inside the update alone
+/// reads its subquery as of the statement's start, before the wait, and misses
+/// it. Twin of the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_waiting_on_the_account_row_across_a_logout_of_its_session_changes_nothing()
+ {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
+    let first = login(&state, "victim", OLD_PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK);
+
+    // a login's or a token mint's lock on the account row, say
+    let mut holder_client = pool.get().await.unwrap();
+    let holder = holder_client.transaction().await.unwrap();
+    holder
+        .execute(
+            "SELECT id FROM account WHERE id = $1 FOR NO KEY UPDATE",
+            &[&account_id],
+        )
+        .await
+        .unwrap();
+    let holder_pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    let raced = tokio::spawn({
+        let state = state.clone();
+        let cookie = first.cookie();
+        async move { change_password(&state, &cookie).await }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while blocked_by(&pool, holder_pid).await < 1 {
+        assert!(
+            Instant::now() < deadline,
+            "the change never waited on the held row"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        logout(&state, &first.cookie()).await.status,
+        StatusCode::OK,
+        "the logout"
+    );
+    holder.commit().await.unwrap();
+    let raced = raced.await.unwrap();
+    assert_change_lost_to_dead_session(
+        &state,
+        &pool,
+        &account_id,
+        &raced,
+        "the change that waited",
+    )
+    .await;
+}
+
+/// Backends waiting on a lock `holder_pid` holds.
+async fn blocked_by(pool: &Pool, holder_pid: i32) -> i64 {
+    let client = pool.get().await.unwrap();
+    client
+        .query_one(
+            "SELECT COUNT(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+            &[&holder_pid],
+        )
+        .await
+        .unwrap()
+        .get(0)
 }
 
 // -- The mirror order: the mint commits first -----------------------------------

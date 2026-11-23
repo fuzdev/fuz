@@ -157,6 +157,43 @@ pub async fn query_session_is_live(
     Ok(row.is_some())
 }
 
+/// The password hash of the account a live session belongs to — the hash a
+/// password change verifies `current_password` against.
+///
+/// The change's credential was resolved before this read, so a change, a
+/// delete or a purge can commit in between. Each revokes the account's
+/// sessions in the transaction of its write, so while the session lives, the
+/// stored hash is the one the session was resolved under; once it is gone,
+/// the credential died mid-request and there is no hash to verify. Bound to
+/// the session in one statement, the read answers one or the other, never a
+/// later change's hash beside a dead session. The read is no lock: a session
+/// that dies after it is caught by the change's transaction, which takes the
+/// account row and then reads the session again ([`query_session_is_live`]).
+/// No tombstone filter: a delete revokes the sessions, and the change's
+/// transaction refuses a tombstone itself. Twin of `fuz_app`'s
+/// `query_session_live_password_hash`.
+///
+/// Returns the account's password hash, or `None` when the session is no
+/// longer live.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_session_live_password_hash(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    session_hash: &str,
+    account_id: &uuid::Uuid,
+) -> Result<Option<String>, tokio_postgres::Error> {
+    let row = client
+        .query_opt(
+            "SELECT a.password_hash FROM auth_session s JOIN account a ON a.id = s.account_id
+             WHERE s.id = $1 AND s.account_id = $2 AND s.expires_at > NOW()",
+            &[&session_hash, account_id],
+        )
+        .await?;
+    Ok(row.map(|row| row.get(0)))
+}
+
 /// Look up a valid (non-expired) session by its token hash, with how long it
 /// has left.
 ///

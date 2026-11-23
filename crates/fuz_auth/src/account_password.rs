@@ -9,7 +9,7 @@
 //!
 //! The transaction covers those statements only. The current-password
 //! verify and the new hash — the two Argon2 runs — happen before it opens,
-//! on no connection at all: the account read's connection goes back to the
+//! on no connection at all: the hash read's connection goes back to the
 //! pool first.
 //!
 //! The account's live connections are closed after the commit, so a change
@@ -37,9 +37,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::account_queries::{
-    query_account_with_password_hash_by_id, query_update_account_password,
-};
+use crate::account_queries::{query_account_lock_live, query_update_account_password};
 use crate::account_route_state::AccountRouteState;
 use crate::api_token_queries::query_revoke_all_api_tokens_for_account;
 use crate::audit_emitter::{
@@ -53,10 +51,12 @@ use crate::credential_type::CredentialGate;
 use crate::password::{
     PASSWORD_LENGTH_MAX, PASSWORD_LENGTH_MIN, PASSWORD_PROVIDED_LENGTH_MIN, password_length,
 };
-use crate::rate_limiter::{RESERVATION_WAIT_MAX, reserve_optional};
+use crate::rate_limiter::{RESERVATION_WAIT_MAX, RateLimitReservation, reserve_optional};
 use crate::route_helpers::clear_session_cookie_header;
 use crate::route_response::{credential_type_required_response, rate_limit_exceeded};
-use crate::session_queries::query_session_revoke_all_for_account;
+use crate::session_queries::{
+    query_session_is_live, query_session_live_password_hash, query_session_revoke_all_for_account,
+};
 use fuz_http::ClientIp;
 
 /// Password change request body.
@@ -187,29 +187,42 @@ async fn password_inner(
     .await
     .map_err(|limited| rate_limit_exceeded(limited.retry_after))?;
 
-    // The read's connection is scoped to the read: it is back in the pool
-    // before the Argon2 verify and hash below, which hold none. It reads a
-    // tombstoned account too, deliberately: a delete landing after the
-    // credential leg is refused at the conditional UPDATE, as on the TS spine,
-    // so it is charged and audited as a lost race (`concurrent_change`).
-    let account_with_hash =
-        {
-            let client =
-                state.gate.pool.get().await.map_err(|e| {
-                    db_unavailable_response_with_source("password: db pool error", &e)
-                })?;
-            query_account_with_password_hash_by_id(&client, &account_id)
-                .await
-                .map_err(|e| {
-                    internal_error_response_with_source("password: account query failed", &e)
-                })?
-        }
-        .ok_or_else(|| {
-            fuz_http::rest_error_response(StatusCode::UNAUTHORIZED, "invalid_credentials")
-        })?;
-
     let credential_type_meta = credential_type_value(Some(resolved.credential_type()));
-    let verified_hash = account_with_hash.password_hash;
+
+    // The hash to verify against, read through the session that authorized the
+    // request: a change committed since the credential leg revoked it, so a
+    // dead session has no hash to verify — the race was lost before the verify
+    // — and a live one names the hash the session was resolved under, never a
+    // later change's. A delete or a purge revokes the sessions too. The read's
+    // connection is scoped to the read: it is back in the pool before the
+    // Argon2 verify and hash below, which hold none. Twin of `fuz_app`'s read
+    // at the same step.
+    // the gate admits only a session, which carries its hash
+    let session_hash = resolved.session_hash().ok_or_else(|| {
+        tracing::error!("password: the session gate admitted a credential with no session hash");
+        internal_error_response()
+    })?;
+    let verified_hash = {
+        let client = state
+            .gate
+            .pool
+            .get()
+            .await
+            .map_err(|e| db_unavailable_response_with_source("password: db pool error", &e))?;
+        query_session_live_password_hash(&client, session_hash, &account_id)
+            .await
+            .map_err(|e| internal_error_response_with_source("password: hash read failed", &e))?
+    };
+    let Some(verified_hash) = verified_hash else {
+        return Err(lost_race(
+            state,
+            ip_reservation,
+            account_reservation,
+            account_id,
+            &client_ip,
+            &credential_type_meta,
+        ));
+    };
 
     // A request dropped mid-verify is charged to both buckets, as on login
     // (see `RateLimitReservation::charge_if_cancelled`).
@@ -259,6 +272,7 @@ async fn password_inner(
         &post_commit,
         ChangeRequest {
             account_id,
+            session_hash,
             new_hash: new_hash.as_str(),
             verified_hash: &verified_hash,
             client_ip: &client_ip,
@@ -278,27 +292,21 @@ async fn password_inner(
     if let Some(ref limiter) = state.login_account_rate_limiter {
         limiter.reset(&account_rate_key);
     }
+    // A concurrent change committed after the hash was read — the
+    // `current_password` was right then, but the stored hash no longer matches
+    // — or a delete or a purge did, and the row is a tombstone or gone.
     let PasswordChange::Committed {
         sessions_revoked,
         tokens_revoked,
     } = change
     else {
-        ip_reservation.record();
-        account_reservation.record();
-        emit_failure_row(
-            &state.audit,
-            AuditLogInput::for_event(AuditEventType::PasswordChange)
-                .failure()
-                .account(account_id)
-                .ip(Some(client_ip.clone()))
-                .metadata(json!({
-                    "reason": "concurrent_change",
-                    "credential_type": credential_type_meta,
-                })),
-        );
-        return Err(fuz_http::rest_error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
+        return Err(lost_race(
+            state,
+            ip_reservation,
+            account_reservation,
+            account_id,
+            &client_ip,
+            &credential_type_meta,
         ));
     };
 
@@ -329,6 +337,35 @@ async fn password_inner(
         .into_response())
 }
 
+/// The answer for a change lost to a concurrent change, a delete or a purge:
+/// charged to both limiters as a failed attempt, and audited as
+/// `concurrent_change` — the `current_password` may have been right when the
+/// request was authorized, so the row says so rather than "a wrong password".
+/// The winner already revoked the sessions and tokens; no cookie is cleared.
+fn lost_race(
+    state: &AccountRouteState,
+    ip_reservation: RateLimitReservation<'_>,
+    account_reservation: RateLimitReservation<'_>,
+    account_id: Uuid,
+    client_ip: &str,
+    credential_type_meta: &serde_json::Value,
+) -> Response {
+    ip_reservation.record();
+    account_reservation.record();
+    emit_failure_row(
+        &state.audit,
+        AuditLogInput::for_event(AuditEventType::PasswordChange)
+            .failure()
+            .account(account_id)
+            .ip(Some(client_ip.to_owned()))
+            .metadata(json!({
+                "reason": "concurrent_change",
+                "credential_type": credential_type_meta,
+            })),
+    );
+    fuz_http::rest_error_response(StatusCode::UNAUTHORIZED, "invalid_credentials")
+}
+
 /// What `change_password`'s transaction did.
 enum PasswordChange {
     /// The hash was replaced and every session and API token of the account
@@ -338,14 +375,15 @@ enum PasswordChange {
         tokens_revoked: u64,
     },
     /// The stored hash was no longer the verified one — a concurrent change
-    /// committed first — or a delete committed first and the row is a
-    /// tombstone. Nothing was written.
+    /// committed first — or the account or the request's session died since
+    /// the hash read. Nothing was written.
     Superseded,
 }
 
 /// What [`change_password`] changes, and what its audit row records.
 struct ChangeRequest<'a> {
     account_id: Uuid,
+    session_hash: &'a str,
     new_hash: &'a str,
     verified_hash: &'a str,
     client_ip: &'a str,
@@ -355,10 +393,13 @@ struct ChangeRequest<'a> {
 /// Replace the account's password hash, revoke its sessions and API tokens,
 /// and write the `password_change` success row, in one transaction.
 ///
-/// The update is conditional on `verified_hash` and a live account, which
-/// closes the verify-write race with a concurrent change or delete; when it
-/// matches no row the transaction is rolled back with nothing written and the
-/// answer is `PasswordChange::Superseded`. The audit row is the last statement
+/// The account row is locked first and the request's session read again
+/// under it, so a delete, a logout or a session revoke committed since the
+/// hash read refuses the change, an undelete since included; the update is
+/// conditional on `verified_hash` and a live account, which closes the
+/// verify-write race with a concurrent change. When either refuses, the
+/// transaction is rolled back with nothing written and the answer is
+/// `PasswordChange::Superseded`. The audit row is the last statement
 /// before the commit, its listener fan-out queued on `post_commit` for the
 /// caller to drain after the commit. The commit is [`commit_checked`], so
 /// `PasswordChange::Committed` is returned only for a commit the server
@@ -381,6 +422,7 @@ async fn change_password(
 ) -> Result<PasswordChange, Response> {
     let ChangeRequest {
         account_id,
+        session_hash,
         new_hash,
         verified_hash,
         client_ip,
@@ -398,6 +440,27 @@ async fn change_password(
     })?;
 
     let revoked = async {
+        // The account row first, then the session again under it. The session
+        // died between the hash read and here when a delete (an undelete since
+        // makes the row live again, with the verified hash) or a logout or a
+        // session revoke committed — before the lock was granted, so this read
+        // sees it. A change by a revoked session would otherwise land. A logout
+        // or a session revoke takes no account row: one after this read meets
+        // the revoke-all at the session row, which ends that session with the
+        // rest. The same pair the token mint takes. Twin of the TS route's.
+        let live = query_account_lock_live(&tx, account_id)
+            .await
+            .map_err(|e| {
+                internal_error_response_with_source("password: account lock failed", &e)
+            })?
+            && query_session_is_live(&tx, session_hash, account_id)
+                .await
+                .map_err(|e| {
+                    internal_error_response_with_source("password: session read failed", &e)
+                })?;
+        if !live {
+            return Ok(None);
+        }
         let updated = query_update_account_password(&tx, account_id, new_hash, verified_hash)
             .await
             .map_err(|e| internal_error_response_with_source("password: update failed", &e))?;

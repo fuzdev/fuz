@@ -625,9 +625,18 @@ The rules a change must keep:
   a wrong password is — or commits first and is revoked. Two mints of one
   account take turns on the lock, so a cap's count and eviction never run
   against a stale count. A server that mints a session or a token through
-  its own code takes the same lock.
+  its own code takes the same lock. A password change verifies against the
+  hash read through its own live session (`query_session_live_password_hash`),
+  never a later change's; its transaction then takes the account row
+  (`query_account_lock_live`) and reads the session again
+  (`query_session_is_live`) before its conditional update, so a change, a
+  delete or a purge, or a logout or revoke of that session, committed before
+  the lock was granted makes it a lost race (`concurrent_change`) — an
+  undelete since included.
 - **Every writer of an account takes its row first.** A mint and a password
-  change do it through their first lock or write; a delete after its
+  change do it through their first lock or write, `self_service_role_set`
+  through `query_account_lock_live` (a toggle on a removed account is the
+  dead credential's 401); a delete after its
   last-admin guard (`query_account_lock_live`, then the guards again — never
   before the guard, which an admin target's row is locked within in id
   order); a revoke

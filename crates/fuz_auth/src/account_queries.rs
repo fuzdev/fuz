@@ -362,23 +362,6 @@ pub async fn query_account_with_password_hash(
     Ok(row.map(|r| decode_account_with_password_hash_row(&r)))
 }
 
-/// Look up an account by id with password hash.
-///
-/// # Errors
-///
-/// Propagates `tokio_postgres::Error` from the underlying client.
-pub async fn query_account_with_password_hash_by_id(
-    client: &(impl deadpool_postgres::GenericClient + ?Sized),
-    account_id: &uuid::Uuid,
-) -> Result<Option<AccountWithPasswordHash>, tokio_postgres::Error> {
-    let sql = format!(
-        "SELECT {columns} FROM account WHERE id = $1",
-        columns = account_with_password_hash_columns(),
-    );
-    let row = client.query_opt(&sql, &[account_id]).await?;
-    Ok(row.map(|r| decode_account_with_password_hash_row(&r)))
-}
-
 /// Create an account and return the row.
 ///
 /// # Errors
@@ -645,7 +628,9 @@ pub async fn query_account_lock_for_purge(
 /// [`query_account_lock_live_many`], which lets such writes run together. A
 /// delete takes it too, after its last-admin guard and before the guards'
 /// second pass (`handle_account_delete`): the guard reads whether the target
-/// is an admin unlocked. Twin of `fuz_app`'s `query_account_lock_live`.
+/// is an admin unlocked. And `self_service_role_set` takes it first, so a
+/// toggle is refused on a removed account, or a removal waits for it. Twin of
+/// `fuz_app`'s `query_account_lock_live`.
 ///
 /// Returns `true` when the row is locked and not tombstoned, `false` when it
 /// was deleted or tombstoned.
