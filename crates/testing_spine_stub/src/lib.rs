@@ -768,9 +768,9 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         Arc::clone(&rooms),
     ));
     // `_testing_mint_session` — forge an expired-by-construction server-side
-    // session (backdated `auth_session` row behind a still-valid cookie) so the
-    // expiry conformance cases exercise the DB-row expiry gate over real
-    // resolution.
+    // session (backdated `auth_session` row behind a still-valid cookie) on any
+    // account: a dead session no wire path leaves, as the database-invariant
+    // twin check's session on a deleted account.
     specs.push(fuz_testing::create_testing_mint_session_action_spec(
         Arc::clone(&backend.keyring),
         fuz_auth::SESSION_COOKIE_NAME,

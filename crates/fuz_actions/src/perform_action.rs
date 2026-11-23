@@ -380,6 +380,20 @@ pub(crate) async fn perform_action_with(
     #[cfg(debug_assertions)]
     let _ = &result;
 
+    // A handler's `Err` is its answer, logged by whoever built it, never here.
+    // One settled after its request was cancelled is traced at debug. The TS
+    // twin answers any throw past its aborted signal `request_cancelled`; here
+    // a handler bails by returning `request_cancelled` itself.
+    if let Err(error) = &result
+        && input.signal.is_cancelled()
+    {
+        tracing::debug!(
+            method = spec.method,
+            code = ?error.code,
+            "action handler answered after its request was cancelled"
+        );
+    }
+
     result
 }
 

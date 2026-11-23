@@ -3,9 +3,10 @@
 //! Test binaries register this on their `ActionRegistry` alongside
 //! `_testing_reset` / `_testing_drain_effects`. It mints an
 //! *expired-by-construction* server-side session for an existing account
-//! and returns its signed cookie value, so the cross-backend expiry
-//! conformance cases (the `expired_session` principal) can assert the
-//! authoritative server-side **DB-row** expiry gate.
+//! and returns its signed cookie value — a dead session no wire path leaves
+//! (the cross-backend database-invariant check forges one on a deleted
+//! account). A session that lived and then expired, the `expired_session`
+//! conformance principal, is `_testing_shorten_credential_expiry`'s.
 //!
 //! `expires_in_seconds` is **constrained negative** (the handler refuses
 //! anything but a negative safe integer with `invalid_params`, mirroring the TS
@@ -22,10 +23,7 @@
 //! returned cookie's own signed payload stays valid (future). Auth
 //! resolution therefore clears the cookie-payload gate
 //! (`parse_session_from_cookies`) and is refused by the DB-row gate
-//! (`query_session_get_valid` — `WHERE expires_at > NOW()`) — the gate the
-//! in-process payload-expiry tests never reach and the one that
-//! structurally needs a server-side mint (the cross-process driver has no
-//! keyring / DB access).
+//! (`query_session_get_valid` — `WHERE expires_at > NOW()`).
 //!
 //! Gated on the daemon-token credential — effectively keeper-only without
 //! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
