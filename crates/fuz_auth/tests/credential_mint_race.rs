@@ -16,7 +16,9 @@
 //! uncommitted mint's — so the change's revoke, which runs after its account
 //! write, reaches the session the mint inserted. Two mints of one account at
 //! its cap take turns: the second waits on the first's commit and then counts
-//! the first's row, so the account ends at the cap, not one over.
+//! the first's row, so the account ends at the cap, not one over. A password
+//! change held in its verify across a delete changes nothing: its write is
+//! refused on the tombstone, and the old password holds after the undelete.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/credential_mint_race.db.test.ts`.
 //!
@@ -430,6 +432,74 @@ async fn a_login_held_across_a_delete_is_refused_and_the_undelete_restores_nothi
     );
     let fresh = login(&state, "victim", OLD_PASSWORD).await;
     assert_eq!(fresh.status, StatusCode::OK, "a fresh login authenticates");
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_password_change_held_across_a_delete_changes_nothing() {
+    let pool = fresh_db_pool().await;
+    let account_id = seed_victim(&pool).await;
+    let admin = seed_admin_with_grant(&pool).await;
+    let hasher = Arc::new(LatchHasher::default());
+    let state = build_state(pool.clone(), Arc::clone(&hasher));
+    let first = login(&state, "victim", OLD_PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK);
+
+    // the session and the account are read, the current password verified
+    let (reached, release) = hasher.hold();
+    let held = tokio::spawn({
+        let state = state.clone();
+        let cookie = first.cookie();
+        async move { change_password(&state, &cookie).await }
+    });
+    reached.await.unwrap();
+    admin_action(
+        &pool,
+        &admin,
+        "account_delete",
+        &json!({"account_id": account_id}),
+    )
+    .await;
+    release.send(()).unwrap();
+    let raced = held.await.unwrap();
+
+    assert_eq!(
+        raced.status,
+        StatusCode::UNAUTHORIZED,
+        "the change after the delete"
+    );
+    assert_eq!(raced.body, json!({"error": "invalid_credentials"}));
+    state.audit.drain_inflight().await;
+    let client = pool.get().await.unwrap();
+    let changes: Vec<(String, Option<String>)> = client
+        .query(
+            "SELECT outcome, metadata->>'reason' FROM audit_log
+             WHERE event_type = 'password_change' AND account_id = $1",
+            &[&account_id],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        changes,
+        [("failure".to_owned(), Some("concurrent_change".to_owned()))],
+        "audited as a lost race, never as a change"
+    );
+    admin_action(
+        &pool,
+        &admin,
+        "account_undelete",
+        &json!({"account_id": account_id}),
+    )
+    .await;
+    let fresh = login(&state, "victim", OLD_PASSWORD).await;
+    assert_eq!(
+        fresh.status,
+        StatusCode::OK,
+        "the old password still holds after the undelete"
+    );
 }
 
 // -- The mirror order: the mint commits first -----------------------------------

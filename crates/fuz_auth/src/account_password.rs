@@ -188,7 +188,10 @@ async fn password_inner(
     .map_err(|limited| rate_limit_exceeded(limited.retry_after))?;
 
     // The read's connection is scoped to the read: it is back in the pool
-    // before the Argon2 verify and hash below, which hold none.
+    // before the Argon2 verify and hash below, which hold none. It reads a
+    // tombstoned account too, deliberately: a delete landing after the
+    // credential leg is refused at the conditional UPDATE, as on the TS spine,
+    // so it is charged and audited as a lost race (`concurrent_change`).
     let account_with_hash =
         {
             let client =
@@ -335,7 +338,8 @@ enum PasswordChange {
         tokens_revoked: u64,
     },
     /// The stored hash was no longer the verified one — a concurrent change
-    /// committed first. Nothing was written.
+    /// committed first — or a delete committed first and the row is a
+    /// tombstone. Nothing was written.
     Superseded,
 }
 
@@ -351,12 +355,12 @@ struct ChangeRequest<'a> {
 /// Replace the account's password hash, revoke its sessions and API tokens,
 /// and write the `password_change` success row, in one transaction.
 ///
-/// The update is conditional on `verified_hash`, which closes the verify-write
-/// race with a concurrent change; when it matches no row the transaction is
-/// rolled back with nothing written and the answer is
-/// `PasswordChange::Superseded`. The audit row is the last statement before
-/// the commit, its listener fan-out queued on `post_commit` for the caller to
-/// drain after the commit. The commit is [`commit_checked`], so
+/// The update is conditional on `verified_hash` and a live account, which
+/// closes the verify-write race with a concurrent change or delete; when it
+/// matches no row the transaction is rolled back with nothing written and the
+/// answer is `PasswordChange::Superseded`. The audit row is the last statement
+/// before the commit, its listener fan-out queued on `post_commit` for the
+/// caller to drain after the commit. The commit is [`commit_checked`], so
 /// `PasswordChange::Committed` is returned only for a commit the server
 /// acknowledged — never for a transaction a failed statement aborted.
 ///

@@ -436,9 +436,10 @@ pub async fn query_create_account_with_actor(
 /// Update an account's password hash conditional on the current hash.
 ///
 /// Returns `true` when the row was updated, `false` when `expected_hash`
-/// no longer matched (concurrent change won the race). Closes the
-/// verify-write race per `fuz_app`'s
-/// `query_update_account_password`.
+/// no longer matched (concurrent change won the race) or the account is
+/// tombstoned (a delete committed after the credential leg; a waiting `UPDATE`
+/// rereads the row the delete committed). Closes the verify-write race per
+/// `fuz_app`'s `query_update_account_password`.
 ///
 /// # Errors
 ///
@@ -452,7 +453,8 @@ pub async fn query_update_account_password(
     let row = client
         .query_opt(
             "UPDATE account SET password_hash = $1, updated_at = NOW()
-             WHERE id = $2 AND password_hash = $3 RETURNING id",
+             WHERE id = $2 AND password_hash = $3 AND deleted_at IS NULL
+             RETURNING id",
             &[&new_password_hash, account_id, &expected_hash],
         )
         .await?;
