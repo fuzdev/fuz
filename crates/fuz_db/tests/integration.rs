@@ -15,8 +15,7 @@
 //! ```
 //!
 //! Tests share the same database and namespace their work via unique
-//! migration namespaces / table names per test, scoped under a fresh
-//! `pg_advisory_xact_lock`. Each test cleans up after itself. One test needs a
+//! migration namespaces / table names per test. Each test cleans up after itself. One test needs a
 //! database with no `schema_version` tracker at all, so instead of sharing
 //! `fuz_db_test` it creates and drops its own scratch database beside it — the
 //! test role needs `CREATEDB`.
@@ -593,83 +592,121 @@ async fn baseline_records_names_without_executing() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_db_test database"]
-async fn advisory_lock_smoke_two_concurrent_boots() {
-    // Smoke test: two concurrent run_migrations calls on the same
-    // namespace must converge to the same end state. With the
-    // advisory-lock + chain-tx + PK guard, the loser either no-ops
-    // (already-applied case) or hits PK violation and rolls back.
+async fn advisory_lock_two_concurrent_boots_both_succeed() {
+    // Two runners on one namespace at once, the chain held open by a sleep
+    // after its DDL so the two overlap. The advisory lock serializes them:
+    // the second waits for the first's commit, reads the migration applied,
+    // and succeeds with nothing to do. Without the lock both chains run the
+    // `CREATE TABLE` and the loser fails on the catalog's unique index.
     let pool = build_pool();
     clean(&pool, &["delta_test"], &["fuz_db_test_delta"]).await;
 
     const MIGRATIONS_D: &[Migration] = &[Migration {
         name: "create_delta",
-        sql: "CREATE TABLE delta_test (id SERIAL PRIMARY KEY)",
+        sql: "CREATE TABLE delta_test (id SERIAL PRIMARY KEY); SELECT pg_sleep(0.3)",
     }];
-    // Spawn two concurrent runners. Both should complete; at most one
-    // returns a MigrationResult with applied_names (the winner), or
-    // both may report empty (if the second arrives after the first
-    // commits and the lock-released window lets it through with a
-    // clean already-applied probe).
-    let pool_clone = pool.clone();
-    let h1 = tokio::spawn(async move {
-        run_migrations(
-            &pool_clone,
-            &[MigrationNamespace::new("fuz_db_test_delta", MIGRATIONS_D)],
-        )
-        .await
-    });
-    let pool_clone = pool.clone();
-    let h2 = tokio::spawn(async move {
-        run_migrations(
-            &pool_clone,
-            &[MigrationNamespace::new("fuz_db_test_delta", MIGRATIONS_D)],
-        )
-        .await
-    });
+    let boot = |pool: Pool| {
+        tokio::spawn(async move {
+            run_migrations(
+                &pool,
+                &[MigrationNamespace::new("fuz_db_test_delta", MIGRATIONS_D)],
+            )
+            .await
+        })
+    };
+    let h1 = boot(pool.clone());
+    let h2 = boot(pool.clone());
+    let r1 = h1.await.unwrap().expect("first concurrent boot");
+    let r2 = h2.await.unwrap().expect("second concurrent boot");
 
-    let r1 = h1.await.unwrap();
-    let r2 = h2.await.unwrap();
-
-    // Both must succeed. The combined applied_names across both runs
-    // either contains "create_delta" once (winner+loser-skip) or once
-    // (winner+loser-pk-rollback retry path). What must NOT happen is
-    // the migration applying twice — `(namespace, name)` PK guarantees
-    // that.
-    let r1_names: Vec<&String> = r1
-        .as_ref()
-        .map(|results| results.iter().flat_map(|r| &r.applied_names).collect())
-        .unwrap_or_default();
-    let r2_names: Vec<&String> = r2
-        .as_ref()
-        .map(|results| results.iter().flat_map(|r| &r.applied_names).collect())
-        .unwrap_or_default();
-
-    // At least one boot succeeds outright. The other either succeeds
-    // (no work) or fails with a PK-violation rollback (acceptable
-    // semantics — caller can retry and observe up-to-date state).
-    let total = r1_names.len() + r2_names.len();
-    assert!(
-        total <= 1,
-        "create_delta applied {total} times across two boots; advisory lock + PK guard violated"
-    );
-    assert!(
-        r1.is_ok() || r2.is_ok(),
-        "expected at least one runner to succeed"
+    let applied: Vec<&String> = r1
+        .iter()
+        .chain(&r2)
+        .flat_map(|r| &r.applied_names)
+        .collect();
+    assert_eq!(
+        applied,
+        ["create_delta"],
+        "one boot applies, the other finds it applied"
     );
 
-    // Final state: delta_test exists, schema_version has exactly one row.
-    let client = pool.get().await.unwrap();
-    let rows = client
-        .query(
-            "SELECT name FROM schema_version WHERE namespace = $1",
-            &[&"fuz_db_test_delta"],
-        )
-        .await
-        .unwrap();
-    assert_eq!(rows.len(), 1, "expected exactly one tracker row");
-
-    drop(client);
     clean(&pool, &["delta_test"], &["fuz_db_test_delta"]).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_db_test database"]
+async fn migration_waits_on_the_ts_twins_namespace_lock() {
+    // The TS twin takes `pg_advisory_xact_lock` on the same `bigint` key
+    // inside its chain transaction. Held here in that form, it keeps this
+    // runner waiting until the holder commits — the key's value and the
+    // lock's `bigint` binding pinned against a real server. The key is
+    // djb2 of the namespace, sign-extended (`namespace_lock_key`).
+    const NAMESPACE: &str = "fuz_db_test_lock_wait";
+    const KEY: i64 = -1_425_090_598;
+    let pool = build_pool();
+    clean(&pool, &["lock_wait_test"], &[NAMESPACE]).await;
+
+    let mut holder = pool.get().await.expect("holder: pool get");
+    let tx = holder.transaction().await.expect("holder: begin");
+    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&KEY])
+        .await
+        .expect("holder: lock");
+
+    const MIGRATIONS: &[Migration] = &[Migration {
+        name: "create_lock_wait",
+        sql: "CREATE TABLE lock_wait_test (id INT)",
+    }];
+    let runner_pool = pool.clone();
+    let runner = tokio::spawn(async move {
+        run_migrations(
+            &runner_pool,
+            &[MigrationNamespace::new(NAMESPACE, MIGRATIONS)],
+        )
+        .await
+    });
+
+    // the runner is seen waiting on an advisory lock, not finished
+    let observer = pool.get().await.expect("observer: pool get");
+    let mut waiting = false;
+    for _ in 0..200 {
+        let row = observer
+            .query_one(
+                "SELECT count(*) FROM pg_locks
+                 WHERE locktype = 'advisory' AND NOT granted
+                   AND classid = (($1::bigint >> 32) & 4294967295)::oid
+                   AND objid = ($1::bigint & 4294967295)::oid
+                   AND objsubid = 1",
+                &[&KEY],
+            )
+            .await
+            .expect("observer: pg_locks");
+        if row.get::<_, i64>(0) > 0 {
+            waiting = true;
+            break;
+        }
+        assert!(
+            !runner.is_finished(),
+            "the runner finished while the lock was held"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(
+        waiting,
+        "the runner never waited on the namespace's advisory lock"
+    );
+    assert!(!runner.is_finished());
+
+    tx.commit().await.expect("holder: commit");
+    let results = runner
+        .await
+        .unwrap()
+        .expect("runner after the holder commits");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].applied_names, ["create_lock_wait"]);
+
+    drop(observer);
+    drop(holder);
+    clean(&pool, &["lock_wait_test"], &[NAMESPACE]).await;
 }
 
 #[tokio::test]

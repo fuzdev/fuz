@@ -503,8 +503,8 @@ pub async fn query_account_lock_verified(
 /// ([`query_account_purge_advisory_lock`]): the ASCII of `fuz_` and `purg`.
 ///
 /// The two-`int4` form, `pg_advisory_xact_lock(int4, int4)`, a key space apart
-/// from the single-key form the migration runner's per-namespace
-/// `pg_advisory_lock(int4)` takes, so no namespace's hash can collide with it.
+/// from the single `bigint` key the migration runner's per-namespace
+/// `pg_advisory_lock(bigint)` takes, so no namespace's hash can collide with it.
 /// Twin of `fuz_app`'s `ACCOUNT_PURGE_ADVISORY_LOCK_KEY`.
 pub const ACCOUNT_PURGE_ADVISORY_LOCK_KEY: (i32, i32) = (0x6675_7a5f, 0x7075_7267);
 

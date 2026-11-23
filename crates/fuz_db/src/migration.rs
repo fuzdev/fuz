@@ -3,9 +3,11 @@
 //! Algorithm (ported from `fuz_app/src/lib/db/migrate.ts`):
 //!
 //! 1. Apply the `schema_version` DDL.
-//! 2. For each namespace, hold a `pg_advisory_lock` keyed by a djb2 hash
-//!    of the namespace name (best-effort — silently falls through on
-//!    pools that don't support advisory locks).
+//! 2. For each namespace, hold a session `pg_advisory_lock` on one
+//!    pooled client, keyed by a djb2 hash of the namespace name's UTF-8
+//!    bytes as a `bigint` — the key the TS twin's transaction-scoped
+//!    `pg_advisory_xact_lock` takes, so the two spines serialize against
+//!    each other. A lock that fails fails the run.
 //! 3. Read applied rows ordered by `sequence`. **Length-check before
 //!    name-verify** — a binary-older case with a rename in the overlap
 //!    would otherwise fire `name-divergence-at-N` first and the operator
@@ -18,12 +20,14 @@
 //!
 //! **Forward-only**: no down-migrations. Schema changes are additive.
 //!
-//! **Concurrency**: per-namespace advisory locks reduce contention in
-//! multi-instance deployments but are best-effort on pool drivers. The
-//! real serialization comes from chain-tx atomicity + the
-//! `(namespace, name)` PK on `schema_version` — the loser's INSERT
-//! triggers PK violation and rollback; subsequent boots see the
-//! committed state.
+//! **Concurrency**: the per-namespace advisory lock is what serializes
+//! concurrent boots, this spine's or the TS twin's, over one database:
+//! the second waits for the first's chain to commit, then reads it
+//! applied. The `(namespace, name)` PK on `schema_version` only keeps a
+//! migration from recording twice; without the lock, two chains running
+//! at once collide on their own DDL and the loser's boot fails. The
+//! `schema_version` DDL runs before the lock, so its race is tolerated
+//! where it runs.
 //!
 //! **Atomicity**: any failure rolls back every migration that ran in
 //! that invocation. Namespaces are independent: a later namespace's
@@ -47,11 +51,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
   UNIQUE (namespace, sequence)
 )";
 
-/// Compute a stable `i32` advisory lock key from a namespace string.
+/// Compute a stable advisory lock key from a namespace string.
 ///
-/// Uses djb2 hash, masked to `i32` range so the result fits in
-/// `pg_advisory_lock(int4)`.
-fn namespace_lock_key(namespace: &str) -> i32 {
+/// djb2 over the name's UTF-8 bytes in wrapping `i32` arithmetic, as the TS
+/// twin's `namespace_lock_key` computes it, widened to the `bigint`
+/// `pg_advisory_lock(bigint)` takes. Sign-extending keeps the TS key's value:
+/// TS sends its `int32` number as the same `bigint`.
+fn namespace_lock_key(namespace: &str) -> i64 {
     let mut hash: i32 = 5381;
     for byte in namespace.bytes() {
         // Wrapping arithmetic mirrors the JS `| 0` int32 coercion.
@@ -60,22 +66,45 @@ fn namespace_lock_key(namespace: &str) -> i32 {
             .wrapping_add(hash)
             .wrapping_add(i32::from(byte));
     }
-    hash
+    i64::from(hash)
 }
 
-/// Acquire a session-scoped advisory lock; release in the `Drop`
-/// equivalent (explicit unlock here since we're async).
-async fn try_acquire_lock(client: &deadpool_postgres::Client, key: i32) {
-    // Best-effort: ignore errors (PGlite-style environments may lack
-    // `pg_advisory_lock`). Real serialization comes from chain-tx +
-    // the `(namespace, name)` PK on `schema_version`.
-    let _ = client.execute("SELECT pg_advisory_lock($1)", &[&key]).await;
-}
-
-async fn try_release_lock(client: &deadpool_postgres::Client, key: i32) {
-    let _ = client
+/// Run `locked` holding the namespace's session-scoped advisory lock on
+/// `client`, taking and releasing it on that one client.
+///
+/// The lock is bound as `i64`: `pg_advisory_lock($1)` resolves to the
+/// `bigint` overload, which an `i32` parameter fails to bind. A failed lock
+/// fails the run, since the lock is what serializes concurrent boots. A
+/// failed unlock detaches the client from the pool, so its connection
+/// closes and the session's lock goes with it rather than staying held on
+/// an idle pooled client; the run's own error wins over the unlock's.
+/// Cancelling the future while the lock is held returns the client to the
+/// pool still holding it; callers run it to completion.
+async fn with_namespace_lock<T>(
+    mut client: deadpool_postgres::Client,
+    namespace: &str,
+    locked: impl AsyncFnOnce(&mut deadpool_postgres::Client) -> Result<T, DbError>,
+) -> Result<T, DbError> {
+    let key = namespace_lock_key(namespace);
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&key])
+        .await?;
+    let outcome = locked(&mut client).await;
+    match client
         .execute("SELECT pg_advisory_unlock($1)", &[&key])
-        .await;
+        .await
+    {
+        Ok(_) => outcome,
+        Err(err) => {
+            tracing::warn!(
+                namespace,
+                error = %err,
+                "migration advisory unlock failed; closing its connection"
+            );
+            drop(deadpool_postgres::Object::take(client));
+            outcome.and(Err(err.into()))
+        }
+    }
 }
 
 /// Verify each namespace bears a [`crate::RESERVED_NAMESPACES`] name exactly
@@ -160,18 +189,11 @@ async fn run_namespace(
     pool: &Pool,
     ns: &MigrationNamespace,
 ) -> Result<Option<MigrationResult>, DbError> {
-    let mut client = pool.get().await?;
-    let lock_key = namespace_lock_key(ns.name);
-
-    try_acquire_lock(&client, lock_key).await;
-
-    // Use a scoped block to ensure we always release the lock even on
-    // early-return paths.
-    let outcome = run_namespace_locked(&mut client, ns).await;
-
-    try_release_lock(&client, lock_key).await;
-
-    outcome
+    let client = pool.get().await?;
+    with_namespace_lock(client, ns.name, async |client| {
+        run_namespace_locked(client, ns).await
+    })
+    .await
 }
 
 async fn run_namespace_locked(
@@ -290,7 +312,7 @@ pub async fn baseline(
 ) -> Result<(), DbError> {
     assert_namespace_ownership(namespace)?;
 
-    let mut client = pool.get().await?;
+    let client = pool.get().await?;
 
     // Same race-tolerance as `run_migrations`.
     if let Err(err) = client.batch_execute(SCHEMA_VERSION_DDL).await {
@@ -329,14 +351,10 @@ pub async fn baseline(
         }
     }
 
-    let lock_key = namespace_lock_key(namespace.name);
-    try_acquire_lock(&client, lock_key).await;
-
-    let result = baseline_locked(&mut client, namespace, names).await;
-
-    try_release_lock(&client, lock_key).await;
-
-    result
+    with_namespace_lock(client, namespace.name, async |client| {
+        baseline_locked(client, namespace, names).await
+    })
+    .await
 }
 
 async fn baseline_locked(
@@ -371,4 +389,22 @@ async fn baseline_locked(
     commit_checked(tx).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::namespace_lock_key;
+
+    /// The same vectors pin the TS twin's `namespace_lock_key`
+    /// (`fuz_app`'s `migrate.lock.test.ts`): one namespace, one `bigint`
+    /// key on both spines, so their locks conflict. The spine namespaces
+    /// hash negative, which pins the sign extension; the non-ASCII name
+    /// pins hashing UTF-8 bytes.
+    #[test]
+    fn namespace_lock_key_matches_the_ts_twin() {
+        assert_eq!(namespace_lock_key("fuz_auth"), -271_612_341);
+        assert_eq!(namespace_lock_key("fuz_cell"), -271_558_151);
+        assert_eq!(namespace_lock_key("fuz_facts"), -368_079_798);
+        assert_eq!(namespace_lock_key("café"), 255_161_979);
+    }
 }
