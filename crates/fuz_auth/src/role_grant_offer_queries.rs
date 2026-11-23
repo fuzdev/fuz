@@ -447,6 +447,102 @@ fn decode_superseded_row(row: &tokio_postgres::Row) -> SupersededOffer {
     }
 }
 
+/// The first half of every scope lock's key ([`scope_advisory_lock_key`]): the
+/// ASCII of `fuzs`. Reserved for scope locks — no other lock in the spine takes it.
+///
+/// Two-`int4` keys, `pg_advisory_xact_lock(int4, int4)`, sit a key space apart
+/// from the single `bigint` key the migration runner takes (`pg_locks.objsubid`
+/// 2 against 1), and this half differs from the purge lock's
+/// ([`crate::account_queries::ACCOUNT_PURGE_ADVISORY_LOCK_KEY`], `fuz_`), so a
+/// scope lock meets neither. Twin of `fuz_app`'s `SCOPE_ADVISORY_LOCK_CLASS`.
+pub const SCOPE_ADVISORY_LOCK_CLASS: i32 = 0x6675_7a73;
+
+/// The advisory lock key of `scope_id`: [`SCOPE_ADVISORY_LOCK_CLASS`], then
+/// the UUID's four big-endian 32-bit words folded by XOR into one `int4`.
+///
+/// Every word counts — a `UUIDv7` leads with its timestamp, so a prefix would
+/// put the scopes made in one millisecond on one key. Two scopes can still
+/// share a key; they then take turns, which costs a wait and nothing else.
+/// Twin of `fuz_app`'s `scope_advisory_lock_key`, pinned on both sides by the
+/// same vectors.
+#[must_use]
+pub fn scope_advisory_lock_key(scope_id: Uuid) -> (i32, i32) {
+    let folded = scope_id
+        .as_bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(0_u32, |acc, word| acc ^ u32::from_be_bytes(*word));
+    (SCOPE_ADVISORY_LOCK_CLASS, folded.cast_signed())
+}
+
+/// Take `scope_id`'s scope lock shared, until the transaction ends.
+///
+/// The lock orders a scope's teardown against every write that brings a grant
+/// or an offer into the scope: [`query_role_grant_revoke_for_scope`] takes it
+/// exclusive as its first statement, and the scoped writes take it shared —
+/// [`crate::actor_queries::query_create_role_grant`] and
+/// [`query_role_grant_offer_create`] first thing, [`query_accept_offer`] after
+/// its unlocked head read, before any row, and the `role_grant_offer_create`
+/// and `role_grant_assign` handlers before the consumer's
+/// [`crate::OfferCreateAuthorize`] runs. A write that reads its
+/// scope after the lock sees a teardown that committed first, and one holding
+/// the lock makes a teardown wait and then end what it wrote. Writers take
+/// turns with a teardown only, not with each other. Re-entrant: a second take
+/// in one transaction is free.
+///
+/// Take it first, holding no row: the teardown holds it while it waits on offer
+/// and grant rows and on whatever its consumer's scope delete cascades into (an
+/// invite or a request at the scope), so a transaction that waits on it holding
+/// one of those deadlocks. The scope id may come from an unlocked read of a
+/// column that never changes, as the accept's head read does. Use it on a
+/// consumer path that reads its own scope row and then brings something into
+/// the scope (an invite accept, a join decision): the lock, then the read. A
+/// transaction never takes two scope locks here; one that must should take them
+/// in key order. Twin of `fuz_app`'s `query_scope_lock_shared`.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_scope_lock_shared(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    scope_id: Uuid,
+) -> Result<(), tokio_postgres::Error> {
+    let (class, key) = scope_advisory_lock_key(scope_id);
+    client
+        .query(
+            "SELECT pg_advisory_xact_lock_shared($1, $2)",
+            &[&class, &key],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Take `scope_id`'s scope lock exclusive, until the transaction ends: every
+/// scoped write ([`query_scope_lock_shared`]) waits until then, and this waits
+/// for every one in flight.
+///
+/// [`query_role_grant_revoke_for_scope`] takes it as its first statement. A
+/// consumer's teardown that must hold the lock before that — to read or lock
+/// its own scope row first — takes it here, holding no row, then calls the
+/// cascade (which takes it again, free) — never after taking it shared in the
+/// same transaction: two shared holders that both upgrade deadlock. Twin of
+/// `fuz_app`'s `query_scope_lock_exclusive`.
+///
+/// # Errors
+///
+/// Propagates `tokio_postgres::Error` from the underlying client.
+pub async fn query_scope_lock_exclusive(
+    client: &(impl deadpool_postgres::GenericClient + ?Sized),
+    scope_id: Uuid,
+) -> Result<(), tokio_postgres::Error> {
+    let (class, key) = scope_advisory_lock_key(scope_id);
+    client
+        .query("SELECT pg_advisory_xact_lock($1, $2)", &[&class, &key])
+        .await?;
+    Ok(())
+}
+
 /// Create a new `role_grant` offer, or upsert the existing pending offer
 /// for the same `(to_account_id, role, scope_kind, scope_id, from_actor_id)`
 /// tuple. Mirrors TS `query_role_grant_offer_create`.
@@ -469,6 +565,13 @@ fn decode_superseded_row(row: &tokio_postgres::Row) -> SupersededOffer {
 /// transaction, which the lock spans. The self-target check comes first, so an
 /// offer to one's own account is refused as that whatever else it names.
 ///
+/// A scoped offer takes the scope lock shared before anything else
+/// ([`query_scope_lock_shared`]), so a teardown of the scope
+/// ([`query_role_grant_revoke_for_scope`]) in flight is waited for, and one
+/// that starts after it waits for this transaction and then supersedes the
+/// offer. A caller that judged the scope live takes the lock before that read,
+/// holding no row; the spine's handler does.
+///
 /// On the pending unique-index conflict, refreshes `to_actor_id`,
 /// `message`, and `expires_at` (matches TS upsert semantics — a second
 /// offer for the same tuple is a "refresh", not a duplicate) and clears
@@ -490,6 +593,9 @@ pub async fn query_role_grant_offer_create(
     client: &(impl deadpool_postgres::GenericClient + ?Sized),
     input: CreateRoleGrantOfferInput,
 ) -> Result<RoleGrantOffer, RoleGrantOfferError> {
+    if let Some(scope_id) = input.scope_id {
+        query_scope_lock_shared(client, scope_id).await?;
+    }
     // Self-target check — resolve the GRANTOR actor's account_id.
     // Multi-actor-correct: a single account may host many actors, and
     // self-target means "the offering actor's account == the recipient
@@ -638,9 +744,10 @@ async fn grantor_holds_global_admin(
 
 /// Accept an offer atomically.
 ///
-/// Lock order — accounts, then offers, then the grant: the recipient's
-/// account row (and, for an unscoped `admin` offer, the grantor's) in id
-/// order, then the offer and the pending siblings it supersedes in one
+/// Lock order — the scope, then accounts, then offers, then the grant: a
+/// scoped offer's scope lock shared ([`query_scope_lock_shared`]), the
+/// recipient's account row (and, for an unscoped `admin` offer, the grantor's)
+/// in id order, then the offer and the pending siblings it supersedes in one
 /// id-ordered claim, then the grant insert. The accounts first, as every
 /// removal of either account takes them first, so a removal and an accept
 /// never meet at the offers or the actor; two accepts by one recipient take
@@ -653,11 +760,18 @@ async fn grantor_holds_global_admin(
 /// or not its last-admin guard ran; a delete through its write of the row; a
 /// purge through its last-admin guard and
 /// [`crate::account_queries::query_account_lock_for_purge`]; the DB
-/// browser's delete, which takes none of them, excepted).
+/// browser's delete, which takes none of them, excepted). The scope lock comes
+/// first because the grant insert writes into the scope: taken there, after
+/// the claim, it would wait on a teardown that waits on the claimed offer (the
+/// TS twin's insert, `query_create_role_grant`, takes it). Taken first, a
+/// teardown in flight is waited for and the claim then finds the offer
+/// superseded, and one that starts after waits for this accept and then
+/// revokes its grant.
 ///
 /// In-transaction sequence (matches TS `query_accept_offer`):
 /// 0. Read the offer's grantor, its account, role and scope unlocked —
-///    written once with the offer, never updated; lock the accounts
+///    written once with the offer, never updated; take a scoped offer's scope
+///    lock shared; lock the accounts
 ///    ([`crate::account_queries::query_account_lock_for_offer_accept`]),
 ///    refusing a recipient deleted since its credential was read; then, for
 ///    an unscoped `admin` offer, read whether the grantor still holds a
@@ -743,6 +857,11 @@ pub async fn query_accept_offer(
     let head_role: String = head.get(1);
     let head_scope_id: Option<Uuid> = head.get(2);
     let head_grantor_account: Uuid = head.get(3);
+    // A scoped offer's scope lock, holding nothing yet — before the claim, as a
+    // teardown holding it waits on the claimed offer.
+    if let Some(scope_id) = head_scope_id {
+        query_scope_lock_shared(client, scope_id).await?;
+    }
     // An unscoped `admin` offer's grantor must still hold a global `admin`
     // when the grant is minted.
     let needs_grantor_admin = head_role == ROLE_ADMIN && head_scope_id.is_none();
@@ -1676,15 +1795,27 @@ pub struct RevokeForScopeResult {
 /// `role_grant.scope_id` / `role_grant_offer.scope_id` are polymorphic with no
 /// FK, so a parent-row delete would otherwise orphan grants and offers. The
 /// cascade is role-agnostic — anything attached to the destroyed scope is
-/// cleaned up. Both halves run as separate statements inside the caller's
-/// transaction, the scope's pending offers locked in id order first, then the
-/// grant revoke, then the supersede of the offers that lock returned — offers
-/// before grants, as [`query_revoke_role_grant`] takes them. No account row
-/// keeps a new offer at the scope out (the scope's offers span accounts), so
-/// the supersede writes only the rows it locked: an offer made at the scope
-/// after the lock is left pending rather than taken out of order. The supersede
-/// half always runs
-/// (orphan pending offers can exist at a scope with no active grants).
+/// cleaned up.
+///
+/// Its first statement takes the scope lock exclusive
+/// ([`query_scope_lock_exclusive`]): every write that brings a grant or an
+/// offer into the scope takes it shared ([`query_scope_lock_shared`] has the
+/// list), so one in flight commits first and is ended here, and one after
+/// waits for this transaction. A write whose consumer authorizer reads the
+/// scope reads it after its lock, so once this teardown has removed the scope
+/// row and committed, the write is refused. Call it before the transaction
+/// touches the scope row or any other row a writer's authorizer locks — a
+/// teardown holding such a row while it waits here on a writer that waits on
+/// that row deadlocks — or take [`query_scope_lock_exclusive`] first.
+///
+/// Then the halves run as separate statements, the scope's pending offers
+/// locked in id order first, then the grant revoke, then the supersede of the
+/// offers that lock returned — offers before grants, as
+/// [`query_revoke_role_grant`] takes them. The supersede writes only the rows
+/// it locked; an offer written at the scope after that without the scope lock
+/// (a raw insert, which no query here makes) is left pending rather than taken
+/// out of order. The supersede half always runs (orphan pending offers can
+/// exist at a scope with no active grants).
 /// Mirrors TS `query_role_grant_revoke_for_scope`.
 ///
 /// # Errors
@@ -1696,6 +1827,9 @@ pub async fn query_role_grant_revoke_for_scope(
     revoked_by: Option<Uuid>,
     reason: Option<&str>,
 ) -> Result<RevokeForScopeResult, tokio_postgres::Error> {
+    // The scope lock first, holding nothing: every scoped writer holds it shared
+    // until its commit, and none waits here holding a row we lock next.
+    query_scope_lock_exclusive(client, scope_id).await?;
     // The scope's pending offers first, in id order — before the grants, for
     // the reason `query_revoke_role_grant` locks its offers before its grant.
     let at_scope = format!(
@@ -1824,5 +1958,44 @@ mod tests {
         expected.push("from_account_id".to_owned());
         expected.sort();
         assert_eq!(serialized_keys(&superseded), expected);
+    }
+
+    /// `(scope_id, key2)` — shared with `fuz_app`'s
+    /// `src/test/auth/scope_advisory_lock_key.test.ts`, so the two spines lock
+    /// one scope under one key.
+    const SCOPE_LOCK_VECTORS: [(&str, i32); 7] = [
+        ("00000000-0000-0000-0000-000000000000", 0),
+        ("00000000-0000-0000-0000-000000000001", 1),
+        ("10000000-0000-0000-0000-000000000000", 268_435_456),
+        ("ffffffff-0000-0000-0000-000000000000", -1),
+        ("019a8f2e-4b3c-7d10-9e2f-3a4b5c6d7e8f", -1_998_276_870),
+        ("019a8f2e-4b3c-7d10-9e2f-3a4b5c6d7e90", -1_998_276_891),
+        ("f47ac10b-58cc-4372-a567-0e02b2c3d479", -1_156_425_726),
+    ];
+
+    #[test]
+    fn the_scope_lock_class_is_the_ascii_of_fuzs() {
+        assert_eq!(&super::SCOPE_ADVISORY_LOCK_CLASS.to_be_bytes(), b"fuzs");
+    }
+
+    #[test]
+    fn each_scope_folds_to_its_vector() {
+        for (scope_id, key) in SCOPE_LOCK_VECTORS {
+            assert_eq!(
+                super::scope_advisory_lock_key(scope_id.parse().unwrap()),
+                (super::SCOPE_ADVISORY_LOCK_CLASS, key),
+                "{scope_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_word_of_the_scope_counts() {
+        // two UUIDv7s of one millisecond, differing in the last word alone
+        let (_, a) =
+            super::scope_advisory_lock_key("019a8f2e-4b3c-7d10-9e2f-3a4b5c6d7e8f".parse().unwrap());
+        let (_, b) =
+            super::scope_advisory_lock_key("019a8f2e-4b3c-7d10-9e2f-3a4b5c6d7e90".parse().unwrap());
+        assert_ne!(a, b);
     }
 }

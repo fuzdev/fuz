@@ -689,6 +689,26 @@ The rules a change must keep:
   row locks them all first, in id order (`offer_rows_locked_in_id_order`:
   delete and purge, a revoke before its grant update, scope teardown, the
   sweep), and writes only rows it holds.
+- **A scope lock comes before every row.**
+  `query_role_grant_revoke_for_scope` takes the scope's advisory lock
+  exclusive as its first statement (`scope_advisory_lock_key`:
+  `SCOPE_ADVISORY_LOCK_CLASS`, `fuzs`, then the scope UUID's four 32-bit
+  words folded by XOR — the two-`int4` form, a key space apart from the
+  migration lock's `bigint` and a class apart from the purge lock's `fuz_`).
+  A scoped `role_grant_offer_create` and `role_grant_assign` take it shared
+  before the `OfferCreateAuthorize` runs, `query_role_grant_offer_create`
+  and `query_create_role_grant` take it shared first thing, and
+  `query_accept_offer` after its unlocked head read, before any row, so a
+  write whose predicate reads the scope after a teardown committed is
+  refused (`role_grant_offer_not_authorized`), and a teardown after a write
+  waits for it and then ends what it wrote. Every spine path takes it
+  before any row (a later re-take in the same transaction is free); a
+  direct caller of these queries must too, unless its transaction already
+  holds the scope lock. A consumer path
+  that reads its scope row and then brings something into the scope takes
+  `query_scope_lock_shared` first; a consumer teardown calls the cascade
+  before it touches its scope row, or takes `query_scope_lock_exclusive`
+  first.
 - Every rate-limited attempt reserves its slot before it runs, and an attempt
   abandoned after its Argon2 work started is still charged.
 - `AuditEventType` is the spine-wide closed registry (auth and cell events);

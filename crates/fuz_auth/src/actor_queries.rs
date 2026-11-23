@@ -770,6 +770,16 @@ pub(crate) async fn revoke_expired_role_grant_slot(
 /// reach this query, and every builtin gate reads the global grant, so a
 /// scoped builtin row written here would confer nothing.
 ///
+/// A scoped grant takes the scope lock shared first
+/// ([`crate::role_grant_offer_queries::query_scope_lock_shared`]), so a
+/// teardown of the scope
+/// ([`crate::role_grant_offer_queries::query_role_grant_revoke_for_scope`]) in
+/// flight is waited for, and one that starts after it waits for this
+/// transaction and then revokes the grant. Run it inside the caller's
+/// transaction, holding no row unless the transaction already holds this
+/// scope's lock (the lock's rule; a re-take is free); a caller that judged
+/// the scope live takes the lock before that read.
+///
 /// # Errors
 ///
 /// Propagates `tokio_postgres::Error` from the underlying client.
@@ -782,6 +792,9 @@ pub async fn query_create_role_grant(
     granted_by: Option<&uuid::Uuid>,
     expires_at: Option<std::time::SystemTime>,
 ) -> Result<RoleGrantRow, tokio_postgres::Error> {
+    if let Some(scope_id) = scope_id {
+        crate::role_grant_offer_queries::query_scope_lock_shared(client, *scope_id).await?;
+    }
     revoke_expired_role_grant_slot(client, actor_id, role, scope_kind, scope_id).await?;
 
     // Scope-aware partial unique index from the

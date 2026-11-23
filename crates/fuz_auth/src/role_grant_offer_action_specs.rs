@@ -45,7 +45,7 @@ use crate::role_grant_offer_queries::{
     default_expiry_from_now, query_accept_offer, query_revoke_role_grant,
     query_role_grant_find_active_role_for_actor, query_role_grant_offer_create,
     query_role_grant_offer_decline, query_role_grant_offer_history_for_account,
-    query_role_grant_offer_list, query_role_grant_offer_retract,
+    query_role_grant_offer_list, query_role_grant_offer_retract, query_scope_lock_shared,
 };
 use futures::future::BoxFuture;
 use fuz_db::{ActionDb, action_db_dispatch};
@@ -210,6 +210,20 @@ pub struct OfferCreateAuthorizeInput {
 /// sees the request's snapshot. **Read-only**: the predicate decides, it never
 /// writes — a write would commit or roll back with the request, and nothing
 /// enforces this but the impl.
+///
+/// **Runs under the scope lock** when the input is scoped: both verbs take
+/// `scope_id`'s lock shared
+/// ([`crate::role_grant_offer_queries::query_scope_lock_shared`]) before
+/// calling it, so a scope-existence read sees every teardown that committed
+/// first — under READ COMMITTED, where each statement takes a fresh snapshot;
+/// under REPEATABLE READ the snapshot predates the lock's wait and the read
+/// would miss it — and a teardown still to come waits for the request to
+/// commit. That holds only for a consumer teardown that goes through
+/// [`crate::role_grant_offer_queries::query_role_grant_revoke_for_scope`]
+/// before it removes the scope row, or takes
+/// [`crate::role_grant_offer_queries::query_scope_lock_exclusive`] first; one
+/// that removes the row first leaves the window open, and one that locks the
+/// row first deadlocks with a predicate that locks it.
 pub trait OfferCreateAuthorize: Send + Sync {
     fn authorize<'a>(
         &'a self,
@@ -727,6 +741,16 @@ async fn handle_role_grant_offer_create(
             "not authorized to offer this role",
             Some(ERROR_ROLE_GRANT_OFFER_NOT_AUTHORIZED),
         ));
+    }
+
+    // A scoped offer takes the scope lock before the predicate reads the scope,
+    // so a teardown that committed first is seen (the predicate refuses the
+    // dead scope) and one still to come waits for this offer, then supersedes
+    // it. The query takes it again, free. Mirrors the TS twin.
+    if let Some(scope_id) = parsed.scope_id {
+        query_scope_lock_shared(db, scope_id)
+            .await
+            .map_err(|e| internal_error_with_source("role grant offer scope lock failed", &e))?;
     }
 
     // Injected authorize predicate (TS `RoleGrantOfferCreateAuthorize`).
@@ -1631,7 +1655,15 @@ async fn handle_role_grant_assign(
     // offer the grantee doesn't get to decline, so a grant the predicate would
     // refuse as an offer (a scope that doesn't exist, a role that must be
     // scoped) is refused here, with the offer path's reason. Twin of the TS
-    // assign handler's `authorize` call.
+    // assign handler's `authorize` call. A scoped grant takes the scope lock
+    // first, as offer-create does, so the predicate reads the scope after any
+    // teardown that committed first, and a teardown still to come waits for
+    // this grant and then revokes it.
+    if let Some(scope_id) = parsed.scope_id {
+        query_scope_lock_shared(db, scope_id)
+            .await
+            .map_err(|e| internal_error_with_source("role grant assign scope lock failed", &e))?;
+    }
     let authz_input = OfferCreateAuthorizeInput {
         role: parsed.role.clone(),
         scope_kind: parsed.scope_kind.clone(),
