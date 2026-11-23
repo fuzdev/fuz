@@ -22,6 +22,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::account_queries::query_account_lock_live_many;
 use crate::action_auth::AuthSpec;
 use crate::action_rate_limit::RateLimitClass;
 use crate::actor_queries::{
@@ -29,7 +30,6 @@ use crate::actor_queries::{
     query_active_actors_by_account, query_count_active_accounts_with_global_role_locked,
     query_create_role_grant,
 };
-use crate::actor_schema::ActorRow;
 use crate::audit_emitter::AuditLogInput;
 use crate::audit_event_type::AuditEventType;
 use crate::auth_action_context::AuthenticatedActionContext;
@@ -1551,51 +1551,6 @@ fn recipient_not_found_error(to_actor_id: Option<uuid::Uuid>) -> JsonrpcError {
     }
 }
 
-/// The recipient's active actors, refusing a recipient that can't receive a
-/// role: a missing or soft-deleted account (no active actor), or a named actor
-/// that is not one of them. Runs after every authority gate, so a caller
-/// refused the conferral learns nothing of the recipient. Twin of the TS
-/// `require_active_recipient` in `role_grant_offer_actions.ts`.
-async fn require_active_recipient(
-    db: &(impl deadpool_postgres::GenericClient + ?Sized),
-    to_account_id: uuid::Uuid,
-    to_actor_id: Option<uuid::Uuid>,
-) -> Result<Vec<ActorRow>, JsonrpcError> {
-    let actors = query_active_actors_by_account(db, &to_account_id)
-        .await
-        .map_err(|e| internal_error_with_source("active_actors_for_account failed", &e))?;
-    let refused = to_actor_id.map_or(actors.is_empty(), |actor_id| {
-        !actors.iter().any(|a| a.id == actor_id)
-    });
-    if refused {
-        return Err(recipient_not_found_error(to_actor_id));
-    }
-    Ok(actors)
-}
-
-/// Resolve the grant's target actor. A supplied `to_actor_id` must be an active
-/// actor of `to_account_id`; otherwise the account's sole active actor is used
-/// (a multi-actor account must name one). A missing / actorless account
-/// 404-masks.
-async fn resolve_assign_target_actor(
-    db: &(impl deadpool_postgres::GenericClient + ?Sized),
-    to_account_id: uuid::Uuid,
-    to_actor_id: Option<uuid::Uuid>,
-) -> Result<uuid::Uuid, JsonrpcError> {
-    let actors = require_active_recipient(db, to_account_id, to_actor_id).await?;
-    if let Some(actor_id) = to_actor_id {
-        return Ok(actor_id);
-    }
-    // Otherwise resolve the account's sole active actor.
-    match actors.as_slice() {
-        [single] => Ok(single.id),
-        _ => Err(invalid_params(
-            "to_actor_id is required for a multi-actor account",
-            None,
-        )),
-    }
-}
-
 /// The forensic `role_grant_create` failure row of a refused assign — no
 /// grant was created, so `role_grant_id` is omitted.
 async fn emit_assign_failure_audit(
@@ -1626,7 +1581,8 @@ async fn emit_assign_failure_audit(
 /// on a **global** `admin`, and re-checked here). Re-checks admin-grantability
 /// so keeper / CLI-only roles can't be web-assigned, refuses a scoped builtin
 /// role, runs the consumer's [`OfferCreateAuthorize`] (refusal →
-/// `role_grant_offer_not_authorized`), resolves the target actor, writes the
+/// `role_grant_offer_not_authorized`), locks both parties' account rows and
+/// refuses either one removed, resolves the target actor, writes the
 /// (idempotent) grant, and emits a
 /// `role_grant_create` audit row — the same event the offer-accept and
 /// self-service paths emit.
@@ -1693,8 +1649,60 @@ async fn handle_role_grant_assign(
         ));
     }
 
-    let target_actor_id =
-        resolve_assign_target_actor(db, parsed.to_account_id, parsed.to_actor_id).await?;
+    // Both parties' account rows, locked in one statement in id order — the
+    // lock offer-create takes (`query_role_grant_offer_create`), at
+    // its position after every authority gate, so a caller refused the
+    // conferral learns nothing of the recipient. The credential was read
+    // before this transaction and nothing held the recipient: a delete or a
+    // purge of either, committed since, is waited for and seen, and one still
+    // to come waits for the grant to commit — so no grant lands on a tombstone
+    // (an undelete would bring it back) or meets a purged actor's foreign key.
+    // Judged recipient first, then the caller, as offer-create judges them.
+    // Mirrors the TS twin.
+    let live = query_account_lock_live_many(db, &[parsed.to_account_id, admin_account_id])
+        .await
+        .map_err(|e| internal_error_with_source("role grant assign account lock failed", &e))?;
+    // The recipient: a live account with an active actor (the named one, when
+    // an actor is named). A missing or removed recipient 404-masks.
+    let actors = if live.contains(&parsed.to_account_id) {
+        query_active_actors_by_account(db, &parsed.to_account_id)
+            .await
+            .map_err(|e| internal_error_with_source("active_actors_for_account failed", &e))?
+    } else {
+        Vec::new()
+    };
+    let recipient_refused = parsed.to_actor_id.map_or(actors.is_empty(), |actor_id| {
+        !actors.iter().any(|a| a.id == actor_id)
+    });
+    if recipient_refused {
+        return Err(recipient_not_found_error(parsed.to_actor_id));
+    }
+    // The caller: a live actor of a live account. One removed since its
+    // credential was read is refused as the dead credential it now is, as
+    // offer-create refuses its grantor, with no audit row from an account that
+    // is gone.
+    let caller_live = live.contains(&admin_account_id)
+        && query_active_actors_by_account(db, &admin_account_id)
+            .await
+            .map_err(|e| internal_error_with_source("active_actors_for_account failed", &e))?
+            .iter()
+            .any(|a| a.id == admin_actor_id);
+    if !caller_live {
+        return Err(unauthenticated());
+    }
+
+    // The grant's target actor: the named one, else the account's sole active
+    // actor (a multi-actor account must name one).
+    let target_actor_id = match (parsed.to_actor_id, actors.as_slice()) {
+        (Some(actor_id), _) => actor_id,
+        (None, [single]) => single.id,
+        (None, _) => {
+            return Err(invalid_params(
+                "to_actor_id is required for a multi-actor account",
+                None,
+            ));
+        }
+    };
 
     // Idempotent write — re-assigning an already-held grant returns the existing
     // row. `scope_kind` + `scope_id` land as the pair the input carried.

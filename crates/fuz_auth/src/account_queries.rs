@@ -469,7 +469,7 @@ pub async fn query_update_account_password(
 /// merely references the account waits on a login. Besides the writers it
 /// orders against, it conflicts with [`query_account_lock_live`] (the token
 /// mint, the same strength), the `FOR SHARE` of
-/// [`query_account_lock_live_many`] (an offer or invite create), an offer
+/// [`query_account_lock_live_many`] (an offer, invite or assign create), an offer
 /// accept's locks ([`query_account_lock_for_offer_accept`], the recipient's at
 /// this strength, a grantor's shared), and the last-admin guard's
 /// `FOR NO KEY UPDATE`. None of those waits on an account
@@ -655,7 +655,9 @@ pub async fn query_account_lock_live(
 /// must be ordered against a delete of any of them.
 ///
 /// An offer locks its two parties ([`crate::query_role_grant_offer_create`]),
-/// an invite its issuer ([`crate::query_create_invite`], one id).
+/// an invite its issuer ([`crate::query_create_invite`], one id), a
+/// `role_grant_assign` its recipient and its caller
+/// ([`crate::RoleGrantOfferActionSpecs`]).
 ///
 /// `FOR SHARE`: the weakest lock that conflicts with a delete's `UPDATE` of
 /// the row, so these writes don't wait on one another. It also waits on a

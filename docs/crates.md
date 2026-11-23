@@ -662,7 +662,9 @@ The rules a change must keep:
   `GrantorNotActive`) — a deleted recipient is refused exactly as a missing
   one; `query_create_invite` locks its issuer's account the same way and
   refuses an issuer that is not an active account
-  (`InviteCreateError::IssuerNotActive`). An account
+  (`InviteCreateError::IssuerNotActive`). `role_grant_assign` takes the
+  same lock on its recipient and its caller, and refuses a removed recipient
+  as a missing one and a removed caller as a dead credential. An account
   delete, and a purge, supersedes the pending offers made by the account
   and those made to it — a purge before its cascade, so each is audited —
   notifying each offer's live party (`queue_supersede_notifications` with
