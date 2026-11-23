@@ -62,7 +62,11 @@ async fn main() -> ExitCode {
     match run_app(RunAppOptions {
         default_addr: DEFAULT_ADDR,
         port,
-        drain_timeout: fuz_http::DEFAULT_DRAIN_TIMEOUT,
+        // under fuz_app's cross-harness teardown grace (3 s before SIGKILL),
+        // so a shutdown that gives up exits 1 and logs what it gave up on
+        // rather than being killed first (the TS test server's
+        // `shutdown_drain_timeout_ms` is the same bound)
+        drain_timeout: std::time::Duration::from_secs(2),
     })
     .await
     {
