@@ -19,20 +19,26 @@
 //! create and then ends what it wrote.
 //!
 //! And the last-admin guard against an admin-offer accept: the accept holds
-//! its grantor's account row shared and key-shares the grantor's actor, the
-//! guard takes the grantor's account first, and neither may deadlock the
-//! other. The other interleaving, the removal ahead of the accept, takes the
-//! grantor's account before the offer row on both sides, so the accept waits
-//! holding nothing the removal needs and is refused.
+//! its grantor's account row shared, the guard takes the grantor's account
+//! first, and neither may deadlock the other. The other interleaving, the
+//! removal ahead of the accept, takes the grantor's account before the offer
+//! row on both sides, so the accept waits holding nothing the removal needs
+//! and is refused.
 //!
 //! And the accept's own locks and the multi-row offer writes, each against a
 //! transaction played over raw SQL: two sibling accepts take turns at the
 //! recipient's row; an admin recipient sorting below its grantor waits on a
-//! guard holding its row; a purge's cascade reaching the grantor's grant never
-//! waits on an accept; the expiry sweep takes its offers in id order; a revoke
-//! and a scope teardown lock their offers before their grants; a revoke takes
-//! its revokee's account first, and a scope teardown supersedes only the offers
-//! its lock took.
+//! guard holding its row; a purge of a recipient whose actor granted the
+//! grantor's admin never writes that grant; the expiry sweep takes its offers
+//! in id order; a revoke and a scope teardown lock their offers before their
+//! grants; a revoke takes its revokee's account first, and a scope teardown
+//! supersedes only the offers its lock took.
+//!
+//! And a purge against the rows its cascade reaches, each pinned mid-cascade
+//! by a third transaction holding one row of it: an admin's revoke of a grant
+//! they granted, across their purge, stamps `revoked_by` without waiting on the
+//! purged actor; two purges whose accounts' offers and invites cross take turns
+//! at the purge lock.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/account_delete.races.db.test.ts`.
 //!
@@ -51,6 +57,7 @@
 use std::time::{Duration, Instant};
 
 use fuz_auth::actor_queries::query_count_active_accounts_with_global_role_locked;
+use fuz_auth::admin_action_specs::ERROR_CANNOT_DELETE_LAST_ADMIN;
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::role::ROLE_ADMIN;
 use fuz_auth::role_grant_offer_queries::{
@@ -618,9 +625,10 @@ async fn an_offer_between_two_admins_and_a_third_admins_delete_never_deadlock() 
 
 /// An admin-offer accept and a removal of its grantor never deadlock.
 ///
-/// The accept share-locks its grantor's account row, then inserts a grant
-/// naming the grantor's actor — a foreign-key key share on it. A holder of the
-/// recipient's actor stalls the accept's insert after its locks, and the
+/// The accept share-locks its grantor's account row, then inserts the grant to
+/// the recipient's actor — a foreign-key key share on that actor (`actor_id`
+/// keeps its foreign key; the grant's `granted_by` stamp has none). A holder of
+/// the recipient's actor stalls the accept's insert after its locks, and the
 /// removal's last-admin guard then stalls at the grantor's account; released,
 /// the accept commits and the removal goes on. One delete, one revoke of the
 /// grantor's grant, one purge. Twin of the TS case.
@@ -1097,9 +1105,9 @@ async fn an_admin_recipient_sorting_below_its_grantor_waits_on_the_guard_holding
 /// The grantor's account sorts below the recipient's, and the grantor's admin
 /// grant names the recipient's actor (`granted_by`). The purge played: its
 /// account row, its offers superseded; once the accept waits — holding the
-/// grantor's account — its delete, whose cascade sets that `granted_by` null.
-/// An accept holding the grantor's grant instead meets the cascade, and the
-/// two deadlock. Twin of the TS case.
+/// grantor's account — its delete. The cascade never writes the grantor's
+/// grant: `granted_by` is a provenance stamp, with no foreign key, so it keeps
+/// the purged actor's id. Twin of the TS case.
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_accept_across_a_purge_of_a_recipient_whose_actor_granted_the_grantors_admin() {
@@ -1136,8 +1144,9 @@ async fn an_accept_across_a_purge_of_a_recipient_whose_actor_granted_the_grantor
         .unwrap()
         .get(0);
     assert_eq!(
-        granted_by, None,
-        "the cascade set the grant's granted_by null"
+        granted_by,
+        Some(r.1),
+        "the cascade never writes the grantor's grant"
     );
 }
 
@@ -1343,4 +1352,305 @@ async fn a_scope_teardown_supersedes_only_the_offers_its_lock_took() {
         .collect();
     assert_eq!(superseded, vec![locked]);
     assert_eq!(offer_state(&pool, late).await, (false, false));
+}
+
+// -- a purge against the rows its cascade reaches --------------------------------
+
+/// Hold `pin` (one row the cascade reaches) in a transaction of its own, run
+/// `first`, and once it waits on the pin, `second`; once `second` waits too or
+/// has finished, commit the pin. Returns both results.
+macro_rules! pinned {
+    ($pool:expr, pin: $pin:expr, first: $first:expr, second: $second:expr) => {{
+        let pool: &Pool = $pool;
+        let mut pin_client = pool.get().await.unwrap();
+        let pin = pin_client.transaction().await.unwrap();
+        pin.batch_execute(AsRef::<str>::as_ref(&$pin))
+            .await
+            .unwrap();
+        let second_done = std::sync::atomic::AtomicBool::new(false);
+        let first = async { $first };
+        let then = async {
+            until_lock_waiters(pool, 1, "the first waits on the pinned row").await;
+            let second = async {
+                let result = $second;
+                second_done.store(true, std::sync::atomic::Ordering::SeqCst);
+                result
+            };
+            let release = async {
+                let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
+                while !second_done.load(std::sync::atomic::Ordering::SeqCst)
+                    && lock_waiters(pool).await < 2
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the second neither waits nor finishes"
+                    );
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                pin.commit().await.unwrap();
+            };
+            let (second, ()) = tokio::join!(second, release);
+            second
+        };
+        tokio::join!(first, then)
+    }};
+}
+
+async fn purge(
+    pool: &Pool,
+    keeper: &RequestActorContext,
+    account_id: uuid::Uuid,
+) -> Result<Value, JsonrpcError> {
+    in_tx!(pool, |tx| admin_action(
+        pool,
+        keeper,
+        "account_purge",
+        &json!({ "account_id": account_id, "confirm": true }),
+        &tx
+    ))
+}
+
+/// An admin's revoke of a grant they granted, across their purge: both commit.
+///
+/// The admin's own grant pinned, so the purge waits in its cascade, past its
+/// delete of the admin's actor; the revoke, authorized before the purge, then
+/// writes the grant it revokes and stamps `revoked_by` with the admin's actor.
+/// With a foreign key on the stamp, the write waited on the deleted actor while
+/// holding the grant, whose `granted_by` the cascade then set null: a deadlock.
+/// The stamp has none, so the revoke commits, the purge's cascade never writes
+/// the grant, and the stamps keep the purged actor's id. Twin of the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn an_admins_revoke_of_a_grant_they_granted_across_their_purge_both_commit() {
+    let pool = fresh_db_pool().await;
+    let keeper = with_admin(seed_admin(&pool).await);
+    seed_role_grant_direct(&pool, keeper.actor.id, ROLE_ADMIN, None).await;
+    let admin = seed_actor_context(&pool, "purged_admin").await;
+    seed_role_grant_direct(&pool, admin.actor.id, ROLE_ADMIN, None).await;
+    let own = insert_grant(&pool, admin.actor.id, LOCK_ORDER_ROLE, None, None).await;
+    let (_, grantee) = seed_account_actor(&pool, "purged_admins_grantee").await;
+    let granted = insert_grant(&pool, grantee, LOCK_ORDER_ROLE, None, Some(admin.actor.id)).await;
+
+    let (purged, revoked) = pinned!(
+        &pool,
+        pin: format!("SELECT id FROM role_grant WHERE id = '{own}' FOR UPDATE"),
+        first: purge(&pool, &keeper, admin.account.id).await,
+        second: in_tx!(pool, |tx| query_revoke_role_grant(
+            &tx,
+            granted,
+            grantee,
+            Some(admin.actor.id),
+            None
+        ))
+    );
+    purged.expect("the purge");
+    let revoked = revoked.expect("the revoke");
+    assert!(revoked.is_some(), "the revoke found the grant");
+
+    let client = pool.get().await.unwrap();
+    let row = client
+        .query_one(
+            "SELECT granted_by, revoked_by, revoked_at IS NOT NULL FROM role_grant WHERE id = $1",
+            &[&granted],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        row.get::<_, Option<uuid::Uuid>>(0),
+        Some(admin.actor.id),
+        "granted_by kept"
+    );
+    assert_eq!(
+        row.get::<_, Option<uuid::Uuid>>(1),
+        Some(admin.actor.id),
+        "revoked_by stamped"
+    );
+    assert!(row.get::<_, bool>(2), "the grant is revoked");
+    let left: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM account WHERE id = $1",
+            &[&admin.account.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(left, 0, "the admin is purged");
+}
+
+/// Two purges whose accounts' rows cross — offers each made the other,
+/// accepted or declined, and invites each issued and the other claimed — take
+/// turns: both commit.
+///
+/// A third transaction pins the offer or invite of the account purged second,
+/// so the first purge waits in its cascade; the second is sent. Each cascade
+/// deletes its own account's offers and invites and its counterpart's, in its
+/// plan's order, and with no lock ahead of them the two met in opposite orders
+/// and deadlocked. Every purge first takes the advisory lock only purges take,
+/// so the second waits there holding nothing. Twin of the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn two_purges_whose_accounts_rows_cross_both_commit() {
+    for shape in ["accepted", "declined", "invites"] {
+        let pool = fresh_db_pool().await;
+        let keeper = with_admin(seed_admin(&pool).await);
+        seed_role_grant_direct(&pool, keeper.actor.id, ROLE_ADMIN, None).await;
+        let x = seed_account_actor(&pool, "crossed_x").await;
+        let z = seed_account_actor(&pool, "crossed_z").await;
+        let ids = ascending_ids(2);
+        let (from_x, from_z) = (ids[0], ids[1]);
+        let client = pool.get().await.unwrap();
+        let pin = if shape == "invites" {
+            for (id, issuer, claimer, name) in [
+                (from_x, x.1, z.0, "crossed_iz"),
+                (from_z, z.1, x.0, "crossed_ix"),
+            ] {
+                client
+                    .execute(
+                        "INSERT INTO invite (id, username, created_by, claimed_by, claimed_at)
+                         VALUES ($1, $2, $3, $4, NOW())",
+                        &[&id, &name, &issuer, &claimer],
+                    )
+                    .await
+                    .unwrap();
+            }
+            format!("SELECT id FROM invite WHERE id = '{from_x}' FOR UPDATE")
+        } else {
+            for (id, from, to) in [(from_x, x.1, z), (from_z, z.1, x)] {
+                insert_offer(&pool, id, from, to.0, LOCK_ORDER_ROLE, None, false).await;
+                if shape == "accepted" {
+                    client
+                        .execute(
+                            "INSERT INTO role_grant (id, actor_id, role, granted_by, source_offer_id)
+                             VALUES ($1, $2, $3, $4, $1)",
+                            &[&id, &to.1, &LOCK_ORDER_ROLE, &from],
+                        )
+                        .await
+                        .unwrap();
+                    client
+                        .execute(
+                            "UPDATE role_grant_offer SET accepted_at = NOW(), resulting_role_grant_id = $1
+                             WHERE id = $1",
+                            &[&id],
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    client
+                        .execute(
+                            "UPDATE role_grant_offer SET declined_at = NOW() WHERE id = $1",
+                            &[&id],
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+            format!("SELECT id FROM role_grant_offer WHERE id = '{from_x}' FOR UPDATE")
+        };
+        drop(client);
+
+        let (first, second) = pinned!(
+            &pool,
+            pin: pin,
+            first: purge(&pool, &keeper, z.0).await,
+            second: purge(&pool, &keeper, x.0).await
+        );
+        first.unwrap_or_else(|e| panic!("the first purge ({shape}): {e:?}"));
+        second.unwrap_or_else(|e| panic!("the second purge ({shape}): {e:?}"));
+        let left = count(
+            &pool,
+            "SELECT COUNT(*) FROM account WHERE id = $1 OR username = 'crossed_x'",
+            z.0,
+        )
+        .await;
+        assert_eq!(left, 0, "both purged ({shape})");
+    }
+}
+
+/// Remove `target_account` by `method` (`account_purge` or `account_delete`)
+/// while a held transaction makes it the last admin: an accept making it an
+/// admin (its account row held, as an accept holds its recipient's) and the
+/// revoke of every other admin that the guard of the revoke allowed, counting
+/// the target. The removal's guard reads a non-admin unlocked and waits at the
+/// target's row — the purge's `query_account_lock_for_purge`, the delete's
+/// `query_account_lock_live` — then resumes on the commit with the target the
+/// last admin: its guard runs again under the row lock and refuses.
+async fn a_removal_whose_target_turns_the_last_admin_is_refused(method: &str) {
+    let pool = fresh_db_pool().await;
+    let keeper = with_admin(seed_admin(&pool).await);
+    seed_role_grant_direct(&pool, keeper.actor.id, ROLE_ADMIN, None).await;
+    let (target_account, target_actor) = seed_account_actor(&pool, "turned_admin").await;
+
+    let mut held_client = pool.get().await.unwrap();
+    let held = held_client.transaction().await.unwrap();
+    held.execute(
+        "SELECT id FROM account WHERE id = $1 FOR NO KEY UPDATE",
+        &[&target_account],
+    )
+    .await
+    .unwrap();
+    held.execute(
+        "INSERT INTO role_grant (actor_id, role) VALUES ($1, $2)",
+        &[&target_actor, &ROLE_ADMIN],
+    )
+    .await
+    .unwrap();
+    held.execute(
+        "UPDATE role_grant SET revoked_at = NOW()
+         WHERE role = $1 AND scope_id IS NULL AND revoked_at IS NULL AND actor_id <> $2",
+        &[&ROLE_ADMIN, &target_actor],
+    )
+    .await
+    .unwrap();
+    let release = async {
+        until_lock_waiters(&pool, 1, "the removal waits at its target's row").await;
+        held.commit().await.unwrap();
+    };
+    let params = if method == "account_purge" {
+        json!({ "account_id": target_account, "confirm": true })
+    } else {
+        json!({ "account_id": target_account })
+    };
+    let remove = async {
+        in_tx!(pool, |tx| admin_action(
+            &pool, &keeper, method, &params, &tx
+        ))
+    };
+    let (removed, ()) = tokio::join!(remove, release);
+
+    let err = removed.expect_err("the removal is refused");
+    assert_eq!(err.code, JsonrpcErrorCode::Forbidden, "{method}");
+    assert_eq!(
+        err.data
+            .as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(Value::as_str),
+        Some(ERROR_CANNOT_DELETE_LAST_ADMIN),
+        "{method}"
+    );
+    let admins = count(
+        &pool,
+        "SELECT COUNT(*) FROM role_grant rg JOIN actor act ON act.id = rg.actor_id
+         JOIN account a ON a.id = act.account_id
+         WHERE rg.role = 'admin' AND rg.scope_id IS NULL AND rg.revoked_at IS NULL
+           AND a.deleted_at IS NULL AND a.id = $1",
+        target_account,
+    )
+    .await;
+    assert_eq!(admins, 1, "the last admin stands ({method})");
+}
+
+/// A purge whose target turns the last admin while it waits at its row is
+/// refused. Twin of the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_purge_whose_target_turns_the_last_admin_while_it_waits_at_its_row_is_refused() {
+    a_removal_whose_target_turns_the_last_admin_is_refused("account_purge").await;
+}
+
+/// A delete whose target turns the last admin while it waits at its row is
+/// refused. Twin of the TS case.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn a_delete_whose_target_turns_the_last_admin_while_it_waits_at_its_row_is_refused() {
+    a_removal_whose_target_turns_the_last_admin_is_refused("account_delete").await;
 }

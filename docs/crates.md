@@ -626,17 +626,25 @@ The rules a change must keep:
   account take turns on the lock, so a cap's count and eviction never run
   against a stale count. A server that mints a session or a token through
   its own code takes the same lock.
-- **Every writer of an account takes its row first.** A mint, a password
-  change and a delete do it through their first lock or write; a revoke
-  takes its revokee's (`query_account_lock_for_revoke`); a purge takes every
-  admin's account and its own `FOR NO KEY UPDATE` in one id-ordered statement
-  (`query_account_lock_admins_for_purge`), then — for an admin target — its
+- **Every writer of an account takes its row first.** A mint and a password
+  change do it through their first lock or write; a delete after its
+  last-admin guard (`query_account_lock_live`, then the guards again — never
+  before the guard, which an admin target's row is locked within in id
+  order); a revoke
+  takes its revokee's (`query_account_lock_for_revoke`); a purge first takes
+  the advisory lock only purges take (`query_account_purge_advisory_lock`,
+  holding no row, so two purges take turns), then — for an admin target — its
   last-admin guard, then `query_account_lock_for_purge` (`FOR UPDATE`,
-  tombstoned or not), then revokes the account's sessions and
-  tokens before its `DELETE`. Every multi-row delete of `auth_session` or
-  `api_token` rows (revoke-alls, cap evictions, the expiry sweep) locks them
-  through an id-ordered subselect, so two of them never lock in opposite
-  orders, whatever plan the database picks.
+  tombstoned or not), then the guards again (whether the target is an admin
+  is read unlocked, and an accept making it one can commit in that window),
+  then revokes the account's sessions and tokens before its `DELETE`. Its cascade writes no other account's rows through a
+  provenance stamp: `granted_by`, `revoked_by`, `source_offer_id`,
+  `actor.updated_by` / `deleted_by`, `cell.updated_by` and
+  `cell_grant.granted_by` carry no foreign key, and keep a purged actor's id.
+  Every multi-row delete of `auth_session` or `api_token` rows (revoke-alls,
+  cap evictions, the expiry sweep) locks them through an id-ordered
+  subselect, so two of them never lock in opposite orders, whatever plan the
+  database picks.
 - **An offer and an invite are created under their principals' locks too.**
   `query_role_grant_offer_create` takes `FOR SHARE` on its recipient's and
   its grantor's accounts in one statement, in id order

@@ -588,19 +588,27 @@ pub async fn query_account_has_active_global_role(
 /// one, the locks end with the statement.
 ///
 /// It does not conflict with a foreign key's `FOR KEY SHARE` — the lock an
-/// insert or update naming a counted row takes (an accept's new grant naming
-/// its grantor, a cell's `created_by`). Such a write only adds a reference: it
+/// insert or update naming a counted row takes (a new grant to a counted
+/// actor, a cell's `created_by`). Such a write only adds a reference: it
 /// never lowers the count, so the guard fails closed — what it counted is at
 /// most what will stand, and a removal it allows leaves an admin. A purge that
 /// deletes a row such a write names still takes `FOR UPDATE` and waits for it.
 ///
-/// A purge's cascade writes admin rows too — it sets null the `granted_by` of
-/// every grant the purged account's actors granted, admins' grants among them,
-/// in the order its plan walks them — so a purge takes every admin's account
-/// row first, with its own, in one id-ordered statement
-/// ([`crate::account_queries::query_account_lock_admins_for_purge`]), and runs
-/// this count after it only when its target is an admin: another guard then
-/// waits at its first account holding nothing.
+/// Both removals, a purge and a delete, run this count when their target is
+/// an admin, before any row of the target's (a purge after its advisory lock,
+/// [`crate::account_queries::query_account_purge_advisory_lock`]), and again
+/// once they hold the target's row (a purge's
+/// [`crate::account_queries::query_account_lock_for_purge`], a delete's
+/// [`crate::account_queries::query_account_lock_live`]): whether the target
+/// is an admin is read unlocked, and an accept making it one can commit in
+/// between, with a revoke it let pass ending every other admin. The second
+/// count re-locks only rows the first holds, unless an admin was made in
+/// between — the target or another — whose rows it then takes out of id
+/// order. A deadlock error then rolls one of the two transactions back whole,
+/// removing nothing: the removal, or the other — which may be a removal that
+/// would have committed, and answers 500. A purge's cascade writes no other
+/// account's admin rows — the provenance stamps a grant names its granter by
+/// carry no foreign key — so another guard meets it only at these counts.
 ///
 /// The rows are locked in id order — account, then actor, then grant — as the
 /// sort returns them: each account's row, its actors' and its grants' before

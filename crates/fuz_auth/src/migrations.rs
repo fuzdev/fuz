@@ -83,6 +83,13 @@ const ROLE_GRANT_OFFER_EXPIRE_AUDITED_AT: &str =
 /// already holding a mixed-case username.
 const ACCOUNT_USERNAME_LOWERCASE: &str = include_str!("migrations/account_username_lowercase.sql");
 
+/// Drops the foreign keys of the provenance stamps — `actor.updated_by` /
+/// `deleted_by`, `role_grant.granted_by` / `revoked_by` / `source_offer_id` —
+/// so a purge's cascade never writes another account's row through one, and a
+/// stamp write never waits on its actor.
+const DROP_PROVENANCE_STAMP_FOREIGN_KEYS: &str =
+    include_str!("migrations/drop_provenance_stamp_foreign_keys.sql");
+
 /// Flat ordered migration list. **Frozen + append-only** — entries here are
 /// never edited, renamed, or reordered; every schema change is a new appended
 /// `Migration`. See the module doc for the silent-outage rationale.
@@ -118,6 +125,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         name: "account_username_lowercase",
         sql: ACCOUNT_USERNAME_LOWERCASE,
+    },
+    Migration {
+        name: "drop_provenance_stamp_foreign_keys",
+        sql: DROP_PROVENANCE_STAMP_FOREIGN_KEYS,
     },
 ];
 

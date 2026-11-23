@@ -10,9 +10,9 @@ use serde_json::Value;
 
 use crate::account_queries::{
     AccountIdentitySnapshot, AdminAccountEntry, query_account_by_email, query_account_by_id,
-    query_account_by_username, query_account_lock_admins_for_purge, query_account_lock_for_purge,
-    query_account_soft_delete, query_account_undelete, query_admin_account_list,
-    query_purge_account,
+    query_account_by_username, query_account_lock_for_purge, query_account_lock_live,
+    query_account_purge_advisory_lock, query_account_soft_delete, query_account_undelete,
+    query_admin_account_list, query_purge_account,
 };
 use crate::action_auth::{AuthSpec, credential_type_required};
 use crate::action_rate_limit::RateLimitClass;
@@ -1057,6 +1057,17 @@ async fn handle_account_delete(
 
     // Keeper + last-admin guards (fail-loud, before the tombstone).
     guard_account_removable(ctx, db, &target_account_id, AuditEventType::AccountDelete).await?;
+    // The target's row, then the guards again under it — as a purge does
+    // (`handle_account_purge` has why): the guard's read of whether the target
+    // is an admin took no lock, and an accept making it one can commit before
+    // the tombstone takes the row. A row already gone or tombstoned skips the
+    // second pass; the tombstone then finds nothing.
+    let live = query_account_lock_live(db, &target_account_id)
+        .await
+        .map_err(|e| internal_error_with_source("account lock failed", &e))?;
+    if live {
+        guard_account_removable(ctx, db, &target_account_id, AuditEventType::AccountDelete).await?;
+    }
 
     // Read actor names before the tombstone so they snapshot into the
     // per-actor events.
@@ -1154,16 +1165,13 @@ async fn handle_account_purge(
         ));
     }
 
-    // Every admin's account row and the target's, in one id-ordered statement:
-    // the cascade writes admin rows (the grants the target's actors granted).
-    // Every other removal's guard and every other purge take those accounts
-    // first, and no other writer of an admin's grant waits on an account row
-    // while holding one, so holding the accounts orders the purge before any of
-    // them (`query_account_lock_admins_for_purge` has why). The last-admin guard
-    // then runs only for an admin target, in `guard_account_removable`.
-    query_account_lock_admins_for_purge(db, &target_account_id)
+    // The purge lock first, holding nothing: two purges' cascades cross at
+    // rows no row lock ahead of them covers, so purges take turns
+    // (`query_account_purge_advisory_lock` has why). The last-admin guard then
+    // runs only for an admin target, in `guard_account_removable`.
+    query_account_purge_advisory_lock(db)
         .await
-        .map_err(|e| internal_error_with_source("admin account lock failed", &e))?;
+        .map_err(|e| internal_error_with_source("purge lock failed", &e))?;
     // Keeper + last-admin guards (fail-loud, before the cascade).
     guard_account_removable(ctx, db, &target_account_id, AuditEventType::AccountPurge).await?;
 
@@ -1182,6 +1190,18 @@ async fn handle_account_purge(
         )
         .await);
     }
+    // The guards again, under the row lock. The first read of whether the
+    // target is an admin took no lock, and a purge holds no row of a non-admin
+    // target before its own: an accept making it an admin, in flight then, has
+    // committed by now (it holds the row this lock waited on), and a revoke the
+    // accept's grant let pass may have ended every other admin. For a target
+    // that was an admin, this count re-locks the rows the first one holds; it
+    // reaches past them only for an admin made in the window, the target or
+    // another — out of the guards' id order. A deadlock error then rolls one
+    // of the two transactions back whole, removing nothing: this purge, or the
+    // other, which may be a removal that would have committed (it answers
+    // 500).
+    guard_account_removable(ctx, db, &target_account_id, AuditEventType::AccountPurge).await?;
 
     // Snapshot actors before the cascade removes them.
     let actors = query_actors_by_account(db, &target_account_id)

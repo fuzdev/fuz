@@ -101,8 +101,9 @@ pub struct AuditLogListFilters {
 /// actor's account username; `target_username` is the target's. Both
 /// nullable: LEFT JOIN through `actor.account_id` (Stage-4-stamped
 /// events) OR direct `account_id` (account-grain events) — null when
-/// the row's principal has neither (or the referenced account was
-/// hard-deleted, since the FK is `ON DELETE SET NULL`).
+/// the row's principal has neither, or when the account it names was
+/// purged (the identity columns carry no FK, so the row keeps the id and
+/// the join finds no account).
 ///
 /// Same shape used for [`query_audit_log_list_role_grant_history`] — TS
 /// distinguishes `AuditLogEventWithUsernamesJson` from

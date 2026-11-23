@@ -3,6 +3,12 @@
 -- active rows. FKs into `actor` (created by the fuz_auth namespace, which
 -- runs first). The full cell-layer surface ships in this one migration,
 -- matching the TS twin's schema snapshot.
+--
+-- The provenance stamps `cell.updated_by` and `cell_grant.granted_by` carry
+-- no FK, as fuz_auth's stamps carry none: nothing authorizes on them, so they
+-- keep the id they were written with after a purge, and neither a purge's
+-- cascade nor a stamp write waits on the other. `cell.created_by` keeps its FK
+-- (`ON DELETE SET NULL`): it is the owner the edit and manage predicates read.
 
 CREATE TYPE cell_visibility AS ENUM ('private', 'public');
 
@@ -21,7 +27,7 @@ CREATE TABLE cell (
   updated_at  TIMESTAMPTZ,
   deleted_at  TIMESTAMPTZ,
   created_by  UUID REFERENCES actor(id) ON DELETE SET NULL,
-  updated_by  UUID REFERENCES actor(id) ON DELETE SET NULL,
+  updated_by  UUID,
   -- A contribution policy is a root's alone, and always a JSON object
   -- (`@> '{}'` holds for an object and nothing else; the TS twin runs on
   -- pglet, which has no `jsonb_typeof`).
@@ -48,7 +54,7 @@ CREATE TABLE cell_grant (
   actor_id    UUID REFERENCES actor(id) ON DELETE CASCADE,
   role        TEXT,
   scope_id    UUID,
-  granted_by  UUID REFERENCES actor(id) ON DELETE SET NULL,
+  granted_by  UUID,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((actor_id IS NOT NULL AND role IS NULL AND scope_id IS NULL)
       OR (actor_id IS NULL AND role IS NOT NULL))

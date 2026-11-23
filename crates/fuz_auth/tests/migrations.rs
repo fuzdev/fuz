@@ -57,6 +57,7 @@ async fn migrations_run_once() {
             "drop_session_last_seen_at".to_owned(),
             "role_grant_offer_expire_audited_at".to_owned(),
             "account_username_lowercase".to_owned(),
+            "drop_provenance_stamp_foreign_keys".to_owned(),
         ],
     );
 }
@@ -306,9 +307,13 @@ async fn account_username_lowercase_migration_refuses_a_mixed_case_row() {
     let results = run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
         .expect("migration run after lowercasing");
+    let tail: Vec<String> = AUTH_MIGRATIONS.migrations[idx..]
+        .iter()
+        .map(|m| m.name.to_owned())
+        .collect();
     assert_eq!(
-        results[0].applied_names,
-        vec!["account_username_lowercase".to_owned()]
+        results[0].applied_names, tail,
+        "the chain from the migration on"
     );
 
     let client = pool.get().await.expect("pool.get");
@@ -322,5 +327,114 @@ async fn account_username_lowercase_migration_refuses_a_mixed_case_row() {
     assert_eq!(
         insert.code().map(tokio_postgres::error::SqlState::code),
         Some("23514")
+    );
+}
+
+/// The foreign keys on `actor`, `role_grant` and `role_grant_offer`, as
+/// `(table, column, references)`, sorted.
+#[expect(
+    clippy::expect_used,
+    reason = "a test helper outside `#[test]` fns panics on a failed read"
+)]
+async fn identity_foreign_keys(pool: &fuz_db::Pool) -> Vec<(String, String, String)> {
+    let client = pool.get().await.expect("pool.get");
+    client
+        .query(
+            "SELECT c.conrelid::regclass::text, a.attname::text, c.confrelid::regclass::text
+             FROM pg_constraint c
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+             WHERE c.contype = 'f'
+               AND c.conrelid::regclass::text IN ('actor', 'role_grant', 'role_grant_offer')
+             ORDER BY 1, 2",
+            &[],
+        )
+        .await
+        .expect("constraint read")
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
+}
+
+/// The `drop_provenance_stamp_foreign_keys` migration over a database
+/// migrated to the entry before it, holding a stamp: it drops exactly the
+/// stamps' foreign keys, keeps every reference that carries meaning and the
+/// stamp's value, and a stamp then names an actor no row holds.
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+async fn drop_provenance_stamp_foreign_keys_drops_only_the_stamps() {
+    let pool = fresh_db_pool().await;
+    let idx = AUTH_MIGRATIONS
+        .migrations
+        .iter()
+        .position(|m| m.name == "drop_provenance_stamp_foreign_keys")
+        .expect("drop_provenance_stamp_foreign_keys is in the released chain");
+    let prefix =
+        MigrationNamespace::spine(AUTH_MIGRATIONS.name, &AUTH_MIGRATIONS.migrations[..idx]);
+    run_migrations(&pool, &[prefix])
+        .await
+        .expect("prefix migration run");
+    let (_, granter) = fuz_testing::seed_account_actor(&pool, "stamp_granter").await;
+    let (_, grantee) = fuz_testing::seed_account_actor(&pool, "stamp_grantee").await;
+    let client = pool.get().await.expect("pool.get");
+    let grant: uuid::Uuid = client
+        .query_one(
+            "INSERT INTO role_grant (actor_id, role, granted_by) VALUES ($1, 'stamp_role', $2)
+             RETURNING id",
+            &[&grantee, &granter],
+        )
+        .await
+        .expect("seed a stamped grant")
+        .get(0);
+    drop(client);
+    let fk = |t: &str, c: &str, r: &str| (t.to_owned(), c.to_owned(), r.to_owned());
+    let stamps = [
+        fk("actor", "deleted_by", "actor"),
+        fk("actor", "updated_by", "actor"),
+        fk("role_grant", "granted_by", "actor"),
+        fk("role_grant", "revoked_by", "actor"),
+        fk("role_grant", "source_offer_id", "role_grant_offer"),
+    ];
+    let before = identity_foreign_keys(&pool).await;
+    for stamp in &stamps {
+        assert!(before.contains(stamp), "{stamp:?} before the migration");
+    }
+
+    let results = run_migrations(&pool, &[AUTH_MIGRATIONS])
+        .await
+        .expect("the migration");
+    let tail: Vec<String> = AUTH_MIGRATIONS.migrations[idx..]
+        .iter()
+        .map(|m| m.name.to_owned())
+        .collect();
+    assert_eq!(
+        results[0].applied_names, tail,
+        "the chain from the migration on"
+    );
+    let after = identity_foreign_keys(&pool).await;
+    let kept: Vec<_> = before
+        .iter()
+        .filter(|fk| !stamps.contains(fk))
+        .cloned()
+        .collect();
+    assert_eq!(after, kept, "only the stamps' foreign keys are dropped");
+    assert!(
+        after.contains(&fk("role_grant", "actor_id", "actor")),
+        "a grant's holder keeps its foreign key"
+    );
+
+    let client = pool.get().await.expect("pool.get");
+    client
+        .execute("DELETE FROM account WHERE username = 'stamp_granter'", &[])
+        .await
+        .expect("purge the granter");
+    let granted_by: Option<uuid::Uuid> = client
+        .query_one("SELECT granted_by FROM role_grant WHERE id = $1", &[&grant])
+        .await
+        .expect("grant read")
+        .get(0);
+    assert_eq!(
+        granted_by,
+        Some(granter),
+        "the purge leaves the stamp as written"
     );
 }
