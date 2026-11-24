@@ -33,8 +33,10 @@ manual dispatch:
 Every job that runs cargo checks this repo out into `fuz/` and fuzdev/pglet
 beside it into `pglet/`: `fuz_testing` path-depends on pglet's server crate,
 and Cargo loads it for any build in the workspace. `check.yml`'s `PGLET_REF`
-pins the pglet commit, a full SHA that `cross-contract.yml` repeats; it moves
-deliberately, with `Cargo.lock` re-locked to the pglet crates at that commit.
+is pglet's `main`, which `cross-contract.yml` repeats, so fuz and pglet move
+together. `--locked` holds `Cargo.lock` to the pglet crates and their
+dependencies, so a pglet change to either fails fuz's CI until fuz re-locks
+(`cargo update -p pglet_server`): the accepted cost.
 Locally, keep a `pglet` checkout beside this one.
 
 `.github/workflows/cross-contract.yml` runs nightly and by manual dispatch,

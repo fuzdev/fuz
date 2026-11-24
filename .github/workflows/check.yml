@@ -36,10 +36,11 @@
 # repository (`../pglet/crates/pglet_server`), and Cargo loads it for any build
 # in this workspace. `actions/checkout` can't write outside `$GITHUB_WORKSPACE`,
 # so every job that runs cargo checks out into subdirectories — `fuz/`,
-# `pglet/` — and runs its steps in `fuz/`. `PGLET_REF` pins the pglet commit
-# checked against, a full SHA bumped deliberately together with `Cargo.lock`
-# (which `--locked` holds to the pglet crates and their dependencies);
-# `cross-contract.yml` pins the same SHA and moves with it.
+# `pglet/` — and runs its steps in `fuz/`. `PGLET_REF` is the pglet ref
+# checked against: `main`, so fuz and pglet move together. `--locked` holds
+# `Cargo.lock` to the pglet crates and their dependencies, so a pglet change
+# to either fails this build until fuz re-locks — the accepted cost.
+# `cross-contract.yml` checks out the same ref.
 
 name: check
 
@@ -63,7 +64,7 @@ permissions:
   contents: read
 
 env:
-  PGLET_REF: 86c5fc318419912c7a3e5f03c6c6fe0e780fb620
+  PGLET_REF: main
 
 jobs:
   check:
