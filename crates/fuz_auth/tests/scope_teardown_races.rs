@@ -47,8 +47,7 @@
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use futures::future::BoxFuture;
 use fuz_auth::actor_queries::query_create_role_grant;
@@ -69,16 +68,13 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 mod common;
-use common::{fresh_db_pool, seed_actor_context, seed_admin, seed_role_grant_direct};
+use common::{fresh_db_pool, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct};
 
 /// The admin-grantable role every scoped write here confers.
 const ROLE: &str = "scope_race_role";
 
 /// The scope kind every scoped write here names.
 const SCOPE_KIND: &str = "race_scope";
-
-/// How long a lock wait a test arranged may take to show, a bound on a hang only.
-const LOCK_WAIT_DEADLINE: Duration = Duration::from_secs(20);
 
 fn registry() -> RoleRegistry {
     RoleRegistry::new(vec![RoleSpec::new(ROLE, vec![GrantPath::Admin])]).unwrap()
@@ -151,20 +147,6 @@ async fn create_scope(pool: &Pool) -> Uuid {
         .await
         .unwrap();
     id
-}
-
-/// Run `call` in a transaction of its own, committed when it succeeds, as the
-/// dispatcher does.
-macro_rules! in_tx {
-    ($pool:expr, |$tx:ident| $call:expr) => {{
-        let mut client = $pool.get().await.unwrap();
-        let $tx = client.transaction().await.unwrap();
-        let result = $call.await;
-        if result.is_ok() {
-            $tx.commit().await.unwrap();
-        }
-        result
-    }};
 }
 
 /// A role-grant-offer verb by `auth`, on `tx`, with [`registry`] and
@@ -335,64 +317,6 @@ fn assert_no_server_error(result: &Result<Value, JsonrpcError>, label: &str) {
             "{label}: {error:?}"
         );
     }
-}
-
-/// Backends waiting on a lock `holder_pid` holds — scoped to the held
-/// transaction, so another session's lock wait can't pass for the second's.
-async fn blocked_by(pool: &Pool, holder_pid: i32) -> i64 {
-    count(
-        pool,
-        "SELECT COUNT(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
-        &[&holder_pid],
-    )
-    .await
-}
-
-/// Run `$first` on a transaction left open, then `$second` in one of its own;
-/// once `$second` waits on a lock the first holds — or, failing the case, has
-/// finished without waiting — commit the first (or roll it back when it
-/// failed). Returns both results and whether `$second` waited.
-macro_rules! race {
-    ($pool:expr, first: |$ftx:ident| $first:expr, second: $second:expr) => {{
-        let pool: &Pool = $pool;
-        let mut holder_client = pool.get().await.unwrap();
-        let $ftx = holder_client.transaction().await.unwrap();
-        let holder_pid: i32 = $ftx
-            .query_one("SELECT pg_backend_pid()", &[])
-            .await
-            .unwrap()
-            .get(0);
-        let first = $first.await;
-        let first_ok = first.is_ok();
-        let done = AtomicBool::new(false);
-        let waited = AtomicBool::new(false);
-        let run = async {
-            let result = $second;
-            done.store(true, Ordering::SeqCst);
-            result
-        };
-        let finish = async {
-            let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
-            while !done.load(Ordering::SeqCst) {
-                if blocked_by(pool, holder_pid).await >= 1 {
-                    waited.store(true, Ordering::SeqCst);
-                    break;
-                }
-                assert!(
-                    Instant::now() < deadline,
-                    "the second neither waits nor finishes"
-                );
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-            if first_ok {
-                $ftx.commit().await.unwrap();
-            } else {
-                $ftx.rollback().await.unwrap();
-            }
-        };
-        let (second, ()) = tokio::join!(run, finish);
-        (first, second, waited.load(Ordering::SeqCst))
-    }};
 }
 
 /// The fixture: the keeper removes; `caller` (a global admin) assigns and

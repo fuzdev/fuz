@@ -73,7 +73,8 @@ use serde_json::{Value, json};
 
 mod common;
 use common::{
-    fresh_db_pool, seed_account_actor, seed_actor_context, seed_admin, seed_role_grant_direct,
+    LOCK_WAIT_DEADLINE, fresh_db_pool, in_tx, seed_account_actor, seed_actor_context, seed_admin,
+    seed_role_grant_direct,
 };
 
 /// How long a blocked call is given to show it is blocked.
@@ -149,20 +150,6 @@ async fn admin_action(
     let closer = common::closer();
     let ctx = common::ctx(auth, &audit, &closer);
     common::admin_dispatch(method, params, &ctx, tx).await
-}
-
-/// Run `call` in a transaction of its own, committed when it succeeds, as the
-/// dispatcher does.
-macro_rules! in_tx {
-    ($pool:expr, |$tx:ident| $call:expr) => {{
-        let mut client = $pool.get().await.unwrap();
-        let $tx = client.transaction().await.unwrap();
-        let result = $call.await;
-        if result.is_ok() {
-            $tx.commit().await.unwrap();
-        }
-        result
-    }};
 }
 
 async fn delete(f: &Fixture, account_id: uuid::Uuid) {
@@ -887,9 +874,6 @@ async fn until_lock_waiters(pool: &Pool, n: i64, what: &str) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
-
-/// How long a lock wait a test arranged may take to show, a bound on a hang only.
-const LOCK_WAIT_DEADLINE: Duration = Duration::from_secs(20);
 
 // -- the accept's account locks and the multi-row offer writes ------------------
 

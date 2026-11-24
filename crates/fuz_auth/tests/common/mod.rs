@@ -18,6 +18,10 @@
 //!   through `AdminActionSpecs`.
 //! - [`budgeted_pool`], the fault for a checkout made after the credential
 //!   walk's own.
+//! - The lock-race kit the race suites share: `in_tx!` (a call in its own
+//!   committed transaction), `race!` (a held transaction against a second
+//!   call, reporting whether the second waited), [`blocked_by`], and
+//!   [`LOCK_WAIT_DEADLINE`].
 //!
 //! Test files using this module require `--test-threads=1` because the
 //! pool points at a single shared `fuz_auth_test` database (override
@@ -31,6 +35,7 @@
 )]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::{
@@ -322,3 +327,105 @@ pub fn ctx_observed<'a>(
 pub fn budgeted_pool(checkouts: usize) -> Pool {
     fuz_testing::budgeted_pool(&test_url(), checkouts)
 }
+
+/// How long a lock wait a test arranged may take to show, a bound on a hang only.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+pub const LOCK_WAIT_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Backends waiting on a lock `holder_pid` holds — scoped to the held
+/// transaction, so another session's lock wait can't pass for the second's.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+pub async fn blocked_by(pool: &Pool, holder_pid: i32) -> i64 {
+    let client = pool.get().await.expect("blocked_by: pool get");
+    client
+        .query_one(
+            "SELECT COUNT(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+            &[&holder_pid],
+        )
+        .await
+        .expect("blocked_by: pg_stat_activity")
+        .get(0)
+}
+
+/// Run `call` in a transaction of its own, committed when it succeeds, as the
+/// dispatcher does.
+#[allow(
+    unused_macros,
+    reason = "each test binary uses only part of this module"
+)]
+macro_rules! in_tx {
+    ($pool:expr, |$tx:ident| $call:expr) => {{
+        let mut client = $pool.get().await.unwrap();
+        let $tx = client.transaction().await.unwrap();
+        let result = $call.await;
+        if result.is_ok() {
+            $tx.commit().await.unwrap();
+        }
+        result
+    }};
+}
+#[allow(
+    unused_imports,
+    reason = "each test binary uses only part of this module"
+)]
+pub(crate) use in_tx;
+
+/// Run `$first` on a transaction left open, then `$second` in one of its own;
+/// once `$second` waits on a lock the first holds — or, failing the case, has
+/// finished without waiting — commit the first (or roll it back when it
+/// failed). Returns both results and whether `$second` waited.
+#[allow(
+    unused_macros,
+    reason = "each test binary uses only part of this module"
+)]
+macro_rules! race {
+    ($pool:expr, first: |$ftx:ident| $first:expr, second: $second:expr) => {{
+        let pool: &::fuz_db::Pool = $pool;
+        let mut holder_client = pool.get().await.unwrap();
+        let $ftx = holder_client.transaction().await.unwrap();
+        let holder_pid: i32 = $ftx
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        let first = $first.await;
+        let first_ok = first.is_ok();
+        let done = ::std::sync::atomic::AtomicBool::new(false);
+        let waited = ::std::sync::atomic::AtomicBool::new(false);
+        let run = async {
+            let result = $second;
+            done.store(true, ::std::sync::atomic::Ordering::SeqCst);
+            result
+        };
+        let finish = async {
+            let deadline = ::std::time::Instant::now() + $crate::common::LOCK_WAIT_DEADLINE;
+            while !done.load(::std::sync::atomic::Ordering::SeqCst) {
+                if $crate::common::blocked_by(pool, holder_pid).await >= 1 {
+                    waited.store(true, ::std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                assert!(
+                    ::std::time::Instant::now() < deadline,
+                    "the second neither waits nor finishes"
+                );
+                ::tokio::time::sleep(::std::time::Duration::from_millis(5)).await;
+            }
+            if first_ok {
+                $ftx.commit().await.unwrap();
+            } else {
+                $ftx.rollback().await.unwrap();
+            }
+        };
+        let (second, ()) = ::tokio::join!(run, finish);
+        (
+            first,
+            second,
+            waited.load(::std::sync::atomic::Ordering::SeqCst),
+        )
+    }};
+}
+#[allow(
+    unused_imports,
+    reason = "each test binary uses only part of this module"
+)]
+pub(crate) use race;

@@ -32,8 +32,6 @@
 )]
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use fuz_auth::request_context::RequestActorContext;
 use fuz_auth::role::ROLE_ADMIN;
@@ -46,13 +44,10 @@ use fuz_http::{JsonrpcError, JsonrpcErrorCode};
 use serde_json::{Value, json};
 
 mod common;
-use common::{fresh_db_pool, seed_actor_context, seed_admin, seed_role_grant_direct};
+use common::{fresh_db_pool, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct};
 
 /// The self-service-eligible role the caller toggles.
 const ROLE: &str = "race_self_role";
-
-/// How long a lock wait a test arranged may take to show, a bound on a hang only.
-const LOCK_WAIT_DEADLINE: Duration = Duration::from_secs(20);
 
 fn eligible() -> HashSet<String> {
     HashSet::from([ROLE.to_owned()])
@@ -84,20 +79,6 @@ async fn seed_keeper(pool: &Pool) -> RequestActorContext {
     let keeper = seed_admin(pool).await;
     let id = seed_role_grant_direct(pool, keeper.actor.id, ROLE_ADMIN, None).await;
     with_grant(keeper, ROLE_ADMIN, id)
-}
-
-/// Run `call` in a transaction of its own, committed when it succeeds, as the
-/// dispatcher does.
-macro_rules! in_tx {
-    ($pool:expr, |$tx:ident| $call:expr) => {{
-        let mut client = $pool.get().await.unwrap();
-        let $tx = client.transaction().await.unwrap();
-        let result = $call.await;
-        if result.is_ok() {
-            $tx.commit().await.unwrap();
-        }
-        result
-    }};
 }
 
 /// `self_service_role_set` by `auth`, on `tx`.
@@ -182,64 +163,6 @@ fn assert_unauthenticated(result: Result<Value, JsonrpcError>, label: &str) {
         Some(json!({"reason": "authentication_required"})),
         "{label}: the 401 a dead credential gets"
     );
-}
-
-/// Backends waiting on a lock `holder_pid` holds — scoped to the held
-/// transaction, so another session's lock wait can't pass for the second's.
-async fn blocked_by(pool: &Pool, holder_pid: i32) -> i64 {
-    count(
-        pool,
-        "SELECT COUNT(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
-        &[&holder_pid],
-    )
-    .await
-}
-
-/// Run `$first` on a transaction left open, then `$second` in one of its own;
-/// once `$second` waits on a lock the first holds — or, failing the case, has
-/// finished without waiting — commit the first (or roll it back when it
-/// failed). Returns both results and whether `$second` waited.
-macro_rules! race {
-    ($pool:expr, first: |$ftx:ident| $first:expr, second: $second:expr) => {{
-        let pool: &Pool = $pool;
-        let mut holder_client = pool.get().await.unwrap();
-        let $ftx = holder_client.transaction().await.unwrap();
-        let holder_pid: i32 = $ftx
-            .query_one("SELECT pg_backend_pid()", &[])
-            .await
-            .unwrap()
-            .get(0);
-        let first = $first.await;
-        let first_ok = first.is_ok();
-        let done = AtomicBool::new(false);
-        let waited = AtomicBool::new(false);
-        let run = async {
-            let result = $second;
-            done.store(true, Ordering::SeqCst);
-            result
-        };
-        let finish = async {
-            let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
-            while !done.load(Ordering::SeqCst) {
-                if blocked_by(pool, holder_pid).await >= 1 {
-                    waited.store(true, Ordering::SeqCst);
-                    break;
-                }
-                assert!(
-                    Instant::now() < deadline,
-                    "the second neither waits nor finishes"
-                );
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-            if first_ok {
-                $ftx.commit().await.unwrap();
-            } else {
-                $ftx.rollback().await.unwrap();
-            }
-        };
-        let (second, ()) = tokio::join!(run, finish);
-        (first, second, waited.load(Ordering::SeqCst))
-    }};
 }
 
 // -- authorized before the removal ---------------------------------------------

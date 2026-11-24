@@ -67,7 +67,7 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 mod common;
-use common::{fresh_db_pool, seed_account_actor, seed_admin};
+use common::{blocked_by, fresh_db_pool, seed_account_actor, seed_admin};
 
 const OLD_PASSWORD: &str = "old-password-race-1";
 const NEW_PASSWORD: &str = "new-password-race-2";
@@ -948,19 +948,6 @@ async fn a_password_change_waiting_on_the_account_row_across_a_logout_of_its_ses
         "the change that waited",
     )
     .await;
-}
-
-/// Backends waiting on a lock `holder_pid` holds.
-async fn blocked_by(pool: &Pool, holder_pid: i32) -> i64 {
-    let client = pool.get().await.unwrap();
-    client
-        .query_one(
-            "SELECT COUNT(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
-            &[&holder_pid],
-        )
-        .await
-        .unwrap()
-        .get(0)
 }
 
 // -- The mirror order: the mint commits first -----------------------------------
