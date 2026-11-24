@@ -494,10 +494,15 @@ pub fn scope_advisory_lock_key(scope_id: Uuid) -> (i32, i32) {
 /// Take it first, holding no row: the teardown holds it while it waits on offer
 /// and grant rows and on whatever its consumer's scope delete cascades into (an
 /// invite or a request at the scope), so a transaction that waits on it holding
-/// one of those deadlocks. The scope id may come from an unlocked read of a
-/// column that never changes, as the accept's head read does. Use it on a
-/// consumer path that reads its own scope row and then brings something into
-/// the scope (an invite accept, a join decision): the lock, then the read. A
+/// one of those deadlocks. The one exception is a scope the transaction created
+/// itself and has not committed: no teardown can reach a scope before it
+/// commits, so a create that inserts its scope row and then grants its creator
+/// there is fine. A row inserted at an existing scope is no exception: its
+/// foreign key holds the scope row a teardown deletes. The scope id may come
+/// from an unlocked read of a column that never changes, as the accept's head
+/// read does. Use it on a consumer path that reads its own scope row and then
+/// brings something into the scope (an invite accept, a join decision): the
+/// lock, then the read. A
 /// transaction never takes two scope locks here; one that must should take them
 /// in key order. Twin of `fuz_app`'s `query_scope_lock_shared`.
 ///
@@ -570,7 +575,8 @@ pub async fn query_scope_lock_exclusive(
 /// ([`query_role_grant_revoke_for_scope`]) in flight is waited for, and one
 /// that starts after it waits for this transaction and then supersedes the
 /// offer. A caller that judged the scope live takes the lock before that read,
-/// holding no row; the spine's handler does.
+/// holding no row (a scope it created itself and has not committed aside); the spine's
+/// handler does.
 ///
 /// On the pending unique-index conflict, refreshes `to_actor_id`,
 /// `message`, and `expires_at` (matches TS upsert semantics — a second

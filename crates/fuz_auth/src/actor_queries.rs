@@ -776,9 +776,10 @@ pub(crate) async fn revoke_expired_role_grant_slot(
 /// ([`crate::role_grant_offer_queries::query_role_grant_revoke_for_scope`]) in
 /// flight is waited for, and one that starts after it waits for this
 /// transaction and then revokes the grant. Run it inside the caller's
-/// transaction, holding no row unless the transaction already holds this
-/// scope's lock (the lock's rule; a re-take is free); a caller that judged
-/// the scope live takes the lock before that read.
+/// transaction, holding no row (a scope it created itself and has not committed aside)
+/// unless the transaction already holds this scope's lock (the lock's rule; a
+/// re-take is free); a caller that judged the scope live takes the lock before
+/// that read.
 ///
 /// # Errors
 ///

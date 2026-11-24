@@ -648,9 +648,9 @@ pub fn parse_expected_schema(json: &str) -> Result<fuz_db::ExpectedSchema, Start
 /// Refuse a database whose `default_transaction_isolation` is anything but
 /// `read committed` ([`super::startup_error::REQUIRED_TRANSACTION_ISOLATION`]).
 ///
-/// One pooled connection answers for all: the setting comes from the server,
-/// database, and role, the same for every connection, since
-/// `fuz_db::create_pool` forwards no per-connection options. It is read once,
+/// One pooled connection answers for all: every connection the pool opens has
+/// the same server, database, role and startup options (a URL's `options`),
+/// and `fuz_db::create_pool` adds no per-connection setting. It is read once,
 /// at boot; a setting changed while the server runs reaches new connections
 /// unchecked until the next restart.
 ///

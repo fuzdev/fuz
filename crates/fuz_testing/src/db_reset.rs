@@ -31,9 +31,11 @@
 //! Different semantics, same crate:
 //!
 //! - [`crate::testing_reset`] is the **per-test** reset (`_testing_reset`
-//!   RPC action). It DELETEs rows from a smaller set of 8 data tables,
-//!   preserves the keeper account+actor, and leaves the schema intact.
-//!   Fires between test cases.
+//!   RPC action). In one transaction it DELETEs the auth tables' rows
+//!   ([`fuz_auth::AUTH_INTEGRATION_TRUNCATE_TABLES`], the keeper's
+//!   included) after the consumer's domain reset, rewrites the
+//!   `app_settings` and `bootstrap_lock` singletons, re-seeds a fresh
+//!   keeper, and leaves the schema intact. Fires between test cases.
 //! - This module is the **per-process-startup** reset. It drops and
 //!   recreates the `public` schema (taking `schema_version` with it so
 //!   migrations replay), erasing every table + the keeper, and lets the
@@ -41,7 +43,7 @@
 //!   starts.
 //!
 //! Keep them independent — the per-test path is a hot loop with
-//! correctness invariants (keeper preservation, `audit_log` scoping);
+//! correctness invariants (one transaction, the keeper re-seeded fresh);
 //! the startup path is a coarse wipe with no in-flight state to
 //! protect.
 

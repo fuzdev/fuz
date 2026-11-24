@@ -700,8 +700,12 @@ The rules a change must keep:
   (`role_grant_offer_not_authorized`), and a teardown after a write waits
   for it and then ends what it wrote. A re-take in the same transaction is
   free; a direct caller of these queries takes the lock before any row too,
-  unless its transaction already holds it. A consumer path that reads its
-  scope row and then brings something into the scope takes
+  unless its transaction already holds it; a transaction that created the
+  scope itself and has not committed is exempt, since no teardown can reach
+  the scope yet (a create verb that inserts its scope row and grants its
+  creator), but an insert at an existing scope is not: its foreign key holds
+  the scope row a teardown deletes. A consumer path that reads its scope row
+  and then brings something into the scope takes
   `query_scope_lock_shared` first; a consumer teardown calls the cascade
   before it touches its scope row, or takes `query_scope_lock_exclusive`
   first.
