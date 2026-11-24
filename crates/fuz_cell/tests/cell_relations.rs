@@ -6,13 +6,6 @@
 //! soft-delete JOIN filtering, the `(parent_id, position)` item collision
 //! (`23505`), fractional-index lex ordering + cursor pagination, the bulk
 //! id load, and the metadata-GIN `cell_audit` containment OR.
-//!
-//! `--ignored`-gated (needs Postgres). Run single-threaded against the
-//! shared `fuz_cell_test` DB:
-//!
-//! ```sh
-//! cargo test -p fuz_cell -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::expect_used,
@@ -21,7 +14,7 @@
 
 mod common;
 
-use common::{fresh_db_pool, seed_actor};
+use common::{fresh_db, seed_actor};
 use fuz_cell::cell_audit_queries::query_audit_log_list_by_cell;
 use fuz_cell::cell_field_queries::{
     query_cell_field_delete, query_cell_field_list_for_source, query_cell_field_list_for_target,
@@ -66,9 +59,8 @@ async fn seed_cell(pool: &Pool, owner: Uuid) -> Uuid {
 // -- cell_grant -------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn grant_actor_upserts_and_round_trips() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let viewer = seed_actor(&pool, "viewer").await;
@@ -135,9 +127,8 @@ async fn grant_actor_upserts_and_round_trips() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn grant_role_and_bulk_list_for_cells() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let cell_a = seed_cell(&pool, owner).await;
@@ -184,9 +175,8 @@ async fn grant_role_and_bulk_list_for_cells() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn grants_for_caller_in_cells_matches_actor_and_role() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let viewer = seed_actor(&pool, "viewer").await;
@@ -248,9 +238,8 @@ async fn grants_for_caller_in_cells_matches_actor_and_role() {
 // -- cell_field -------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn field_set_upserts_and_soft_delete_filters() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let source = seed_cell(&pool, owner).await;
@@ -334,9 +323,8 @@ async fn field_set_upserts_and_soft_delete_filters() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn field_forward_list_cursor_and_limit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let source = seed_cell(&pool, owner).await;
@@ -375,9 +363,8 @@ async fn field_forward_list_cursor_and_limit() {
 // -- cell_item --------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn item_insert_collision_move_delete() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let parent = seed_cell(&pool, owner).await;
@@ -422,9 +409,8 @@ async fn item_insert_collision_move_delete() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn item_lists_lex_order_cursor_and_soft_delete() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let parent = seed_cell(&pool, owner).await;
@@ -490,9 +476,8 @@ async fn item_lists_lex_order_cursor_and_soft_delete() {
 // -- load_many --------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn load_many_returns_active_only() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let a = seed_cell(&pool, owner).await;
@@ -518,9 +503,8 @@ async fn load_many_returns_active_only() {
 // -- cell_audit -------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn audit_list_by_cell_matches_each_metadata_key() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "actor").await;
     let cell = Uuid::new_v4();
@@ -576,9 +560,8 @@ async fn audit_list_by_cell_matches_each_metadata_key() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn reverse_lists_break_a_created_at_tie_by_the_edge_key() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_actor(&pool, "owner").await;
     let hub = seed_cell(&pool, owner).await;
     let mut ends = [seed_cell(&pool, owner).await, seed_cell(&pool, owner).await];

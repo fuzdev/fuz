@@ -1,5 +1,5 @@
 //! `self_service_role_set` in flight across a removal of the caller's account,
-//! against a real `PostgreSQL`.
+//! against a live database.
 //!
 //! The rule is the dead credential's: a toggle authorized before its account is
 //! deleted or purged writes nothing after it — no grant enabled or revoked on
@@ -18,12 +18,6 @@
 //! orders.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/self_service_role_actions.races.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test self_service_role_races -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -44,7 +38,10 @@ use fuz_http::{JsonrpcError, JsonrpcErrorCode};
 use serde_json::{Value, json};
 
 mod common;
-use common::{fresh_db_pool, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct};
+use common::{
+    fresh_db, fresh_postgres_db, in_tx, race, seed_actor_context, seed_admin,
+    seed_role_grant_direct,
+};
 
 /// The self-service-eligible role the caller toggles.
 const ROLE: &str = "race_self_role";
@@ -168,9 +165,8 @@ fn assert_unauthenticated(result: Result<Value, JsonrpcError>, label: &str) {
 // -- authorized before the removal ---------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_enable_authorized_before_a_delete_is_refused_writing_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let deleted = in_tx!(pool, |tx| remove(
@@ -198,9 +194,8 @@ async fn an_enable_authorized_before_a_delete_is_refused_writing_nothing() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_disable_authorized_before_a_delete_is_refused_revoking_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let grant = seed_role_grant_direct(&pool, caller.actor.id, ROLE, None).await;
@@ -230,9 +225,8 @@ async fn a_disable_authorized_before_a_delete_is_refused_revoking_nothing() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_enable_authorized_before_a_purge_is_refused_writing_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let purged = in_tx!(pool, |tx| remove(
@@ -257,9 +251,9 @@ async fn an_enable_authorized_before_a_purge_is_refused_writing_nothing() {
 // -- the account lock serializes ------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_enable_waits_on_an_uncommitted_delete_of_its_account_and_is_then_refused() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let (deleted, toggled, waited) = race!(
@@ -283,9 +277,9 @@ async fn an_enable_waits_on_an_uncommitted_delete_of_its_account_and_is_then_ref
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_disable_waits_on_an_uncommitted_delete_of_its_account_and_is_then_refused() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let grant = seed_role_grant_direct(&pool, caller.actor.id, ROLE, None).await;
@@ -311,9 +305,9 @@ async fn a_disable_waits_on_an_uncommitted_delete_of_its_account_and_is_then_ref
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_waits_on_an_uncommitted_enable_which_commits_on_the_live_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let (toggled, deleted, waited) = race!(
@@ -332,9 +326,9 @@ async fn a_delete_waits_on_an_uncommitted_enable_which_commits_on_the_live_accou
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_purge_waits_on_an_uncommitted_enable_then_removes_its_grant_with_the_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_actor_context(&pool, "race_caller").await;
     let (toggled, purged, waited) = race!(
@@ -358,7 +352,7 @@ async fn a_purge_waits_on_an_uncommitted_enable_then_removes_its_grant_with_the_
 /// locks every admin's account row — the caller's among them — in id order:
 /// both commit, the enable first and then the removal first.
 async fn an_admins_enable_and_another_admins_removal_commit_in_either_order(method: &str) {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let other = seed_admin_actor(&pool, "race_other_admin").await;
@@ -398,13 +392,13 @@ async fn an_admins_enable_and_another_admins_removal_commit_in_either_order(meth
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admins_enable_and_another_admins_delete_commit_in_either_order() {
     an_admins_enable_and_another_admins_removal_commit_in_either_order("account_delete").await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admins_enable_and_another_admins_purge_commit_in_either_order() {
     an_admins_enable_and_another_admins_removal_commit_in_either_order("account_purge").await;
 }
@@ -434,9 +428,9 @@ async fn accept(
 /// which share-locks the caller's row as its grantor's: both commit, the
 /// enable first and then the accept first.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admins_enable_and_an_accept_of_the_admin_offer_it_made_commit_in_either_order() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
     let offer = || async {

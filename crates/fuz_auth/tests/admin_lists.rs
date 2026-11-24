@@ -1,17 +1,6 @@
 //! Integration tests for the four admin-read RPC methods —
 //! `admin_account_list`, `admin_session_list`, `audit_log_list`,
-//! `audit_log_role_grant_history` — against a real `PostgreSQL`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test admin_lists -- --ignored --test-threads=1
-//! ```
-//!
-//! `--test-threads=1` is required because every test drops + recreates
-//! the shared schema (same shape as `tests/signup.rs` and
-//! `tests/invite_admin.rs`); parallel runs race on the `schema_version`
-//! table. Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
+//! `audit_log_role_grant_history` — against a live database.
 
 use fuz_auth::ROLE_ADMIN;
 use fuz_auth::admin_action_specs::{ADMIN_ACCOUNT_LIST_LIMIT_MAX, ERROR_ACCOUNT_NOT_FOUND};
@@ -22,7 +11,7 @@ use serde_json::{Value, json};
 
 mod common;
 use common::{
-    build_audit, closer, ctx, fresh_db_pool, seed_account_actor, seed_admin, seed_audit_log_row,
+    build_audit, closer, ctx, fresh_db, seed_account_actor, seed_admin, seed_audit_log_row,
     seed_role_grant_direct,
 };
 
@@ -31,9 +20,8 @@ use common::{
 // ============================================================
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_account_list_returns_seeded_accounts_and_grantable_roles() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -62,9 +50,8 @@ async fn admin_account_list_returns_seeded_accounts_and_grantable_roles() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_account_list_each_entry_has_account_actor_and_lists() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -111,7 +98,6 @@ async fn admin_account_list_each_entry_has_account_actor_and_lists() {
 /// order them alike. The TS twin's
 /// `account_queries.db.test.ts` seeds the same rows and asserts the same order.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_account_list_orders_rows_sharing_created_at_by_shared_keys() {
     let id = |n: u128| uuid::Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0000 | n);
     let (account_1, account_2) = (id(0x01), id(0x02));
@@ -120,7 +106,7 @@ async fn admin_account_list_orders_rows_sharing_created_at_by_shared_keys() {
     let (offer_1, offer_2, offer_3) = (id(0x31), id(0x32), id(0x33));
     let (scope_1, scope_2) = (id(0x41), id(0x42));
 
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let mut client = pool.get().await.expect("pool.get");
     let tx = client.transaction().await.expect("begin");
     tx.execute(
@@ -182,9 +168,8 @@ async fn admin_account_list_orders_rows_sharing_created_at_by_shared_keys() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_account_list_pagination_default_and_max_ok() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -218,9 +203,8 @@ async fn admin_account_list_pagination_default_and_max_ok() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_account_list_rejects_limit_over_max() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -246,9 +230,8 @@ async fn admin_account_list_rejects_limit_over_max() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_account_list_rejects_negative_offset() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -273,9 +256,8 @@ async fn admin_account_list_rejects_negative_offset() {
 // ============================================================
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_session_list_returns_active_sessions_with_usernames() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -313,9 +295,8 @@ async fn admin_session_list_returns_active_sessions_with_usernames() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn admin_session_list_excludes_expired() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -348,9 +329,8 @@ async fn admin_session_list_excludes_expired() {
 // ============================================================
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_returns_seeded_rows_newest_first() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -392,9 +372,8 @@ async fn audit_log_list_returns_seeded_rows_newest_first() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_filters_by_event_type() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -450,9 +429,8 @@ async fn audit_log_list_filters_by_event_type() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_filters_by_outcome() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -497,9 +475,8 @@ async fn audit_log_list_filters_by_outcome() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_filters_by_account_id_matches_either_direction() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -560,9 +537,8 @@ async fn audit_log_list_filters_by_account_id_matches_either_direction() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_since_seq_cursor_advances() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -639,9 +615,8 @@ async fn audit_log_list_since_seq_cursor_advances() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_resolves_usernames_via_actor_chain() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -692,9 +667,8 @@ async fn audit_log_list_resolves_usernames_via_actor_chain() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_rejects_limit_over_max() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -720,9 +694,8 @@ async fn audit_log_list_rejects_limit_over_max() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_list_empty_result_on_no_rows() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -740,9 +713,8 @@ async fn audit_log_list_empty_result_on_no_rows() {
 // ============================================================
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_role_grant_history_returns_grant_and_revoke_only() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -820,9 +792,8 @@ async fn audit_log_role_grant_history_returns_grant_and_revoke_only() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_role_grant_history_empty_when_no_role_grant_events() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -860,9 +831,8 @@ async fn audit_log_role_grant_history_empty_when_no_role_grant_events() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn audit_log_role_grant_history_pagination_respects_offset() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();

@@ -53,9 +53,8 @@ async fn list_sessions(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn session_list_marks_the_callers_session_current() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let account_id = common::seed_account(&pool, "session_list_user", None).await;
     let client = pool.get().await.expect("pool.get");
     let first = create_capped_session(&client, &account_id)

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Test-only spine fixtures — the test hasher, the daemon-token producer, the _testing_* action specs, the Postgres test harness, and the shared request-reads census. NEVER link from a production binary."
+description = "Test-only spine fixtures — the test hasher, the daemon-token producer, the _testing_* action specs, the test-database harness (pglet in-process, PostgreSQL opt-in), and the shared request-reads census. NEVER link from a production binary."
 
 [dependencies]
 fuz_actions.workspace = true
@@ -25,6 +25,7 @@ tokio = { workspace = true, features = ["rt", "fs", "time"] }
 tokio-postgres.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+pglet_server.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

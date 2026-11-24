@@ -1,4 +1,4 @@
-//! Integration tests for the login handler against a real `PostgreSQL`.
+//! Integration tests for the login handler against a live database.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/login_timing.db.test.ts` plus the
 //! rate-limit + audit legs of `account_routes.ts`'s `POST /login`. The TS
@@ -28,14 +28,6 @@
 //!   "account exists, wrong password" isn't an enumeration oracle (the
 //!   `timing.rs` unit tests pin the `max(work, floor)` mechanism under a
 //!   paused clock; these pin that the handler applies it end-to-end).
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test login -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
 #![expect(
     clippy::unwrap_used,
@@ -63,7 +55,7 @@ use fuz_db::{Pool, create_pool};
 use fuz_http::ClientIp;
 
 mod common;
-use common::fresh_db_pool;
+use common::{fresh_db, fresh_postgres_db};
 
 /// Sentinel returned by [`RecordingHasher::dummy_hash`] — the login handler
 /// feeds this to `verify` on the account-not-found path, so a recorded value
@@ -210,7 +202,11 @@ async fn seed_account_with_email_and_hash(
 /// access, so those tests run in the fast (no-Postgres) lane. `create_pool`
 /// only parses the URL; `deadpool` connects lazily on first `get()`.
 fn pool_no_db() -> Pool {
-    create_pool(&common::test_url(), &fuz_db::PoolOptions::default()).expect("create_pool")
+    create_pool(
+        "postgres://never-connected.invalid/none",
+        &fuz_db::PoolOptions::default(),
+    )
+    .expect("create_pool")
 }
 
 // -- Pre-DB guards (no Postgres) --------------------------------------------
@@ -382,15 +378,14 @@ async fn login_refuses_bodies_a_browser_sends_without_a_preflight() {
 // -- Enumeration prevention / dummy-hash equalization -----------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_missing_account_verifies_against_dummy_hash() {
     // The account-not-found path must still run `verify` against the dummy
     // hash so its timing matches a real wrong-password attempt. Deterministic
     // shadow of the wall-clock property: the recorded hash is the dummy.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let state = build_state(pool, hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let response = call_login(&state, Some("1.2.3.4"), "ghost", "any-password-123").await;
 
@@ -404,16 +399,15 @@ async fn login_missing_account_verifies_against_dummy_hash() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_username_ceiling_counts_utf16_code_units() {
     // `UsernameProvided` caps at 255 on `String.length` — UTF-16 code
     // units. 200 `\u{00FC}` is 400 bytes but only 200 units, so a byte count
     // refused a username the twin admits. Admitted here means the guard falls
     // through to the lookup: a miss 401 against the dummy hash, not a 400.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let state = build_state(pool, hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let username = "\u{00FC}".repeat(200);
     assert_eq!(username.len(), 400, "bytes");
@@ -432,16 +426,15 @@ async fn login_username_ceiling_counts_utf16_code_units() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_wrong_password_verifies_against_real_hash() {
     // The non-diverging sibling of the dummy-hash test: an existing account
     // with a wrong password verifies against the *real* stored hash. Both this
     // and the missing-account path run one verify — that's the equalization.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let state = build_state(pool, hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let response = call_login(&state, Some("1.2.3.4"), "alice", "wrong-password").await;
 
@@ -457,7 +450,6 @@ async fn login_wrong_password_verifies_against_real_hash() {
 // -- Username-or-email lookup -----------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_by_email_case_insensitively_resolves_account() {
     // Convergence to fuz_app's `query_account_by_username_or_email`: the login
     // identifier matches against email as well as username, case-insensitively.
@@ -466,7 +458,7 @@ async fn login_by_email_case_insensitively_resolves_account() {
     // stored hash (proving the email lookup resolved the account, not the
     // dummy-hash miss path). Cross-impl parity is pinned end-to-end by
     // `fuz_app`'s `username_parity` cross suite; this is the Rust-native pin.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id =
         seed_account_with_email_and_hash(&pool, "alice", "Alice@Example.com", "stored-hash-alice")
             .await;
@@ -511,17 +503,16 @@ async fn login_by_email_case_insensitively_resolves_account() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_by_username_still_resolves_when_account_has_email() {
     // Regression guard for the `OR`-query: adding the email branch must not
     // break the username branch. An account that also carries an email still
     // logs in by its username.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_email_and_hash(&pool, "alice", "alice@example.com", "stored-hash-alice")
         .await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let state = build_state(pool, hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let response = call_login(&state, Some("1.2.3.4"), "alice", "correct-password").await;
 
@@ -536,11 +527,10 @@ async fn login_by_username_still_resolves_when_account_has_email() {
 // -- Record-on-failure / account-grain reset-on-success ---------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_failure_records_rate_limit() {
     // A failed attempt records against both the IP and per-account buckets.
     // `max_attempts: 1` makes the post-failure `check` observably `Limited`.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -554,7 +544,7 @@ async fn login_failure_records_rate_limit() {
     let ip_limiter = one();
     let account_limiter = one();
     let state = build_state(
-        pool,
+        pool.clone(),
         hasher,
         audit,
         Some(Arc::clone(&ip_limiter)),
@@ -584,7 +574,6 @@ async fn login_failure_records_rate_limit() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_success_resets_rate_limit() {
     // A successful login resets the per-account bucket. Counterfactual that
     // makes the reset observable: with `max_attempts: 3`, pre-seed 2 records
@@ -594,7 +583,7 @@ async fn login_success_resets_rate_limit() {
     //
     // The IP bucket is deliberately *not* symmetric — success must never clear
     // it. `login_ip_budget_survives_interleaved_successes` below is that half.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -607,7 +596,7 @@ async fn login_success_resets_rate_limit() {
     account_limiter.record(&account_key);
     account_limiter.record(&account_key);
     let state = build_state(
-        pool,
+        pool.clone(),
         hasher,
         audit,
         None,
@@ -626,17 +615,22 @@ async fn login_success_resets_rate_limit() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_success_records_nothing_on_the_ip_bucket() {
     // A success neither clears the IP bucket nor charges it: both reservations
     // are released. With `max_attempts: 1`, one success that charged the
     // bucket would leave it `Limited`.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = limiter_of(1);
-    let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
+    let state = build_state(
+        pool.clone(),
+        hasher,
+        audit,
+        Some(Arc::clone(&ip_limiter)),
+        None,
+    );
 
     let response = call_login(&state, Some("10.0.0.12"), "alice", "correct-password").await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -648,18 +642,23 @@ async fn login_success_records_nothing_on_the_ip_bucket() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_burst_of_correct_logins_all_succeed_past_the_ip_cap() {
     // Attempts count while in flight whatever their outcome, so a burst of
     // correct logins from one address meets the cap too. The ones past it wait
     // for a slot (up to `RESERVATION_WAIT_MAX`, at most the cap of them) rather
     // than being refused: a burst of twice the cap all succeeds, later.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = limiter_of(3);
-    let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
+    let state = build_state(
+        pool.clone(),
+        hasher,
+        audit,
+        Some(Arc::clone(&ip_limiter)),
+        None,
+    );
 
     let responses = futures::future::join_all(
         (0..6).map(|_| call_login(&state, Some("10.0.0.13"), "alice", "correct-password")),
@@ -675,7 +674,6 @@ async fn login_burst_of_correct_logins_all_succeed_past_the_ip_cap() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_ip_budget_survives_interleaved_successes() {
     // The distributed-spray backstop, stated adversarially: N failed guesses
     // against *distinct* usernames from one IP, interleaved with the attacker's
@@ -689,7 +687,7 @@ async fn login_ip_budget_survives_interleaved_successes() {
     // a behavior snapshot: a "decrement instead of zero" implementation still
     // loops forever at the cap and fails here, which is the point — that
     // alternative reads as a moderate compromise and is not one.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "attacker", "stored-hash-attacker").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -699,7 +697,13 @@ async fn login_ip_budget_survives_interleaved_successes() {
         window_ms: 60_000,
         max_keys: None,
     }));
-    let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
+    let state = build_state(
+        pool.clone(),
+        hasher,
+        audit,
+        Some(Arc::clone(&ip_limiter)),
+        None,
+    );
 
     // Either leg may be the one that trips: the aggregate governs the *address*,
     // so once it fills, the attacker's own login is refused alongside the
@@ -745,12 +749,11 @@ async fn login_ip_budget_survives_interleaved_successes() {
 // -- Audit rows -------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_failure_missing_account_audits_without_account_id() {
     // Failure on the account-not-found path: a `login` failure row carrying the
     // submitted (canonical) username and the client IP, but **no** `account_id`
     // (there is no account to attribute it to).
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (hasher, _) = RecordingHasher::new("unused");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = build_state(pool.clone(), hasher, Arc::clone(&audit), None, None);
@@ -789,12 +792,11 @@ async fn login_failure_missing_account_audits_without_account_id() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_failure_wrong_password_audits_with_account_id() {
     // The sibling failure path: an existing account with a wrong password
     // attributes the failure row to `account_id` (the account resolved before
     // the password check failed).
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -829,12 +831,11 @@ async fn login_failure_wrong_password_audits_with_account_id() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_success_audits_and_creates_session() {
     // The success chain: 200 + `Set-Cookie`, a real `auth_session` row keyed by
     // the blake3 hash of the issued token, and a `login` success audit row
     // attributed to the account.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -877,7 +878,6 @@ async fn login_success_audits_and_creates_session() {
 // -- Per-account session cap ------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_beyond_the_cap_evicts_the_oldest_sessions() {
     // The per-account concurrent-session cap. `login_success_audits_and_creates_session`
     // above pins one login ⇒ one row; this pins the bound: `DEFAULT_MAX_SESSIONS + 1`
@@ -899,7 +899,7 @@ async fn login_beyond_the_cap_evicts_the_oldest_sessions() {
     // The evicted session is also *closed*: the handler hands its hash to the
     // `ConnectionCloser` (and no other), so the connections it opened end with the
     // row. The cap's first `DEFAULT_MAX_SESSIONS` logins close nothing.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -1052,9 +1052,8 @@ impl ConnectionCloser for CommitProbingCloser {
 /// transaction, the evicted row would still be there and the recheck would
 /// read "valid".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_closes_an_evicted_session_after_the_eviction_commits() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -1082,9 +1081,9 @@ async fn login_closes_an_evicted_session_after_the_eviction_commits() {
 /// connections of each hash it returns. A second pass over a capped account
 /// evicts and returns nothing; another account's sessions are never counted.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "pglet: named-argument calls"]
 async fn enforce_limit_returns_exactly_the_evicted_session_ids() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let bob_id = seed_account_with_hash(&pool, "bob", "stored-hash-bob").await;
     let client = pool.get().await.expect("pool.get");
@@ -1172,12 +1171,11 @@ impl ConnectionCloser for RecordingCloser {
 // -- Rate-limit fast path ---------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_rate_limited_short_circuits_before_verify() {
     // An exhausted IP bucket returns 429 *before* any DB lookup or `verify`
     // runs — the work-amplification guard. Assert 429 and that the recording
     // hasher saw zero verify calls.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, verify_hashes) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -1187,7 +1185,13 @@ async fn login_rate_limited_short_circuits_before_verify() {
         max_keys: None,
     }));
     ip_limiter.record("10.0.0.5"); // burn the bucket
-    let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
+    let state = build_state(
+        pool.clone(),
+        hasher,
+        audit,
+        Some(Arc::clone(&ip_limiter)),
+        None,
+    );
 
     let response = call_login(&state, Some("10.0.0.5"), "alice", "correct-password").await;
 
@@ -1221,31 +1225,35 @@ fn limiter_of(max_attempts: u32) -> Arc<RateLimiter> {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_burst_gets_at_most_the_ip_cap_past_the_limiter() {
     // Every attempt of a concurrent burst would pass a check made before the
     // lookup; the reservation counts each one in flight, so the burst gets
     // exactly the cap through and the rest are refused.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = limiter_of(3);
-    let state = build_state(pool, hasher, audit, Some(Arc::clone(&ip_limiter)), None);
+    let state = build_state(
+        pool.clone(),
+        hasher,
+        audit,
+        Some(Arc::clone(&ip_limiter)),
+        None,
+    );
 
     assert_eq!(burst_of_wrong_logins(&state, 3).await, (3, 3));
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_burst_gets_at_most_the_account_cap_past_the_limiter() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let account_limiter = limiter_of(3);
     let state = build_state(
-        pool,
+        pool.clone(),
         hasher,
         audit,
         None,
@@ -1283,15 +1291,14 @@ const fn floor_lower_bound() -> std::time::Duration {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_missing_account_401_takes_at_least_the_floor() {
     // The cheap not-found path (`verify` against the dummy hash, no further DB
     // work) must still elapse the floor, so it can't be distinguished from the
     // expensive found-wrong-password sibling below.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (hasher, _) = RecordingHasher::new("unused");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let state = build_state(pool, hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let t0 = std::time::Instant::now();
     let response = call_login(&state, Some("1.2.3.4"), "ghost-floor", "any-password-123").await;
@@ -1307,16 +1314,15 @@ async fn login_missing_account_401_takes_at_least_the_floor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_wrong_password_401_takes_at_least_the_floor() {
     // The expensive sibling: an existing account verified against its real
     // stored hash. Same convergence site, same floor — that's what masks the
     // present-vs-absent delta.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let state = build_state(pool, hasher, audit, None, None);
+    let state = build_state(pool.clone(), hasher, audit, None, None);
 
     let t0 = std::time::Instant::now();
     let response = call_login(&state, Some("1.2.3.4"), "alice", "wrong-password").await;
@@ -1332,19 +1338,18 @@ async fn login_wrong_password_401_takes_at_least_the_floor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_zero_floor_401_does_not_wait() {
     // The floor is read from `AccountRouteState`, not the constants: test
     // binaries (the spine stub) pass `0` so denied logins answer at once. A
     // handler that ignored the field would still sleep the default floor here.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let state = AccountRouteState {
         login_fail_floor_ms: 0,
         login_fail_jitter_ms: 0,
-        ..build_state(pool, hasher, audit, None, None)
+        ..build_state(pool.clone(), hasher, audit, None, None)
     };
 
     for (username, password) in [

@@ -13,12 +13,6 @@
 //! The row's expiry is set relative to the database's `NOW()` and the
 //! deadline is read against the server's monotonic clock, so the deadline
 //! following the row is the DB-relative read.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test credential_deadline -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -92,9 +86,8 @@ async fn set_expiry(pool: &Pool, table: &str, interval: &str) {
 /// fixture row (a day) under the cookie's 30 days, then the cookie's once
 /// the row outlives it, then the row again once it is pulled in to seconds.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_session_deadline_is_the_earlier_of_its_cookie_and_its_row() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let (account_id, _) = common::seed_account_actor(&pool, "alice").await;
     let cookie =
         mint_session_cookie(&pool, &testing_keyring(), account_id, SESSION_COOKIE_NAME).await;
@@ -120,9 +113,8 @@ async fn a_session_deadline_is_the_earlier_of_its_cookie_and_its_row() {
 
 /// An API token's deadline is its row's expiry; an eternal token has none.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_api_token_deadline_is_its_row_and_an_eternal_token_has_none() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let (account_id, _) = common::seed_account_actor(&pool, "bob").await;
     let minted = mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
     let mut headers = HeaderMap::new();
@@ -149,9 +141,8 @@ async fn an_api_token_deadline_is_its_row_and_an_eternal_token_has_none() {
 
 /// The daemon token has no row and no expiry, so no deadline.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_daemon_token_has_no_deadline() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let (account_id, _) = common::seed_account_actor(&pool, "keeper").await;
     let state = daemon_token_state(TESTING_DAEMON_TOKEN, Some(account_id));
     let mut headers = HeaderMap::new();

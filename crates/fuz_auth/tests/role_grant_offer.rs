@@ -1,15 +1,5 @@
 //! Integration tests for `query_role_grant_offer_create` and
-//! `query_accept_offer` against a real `PostgreSQL`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test role_grant_offer -- --ignored --test-threads=1
-//! ```
-//!
-//! `--test-threads=1` is required because every test drops + recreates
-//! the shared schema; parallel runs race on the `schema_version` table.
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
+//! `query_accept_offer` against a live database.
 
 use std::time::{Duration, SystemTime};
 
@@ -35,8 +25,8 @@ use fuz_http::{JsonrpcError, JsonrpcErrorCode};
 use serde_json::{Value, json};
 mod common;
 use common::{
-    build_audit, closer, ctx, fresh_db_pool, seed_account_actor, seed_actor_context, seed_admin,
-    seed_extra_actor, seed_role_grant_direct,
+    build_audit, closer, ctx, fresh_db, fresh_postgres_db, seed_account_actor, seed_actor_context,
+    seed_admin, seed_extra_actor, seed_role_grant_direct,
 };
 
 /// Dispatch an offer verb with the builtin registry and the default
@@ -215,9 +205,8 @@ async fn count_grants(
 // no test-specific expiry shape worth a local helper.
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_offer_create_succeeds_with_minimal_input() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let (recipient_account, _) = seed_account_actor(&pool, "recipient").await;
@@ -252,9 +241,8 @@ async fn role_grant_offer_create_succeeds_with_minimal_input() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_grants_admin_grantable_role() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -278,9 +266,8 @@ async fn role_grant_assign_grants_admin_grantable_role() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_rejects_non_grantable_role() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -302,9 +289,8 @@ async fn role_grant_assign_rejects_non_grantable_role() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_offer_create_rejects_self_target() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (grantor_account, grantor_actor) = seed_account_actor(&pool, "loner").await;
 
@@ -328,9 +314,8 @@ async fn role_grant_offer_create_rejects_self_target() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_offer_create_rejects_actor_account_mismatch() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let (recipient_account, _) = seed_account_actor(&pool, "recipient").await;
@@ -360,9 +345,8 @@ async fn role_grant_offer_create_rejects_actor_account_mismatch() {
 /// exactly what one to an account or actor that doesn't exist answers — the
 /// answers `role_grant_assign` gives the same requests — and writes no offer.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_offer_create_answers_a_deleted_recipient_as_a_missing_one() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -524,9 +508,8 @@ async fn tombstone(
 /// its own path gets the rule. Twin of the TS `role_grant_offer_queries.create`
 /// cases.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_create_query_refuses_a_recipient_that_is_not_an_active_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor) = seed_account_actor(&pool, "query_grantor").await;
     let (deleted, deleted_actor) = seed_account_actor(&pool, "query_deleted").await;
@@ -602,9 +585,8 @@ async fn the_create_query_refuses_a_recipient_that_is_not_an_active_account() {
 /// The query refuses a grantor that is not an active account — a deleted one,
 /// a tombstoned actor of a live account, a missing actor.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_create_query_refuses_a_grantor_that_is_not_an_active_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (recipient, _) = seed_account_actor(&pool, "query_recipient_of_gone").await;
     let (deleted, deleted_actor) = seed_account_actor(&pool, "query_grantor_deleted").await;
@@ -642,9 +624,8 @@ async fn the_create_query_refuses_a_grantor_that_is_not_an_active_account() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_offer_create_upserts_existing_pending() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let (recipient_account, _) = seed_account_actor(&pool, "recipient").await;
@@ -689,9 +670,8 @@ async fn role_grant_offer_create_upserts_existing_pending() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_creates_role_grant_and_marks_offer_accepted() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     // a builtin-role offer needs a grantor who still holds a global admin
@@ -755,9 +735,8 @@ async fn accept_offer_creates_role_grant_and_marks_offer_accepted() {
 /// accept revokes it and mints a fresh grant, so `resulting_role_grant_id`
 /// names a live grant rather than the dead one.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_over_expired_grant_mints_fresh_grant() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let (recipient_account, recipient_actor) = seed_account_actor(&pool, "recipient").await;
@@ -826,9 +805,8 @@ async fn accept_offer_over_expired_grant_mints_fresh_grant() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_idempotent_on_second_call() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     // a builtin-role offer needs a grantor who still holds a global admin
@@ -878,9 +856,8 @@ async fn accept_offer_idempotent_on_second_call() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_rejects_terminal_offer() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let (recipient_account, recipient_actor) = seed_account_actor(&pool, "recipient").await;
@@ -925,9 +902,8 @@ async fn accept_offer_rejects_terminal_offer() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_rejects_expired_offer() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let (recipient_account, recipient_actor) = seed_account_actor(&pool, "recipient").await;
@@ -973,9 +949,8 @@ async fn accept_offer_rejects_expired_offer() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_rejects_wrong_actor_on_actor_targeted_offer() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     // a builtin-role offer needs a grantor who still holds a global admin
@@ -1029,9 +1004,8 @@ async fn accept_offer_rejects_wrong_actor_on_actor_targeted_offer() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_offer_supersedes_sibling_pending_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (grantor_a_account, grantor_a_actor) = seed_account_actor(&pool, "grantor_a").await;
     let (_, grantor_b_actor) = seed_account_actor(&pool, "grantor_b").await;
@@ -1105,9 +1079,8 @@ async fn accept_offer_supersedes_sibling_pending_offers() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn decline_of_already_declined_offer_reports_terminal() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1167,9 +1140,8 @@ async fn decline_of_already_declined_offer_reports_terminal() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn retract_of_already_retracted_offer_reports_terminal() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1224,9 +1196,8 @@ async fn retract_of_already_retracted_offer_reports_terminal() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn retract_of_accepted_offer_reports_terminal() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1286,9 +1257,8 @@ async fn retract_of_accepted_offer_reports_terminal() {
 /// the terminal `invalid_request`, and one that is not in the caller's inbox
 /// — another account's, or no offer at all — is the masked `not_found`.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_reports_a_terminal_offer_and_masks_foreign_and_unknown_ones() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1375,9 +1345,8 @@ async fn accept_reports_a_terminal_offer_and_masks_foreign_and_unknown_ones() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn decline_and_retract_mask_foreign_unknown_and_terminal_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1485,9 +1454,8 @@ async fn audit_row_metadata(
 /// the TS spine writes it and the audit schema declares it, never `null`.
 /// With one, the key carries it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn decline_and_revoke_audit_metadata_omit_an_absent_reason() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1562,9 +1530,8 @@ async fn decline_and_revoke_audit_metadata_omit_an_absent_reason() {
 /// `admin` can't `role_grant_assign` anything — least of all a global `admin`
 /// to itself. The dispatcher's gate refuses it first; the handler re-checks.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_refuses_a_scoped_admin_caller() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let scoped_admin = with_grant(
         seed_actor_context(&pool, "scoped_admin").await,
         ROLE_ADMIN,
@@ -1596,9 +1563,8 @@ async fn role_grant_assign_refuses_a_scoped_admin_caller() {
 /// scoped `admin` (`-32602` `role_grant_builtin_scoped`) and still
 /// answers a scoped `keeper` with the grant-path denial it always had.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_refuses_a_scoped_builtin_role() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1669,9 +1635,8 @@ impl OfferCreateAuthorize for ClassroomScopedOnly {
 /// it — and writes nothing; an admitted scoped grant lands, the predicate
 /// having seen its `scope_kind`.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_runs_the_offer_authorize_predicate() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1735,9 +1700,8 @@ async fn role_grant_assign_runs_the_offer_authorize_predicate() {
 /// lone `scope_id` is a constraint violation), re-assigning is idempotent, and
 /// the global grant of the same role is a distinct row.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_scoped_app_role_writes_the_paired_scope() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1829,9 +1793,8 @@ async fn role_grant_assign_scoped_app_role_writes_the_paired_scope() {
 /// the 500 of an idempotent re-select that misses; and it plants no row, so a
 /// later global grant still lands.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_assign_refuses_the_index_token_as_a_scope_kind() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1908,9 +1871,8 @@ async fn role_grant_assign_refuses_the_index_token_as_a_scope_kind() {
 /// injected predicate — even an admit-everything consumer authorizer can't
 /// open that door — and writes no offer.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_offer_create_refuses_a_scoped_builtin_role() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1947,9 +1909,8 @@ async fn role_grant_offer_create_refuses_a_scoped_builtin_role() {
 /// never becomes a grant: the query refuses it (`BuiltinRefused` / `Scoped`), the verb
 /// answers `role_grant_builtin_scoped`, and the offer stays pending.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_refuses_a_legacy_scoped_builtin_offer() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     let recipient = seed_actor_context(&pool, "recipient").await;
@@ -2020,9 +1981,8 @@ async fn accept_refuses_a_legacy_scoped_builtin_offer() {
 /// Cross-account inbox reads are global-admin authority: a scoped `admin`
 /// can't list or page another account's offers.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn offer_inbox_reads_of_another_account_require_a_global_admin() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let scoped_admin = with_grant(
         seed_actor_context(&pool, "scoped_admin").await,
         ROLE_ADMIN,
@@ -2053,9 +2013,8 @@ async fn offer_inbox_reads_of_another_account_require_a_global_admin() {
 /// shape of a consumer answering with a scope-blind role check), while a
 /// global admin still offers under the same predicate.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn offering_a_builtin_role_requires_a_global_admin_caller() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let scoped_admin = with_grant(
         seed_actor_context(&pool, "scoped_admin").await,
         ROLE_ADMIN,
@@ -2105,9 +2064,8 @@ async fn offering_a_builtin_role_requires_a_global_admin_caller() {
 /// under a since-closed path) is refused and stays pending; once the grantor
 /// holds the global grant, the same offer accepts.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accepting_a_builtin_offer_rechecks_the_grantor() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     fuz_testing::grant_scoped_role(
@@ -2179,9 +2137,8 @@ async fn accepting_a_builtin_offer_rechecks_the_grantor() {
 /// (`BootstrapOnly`), the verb answers the offer-create denial for a role no
 /// offer may confer, the refusal is audited, and the offer stays pending.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_refuses_a_keeper_offer_even_from_a_global_admin() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "grantor").await;
     fuz_testing::grant_role(&pool, grantor_actor, ROLE_ADMIN).await;
@@ -2238,9 +2195,8 @@ async fn accept_refuses_a_keeper_offer_even_from_a_global_admin() {
 /// grantor whose global `admin` was revoked, has expired, sits on a
 /// tombstoned actor, or on a tombstoned account. Each offer stays pending.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_rechecks_every_grantor_branch() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let cases: [(&str, &str); 4] = [
         (
@@ -2308,9 +2264,8 @@ async fn accept_rechecks_every_grantor_branch() {
 /// holds no admin at all still accepts (its authority was the consumer
 /// predicate's call at create time).
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_of_an_app_role_offer_needs_no_grantor_admin() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_actor) = seed_account_actor(&pool, "teacher").await;
     let (recipient_account, recipient_actor) = seed_account_actor(&pool, "student").await;
@@ -2369,9 +2324,8 @@ fn off_grammar_roles() -> Vec<String> {
 /// the string a caller chose never reaches `audit_log`. A well-formed role
 /// that is not grantable is still the audited denial.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_off_grammar_role_is_invalid_params_and_is_not_audited() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let caller = seed_actor_context(&pool, "caller").await;
     let admin = with_grant(seed_admin(&pool).await, ROLE_ADMIN, None);
     let (recipient_account, _) = seed_account_actor(&pool, "recipient").await;
@@ -2489,9 +2443,8 @@ async fn offer_accepted_once(
 /// grant and writes nothing: no audit row, nothing queued for after the
 /// commit (no audit fan-out, no `role_grant_offer_accepted` to the grantor).
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_replay_answers_the_same_grant_and_writes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -2537,9 +2490,8 @@ async fn accept_replay_answers_the_same_grant_and_writes_nothing() {
 /// Once the grant an accept minted is revoked, replaying the accept is
 /// terminal — never an OK carrying the revoked grant's id.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn accept_replay_after_the_grant_is_revoked_is_terminal() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -2607,9 +2559,8 @@ async fn offer_is_open(
 /// grant as its cause. Another grantor's offer and the revokee's decided
 /// offers are untouched.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_revoke_supersedes_the_revokees_outgoing_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -2683,13 +2634,12 @@ async fn role_grant_revoke_supersedes_the_revokees_outgoing_offers() {
 /// admin lifts the last-admin guard, never the keeper one. A refusal leaves
 /// the grant active.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_revoke_guards_the_keeper_and_the_last_admin() {
     use fuz_auth::role::ROLE_KEEPER;
     use fuz_auth::role_grant_offer_action_specs::{
         ERROR_CANNOT_REVOKE_KEEPER_ADMIN, ERROR_CANNOT_REVOKE_LAST_ADMIN,
     };
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -2782,10 +2732,9 @@ async fn role_grant_revoke_guards_the_keeper_and_the_last_admin() {
 /// tombstoned — goes while the first actor's remains, and the last remaining
 /// one is refused.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn role_grant_revoke_last_admin_counts_without_the_revoked_grant() {
     use fuz_auth::role_grant_offer_action_specs::ERROR_CANNOT_REVOKE_LAST_ADMIN;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -2860,10 +2809,10 @@ async fn role_grant_revoke_last_admin_counts_without_the_revoked_grant() {
 /// inside the guard's count, then releases them together. Twin of `fuz_app`'s
 /// `role_grant_offer_actions.revoke_race.db.test.ts`.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn cross_revokes_of_the_last_two_admins_serialize() {
     use fuz_auth::role_grant_offer_action_specs::ERROR_CANNOT_REVOKE_LAST_ADMIN;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let audit = build_audit(pool.clone());
     let closer = closer();
     // the caller holds admin in memory only: the DB's admins are seeded below

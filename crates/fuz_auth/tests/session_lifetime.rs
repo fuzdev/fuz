@@ -8,9 +8,9 @@ mod common;
 use fuz_auth::{SESSION_AGE_MAX, create_capped_session};
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a DST SET TIME ZONE"]
 async fn session_lifetime_is_elapsed_time_across_a_dst_change() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_postgres_db().await;
     let account_id = common::seed_account(&pool, "session_lifetime_user", None).await;
     let mut client = pool.get().await.expect("pool.get");
     let tx = client.transaction().await.expect("begin");

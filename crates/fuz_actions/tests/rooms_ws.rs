@@ -7,16 +7,6 @@
 //! release, a client `cancel`, a leave, and a socket's close reaching a join
 //! held in its authorizer, an authorizer reading revoked authority live,
 //! eviction, and both limiters.
-//!
-//! Shares `FUZ_ACTIONS_TEST_URL` (default `fuz_actions_test`) with the
-//! crate's other suites — cargo runs a crate's test binaries one after
-//! another.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_actions_test
-//! cargo test -p fuz_actions --test rooms_ws -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -44,7 +34,8 @@ use fuz_realtime::{
     RoomRegistryOptions, RoomScope,
 };
 use fuz_testing::{
-    TestingDbOptions, fresh_test_db_pool, mint_session_cookie, seed_account_actor, testing_keyring,
+    TestEngine, TestingDbOptions, fresh_test_db, mint_session_cookie, seed_account_actor,
+    testing_keyring,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -53,10 +44,10 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_ACTIONS_TEST_URL",
-    default_db: "fuz_actions_test",
+    suite: "fuz_actions",
     migrations: &[AUTH_MIGRATIONS],
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
 /// Bound on every wait a broken case could otherwise turn into a hang.
@@ -353,9 +344,8 @@ fn reason(error: &Value) -> &str {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn members_join_relay_set_state_and_leave_over_the_socket() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_a").await;
     let mut b = Socket::open(&pool, server.addr, "rooms_b").await;
@@ -435,9 +425,8 @@ async fn members_join_relay_set_state_and_leave_over_the_socket() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn refusals_answer_their_reasons() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_refusals").await;
 
@@ -505,9 +494,8 @@ async fn refusals_answer_their_reasons() {
 /// A socket that closes is released: its room hears `room_member_left` with
 /// reason `disconnected`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_closed_socket_leaves_its_rooms() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_stays").await;
     let mut b = Socket::open(&pool, server.addr, "rooms_goes").await;
@@ -526,9 +514,8 @@ async fn a_closed_socket_leaves_its_rooms() {
 /// A watch hears the members come and go without a seat, and a watcher's
 /// eviction ends it; a member's eviction tells it its seat is lost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn watches_and_evictions_over_the_socket() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut watcher = Socket::open(&pool, server.addr, "rooms_watcher").await;
     let mut member = Socket::open(&pool, server.addr, "rooms_member").await;
@@ -573,9 +560,8 @@ async fn watches_and_evictions_over_the_socket() {
 /// handler reads its signal after the authorizer and answers
 /// `request_cancelled`, seating no one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_cancelled_join_is_not_seated() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_cancel").await;
     let room = "gate:cancel";
@@ -605,9 +591,8 @@ async fn a_cancelled_join_is_not_seated() {
 /// The connection's own leave of a room overtakes its join held in the
 /// authorizer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_leave_supersedes_a_join_in_flight() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_superseded").await;
     let room = "gate:superseded";
@@ -629,9 +614,8 @@ async fn a_leave_supersedes_a_join_in_flight() {
 /// account budget, and answers `rate_limited` with `retry_after`; a watch
 /// and a leave cost it nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn the_limiter_refuses_past_its_budget() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(
         &pool,
         Limits {
@@ -675,9 +659,8 @@ async fn the_limiter_refuses_past_its_budget() {
 /// Joins and watches charge the dispatcher's per-account budget, shared by
 /// every socket of the account; sends and state sets don't.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn joins_and_watches_share_the_account_budget() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(
         &pool,
         Limits {
@@ -718,9 +701,8 @@ async fn joins_and_watches_share_the_account_budget() {
 /// eviction landing before the reserve finds no join in flight to reach, so
 /// this is the window's state. The live read denies.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_revoke_before_the_authorizer_reads_leaves_no_seat() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let (account_id, actor_id) = seed_account_actor(&pool, "rooms_revoked").await;
     {
@@ -780,9 +762,8 @@ async fn a_revoke_before_the_authorizer_reads_leaves_no_seat() {
 /// seat: a watcher of the room hears no one join, before or after the
 /// authorizer is released.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_socket_closed_mid_authorizer_leaves_no_seat() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let server = serve(&pool, Limits::default()).await;
     let mut watcher = Socket::open(&pool, server.addr, "rooms_drop_watcher").await;
     let mut a = Socket::open(&pool, server.addr, "rooms_drop").await;

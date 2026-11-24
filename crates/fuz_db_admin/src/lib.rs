@@ -1020,19 +1020,12 @@ async fn query_primary_key(
     Ok(rows.iter().map(|r| r.get(0)).collect())
 }
 
-/// PG-backed pins for the row-`DELETE` path (`FUZ_DB_ADMIN_TEST_URL`, default
-/// `postgres://localhost/fuz_db_admin_test`). `#[ignore]`-gated, single-threaded
-/// (each test drops + recreates `public`):
-///
-/// ```text
-/// createdb fuz_db_admin_test
-/// FUZ_DB_ADMIN_TEST_URL=postgres://localhost/fuz_db_admin_test \
-///   cargo test -p fuz_db_admin -- --ignored --test-threads=1
-/// ```
+/// Database-backed pins for the row-`DELETE` path, each test on a fresh database
+/// of its own (`fuz_testing::fresh_test_db`).
 ///
 /// These drive [`perform_row_delete`] directly (the auth gate is exercised by
-/// the cross-backend suites) so the real `DELETE` SQL runs against real
-/// Postgres: the safety property is that a composite-PK delete is refused and
+/// the cross-backend suites) so the real `DELETE` SQL runs against a live
+/// database: the safety property is that a composite-PK delete is refused and
 /// deletes **nothing** — a `LIMIT 1` (no `ORDER BY`) PK query would
 /// pick one arbitrary column and `WHERE "<col>" = $1` would over-delete
 /// every row sharing its value.
@@ -1194,10 +1187,9 @@ mod origin_gate_tests {
 mod row_delete_pg_tests {
     use super::*;
     use fuz_db::Pool;
-    use fuz_testing::{TestingDbOptions, fresh_test_db_pool};
+    use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
 
-    /// This suite's database: `FUZ_DB_ADMIN_TEST_URL` (default
-    /// `fuz_db_admin_test`), the real `fuz_auth::AUTH_MIGRATIONS`
+    /// This suite's database: the real `fuz_auth::AUTH_MIGRATIONS`
     /// (single-sourced spine DDL — a hand-copied
     /// `audit_log`/`schema_version` snippet could drift silently; this also
     /// creates the credential-floor tables, so the masking tests exercise the
@@ -1209,16 +1201,13 @@ mod row_delete_pg_tests {
     /// failure → masked 404, non-canonical spellings match, canonical audit
     /// `id`) and a RESTRICT-FK pair for the 409 path.
     const DB: TestingDbOptions<'static> = TestingDbOptions {
-        env_var: "FUZ_DB_ADMIN_TEST_URL",
-        default_db: "fuz_db_admin_test",
+        suite: "fuz_db_admin",
         migrations: &[fuz_auth::AUTH_MIGRATIONS],
         setup_sql: Some(
             "CREATE TABLE scratch_single (id text PRIMARY KEY, label text); \
              CREATE TABLE scratch_composite \
                (source_id text, name text, value text, PRIMARY KEY (source_id, name)); \
-             CREATE DOMAIN scratch_blob_dom AS bytea; \
-             CREATE TABLE scratch_bytea \
-               (id text PRIMARY KEY, data bytea, data_dom scratch_blob_dom, note text); \
+             CREATE TABLE scratch_bytea (id text PRIMARY KEY, data bytea, note text); \
              CREATE TABLE scratch_uuid (id uuid PRIMARY KEY, label text); \
              CREATE TABLE scratch_int (id bigint PRIMARY KEY, label text); \
              CREATE TABLE scratch_fk_parent (id text PRIMARY KEY, name text); \
@@ -1229,11 +1218,18 @@ mod row_delete_pg_tests {
                (id text PRIMARY KEY, parent_id text NOT NULL \
                 REFERENCES scratch_fk_parent(id));",
         ),
+        engine: TestEngine::Any,
     };
 
-    /// Reset `public`, run the auth chain, and stand up the scratch tables.
-    async fn fresh_pool() -> Pool {
-        fresh_test_db_pool(DB).await
+    /// A fresh database with the auth chain and the scratch tables.
+    async fn fresh_db() -> TestDb {
+        fresh_test_db(DB).await
+    }
+
+    /// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL
+    /// has.
+    async fn fresh_postgres_db() -> TestDb {
+        fresh_test_db(DB.postgres_only()).await
     }
 
     /// Default allowlist for the suite. Deliberately includes `account` — the
@@ -1309,9 +1305,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn primary_key_query_returns_all_columns_in_key_order() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let client = pool.get().await.unwrap();
         assert_eq!(
             query_primary_key(&client, "scratch_single").await.unwrap(),
@@ -1327,9 +1322,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn single_pk_delete_removes_only_the_targeted_row() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1362,9 +1356,8 @@ mod row_delete_pg_tests {
     /// `db_admin_row_delete` INSERT rolls the delete back: the flat 500 and
     /// the row still there.
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn refused_audit_row_deletes_nothing() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1395,9 +1388,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn uncoercible_id_is_the_masked_row_not_found() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1458,9 +1450,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn typed_compare_matches_spellings_and_audits_the_canonical_id() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1528,9 +1519,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn restricted_fk_delete_is_a_409_and_deletes_nothing() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1580,9 +1570,8 @@ mod row_delete_pg_tests {
     /// `NO ACTION`, which raises 23503 `foreign_key_violation` where `RESTRICT`
     /// raises 23001 on PG 18. Same scrubbed 409 either way.
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn no_action_fk_delete_is_a_409_and_deletes_nothing() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1639,9 +1628,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn composite_pk_delete_is_refused_and_deletes_nothing() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         // Three rows sharing the SAME `name` across different `source_id`s — the
         // exact over-delete trap: a single-column `WHERE "name" = 'title'`
@@ -1679,9 +1667,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn builtin_non_deletable_table_is_refused_and_deletes_nothing() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         // Single-column PK — the key-shape gate would pass, so the refusal
         // must be the policy exclusion.
@@ -1714,9 +1701,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn non_deletable_refusal_precedes_the_key_shape_check() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         // `schema_version` is both excluded AND composite-keyed — the policy
         // exclusion is checked first, so its code wins (mirrors the TS
@@ -1738,9 +1724,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn consumer_extension_unions_with_the_builtin_floor() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1786,9 +1771,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn successful_delete_emits_the_db_admin_row_delete_audit_event() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1839,9 +1823,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn refused_deletes_emit_nothing() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         let (audit, account_id) = test_audit(&pool);
 
@@ -1880,9 +1863,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn unbrowsable_delete_masks_as_table_not_found() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1946,9 +1928,9 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
+    #[ignore = "pglet: to_jsonb of a row"]
     async fn detail_reports_null_primary_key_for_composite() {
-        let pool = fresh_pool().await;
+        let pool = fresh_postgres_db().await;
         let mut client = pool.get().await.unwrap();
         let resp = perform_table_detail(&mut client, detail_options("scratch_composite"))
             .await
@@ -1970,15 +1952,14 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
+    #[ignore = "pglet: decode(…, 'hex'), to_jsonb of a row"]
     async fn detail_placeholders_bytea_values() {
-        let pool = fresh_pool().await;
+        let pool = fresh_postgres_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
-                "INSERT INTO scratch_bytea (id, data, data_dom, note) \
-                 VALUES ('a', decode('deadbeef', 'hex'), decode('cafebabe99', 'hex'), 'x'), \
-                        ('b', NULL, NULL, 'y')",
+                "INSERT INTO scratch_bytea (id, data, note) \
+                 VALUES ('a', decode('deadbeef', 'hex'), 'x'), ('b', NULL, 'y')",
                 &[],
             )
             .await
@@ -2007,18 +1988,44 @@ mod row_delete_pg_tests {
         assert_eq!(by_id("a")["note"], json!("x"));
         assert_eq!(by_id("b")["data"], Value::Null);
         assert_eq!(by_id("b")["note"], json!("y"));
-        // a DOMAIN over bytea resolves to `udt_name = 'bytea'` in
-        // `information_schema.columns`, so the placeholder holds — pinned so
-        // a consumer's domain-typed blob column can't silently reopen the
-        // bytea egress amplification
+    }
+
+    /// A DOMAIN over bytea resolves to `udt_name = 'bytea'` in
+    /// `information_schema.columns`, so the placeholder holds — pinned so a
+    /// consumer's domain-typed blob column can't silently reopen the bytea
+    /// egress amplification.
+    #[tokio::test]
+    #[ignore = "pglet: CREATE DOMAIN, decode(…, 'hex'), to_jsonb of a row"]
+    async fn detail_placeholders_a_domain_over_bytea() {
+        let pool = fresh_postgres_db().await;
+        let mut client = pool.get().await.unwrap();
+        client
+            .batch_execute(
+                "CREATE DOMAIN scratch_blob_dom AS bytea; \
+                 ALTER TABLE scratch_bytea ADD COLUMN data_dom scratch_blob_dom; \
+                 INSERT INTO scratch_bytea (id, data_dom, note) \
+                 VALUES ('a', decode('cafebabe99', 'hex'), 'x'), ('b', NULL, 'y')",
+            )
+            .await
+            .unwrap();
+
+        let resp = perform_table_detail(&mut client, detail_options("scratch_bytea"))
+            .await
+            .expect("detail succeeds");
+        let body = body_json(resp).await;
+        let rows = body["rows"].as_array().unwrap();
+        let by_id = |id: &str| {
+            rows.iter()
+                .find(|r| r["id"] == json!(id))
+                .unwrap_or_else(|| panic!("row {id}"))
+        };
         assert_eq!(by_id("a")["data_dom"], json!("<5 bytes>"));
         assert_eq!(by_id("b")["data_dom"], Value::Null);
     }
 
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn detail_masks_unbrowsable_tables() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         // unlisted-but-existing, floor-listed, and truly missing all answer
         // with the same masked 404 code
@@ -2087,12 +2094,11 @@ mod row_delete_pg_tests {
     /// route, then each handler's own (a budget of two, the role gate's
     /// spent too) — never the 500 of a failed read.
     #[tokio::test]
-    #[ignore = "needs Postgres (FUZ_DB_ADMIN_TEST_URL)"]
     async fn a_refused_checkout_after_the_credential_answers_the_503() {
-        let pool = fresh_pool().await;
+        let pool = fresh_db().await;
         let headers = admin_headers(&pool, "db_admin_checkout").await;
         for (budget, phase) in [(1, "the role gate"), (2, "the handler")] {
-            let state = || State(route_state(fuz_testing::budgeted_pool(&DB.url(), budget)));
+            let state = || State(route_state(fuz_testing::budgeted_pool(pool.url(), budget)));
             assert_unavailable(
                 handle_tables(state(), RawQuery(None), None, headers.clone()).await,
                 &format!("tables, {phase}"),

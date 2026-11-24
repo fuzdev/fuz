@@ -11,23 +11,16 @@
 //! compose rather than copy; the assertion over it is the shared
 //! [`fuz_testing::assert_column_projections`]. Twin of `fuz_app`'s
 //! `src/test/db/column_projections.db.test.ts`.
-//!
-//! `--ignored`-gated (needs Postgres):
-//!
-//! ```sh
-//! cargo test -p fuz_auth --test columns -- --ignored
-//! ```
 
 mod common;
 
-use common::fresh_db_pool;
+use common::fresh_db;
 use fuz_auth::AUTH_COLUMN_PROJECTIONS;
 use fuz_db::DB_COLUMN_PROJECTIONS;
 use fuz_testing::assert_column_projections;
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn columns_match_live_schema() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     assert_column_projections(&pool, &[DB_COLUMN_PROJECTIONS, AUTH_COLUMN_PROJECTIONS]).await;
 }

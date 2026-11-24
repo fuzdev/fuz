@@ -576,11 +576,11 @@ mod tests {
     /// is the narrow one and widening it is a consumer's explicit act.
     ///
     /// The route-level proof — a full-scope bearer refused ahead of the scope
-    /// and role gates — lives in `tests/audit_stream.rs`, where every case is
-    /// `#[ignore = "requires PostgreSQL"]`. That leaves a bare `cargo test`
-    /// with no signal at all on a default flipped to [`CredentialGate::Any`],
-    /// the one edit that reopens the channel silently. The pool builds lazily
-    /// from a URL, so this half needs no database and runs in the default gate.
+    /// and role gates — lives in `tests/audit_stream.rs`, against a live
+    /// database. This half pins the default itself, so a default flipped to
+    /// [`CredentialGate::Any`], the one edit that reopens the channel
+    /// silently, fails here too. The pool builds lazily from a URL, so this
+    /// half needs no database.
     #[test]
     fn the_stock_route_state_admits_the_session_channel_only() {
         let pool = fuz_db::create_pool(

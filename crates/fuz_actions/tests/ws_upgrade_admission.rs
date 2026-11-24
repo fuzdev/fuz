@@ -52,16 +52,6 @@
 //! `_testing_flood_notifications` call — is closed with 4005 and forgotten.
 //! One case there needs no database: a zero budget is refused when the
 //! router is built.
-//!
-//! Shares `FUZ_ACTIONS_TEST_URL` (default `fuz_actions_test`) with
-//! `perform_action_dispatch.rs` — cargo runs a crate's test binaries one
-//! after another.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_actions_test
-//! cargo test -p fuz_actions --test ws_upgrade_admission -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -106,10 +96,10 @@ use fuz_realtime::{
     WS_CLOSE_SESSION_REVOKED, WS_CLOSE_SESSION_REVOKED_REASON, connection_channel,
 };
 use fuz_testing::{
-    TESTING_DAEMON_TOKEN, TESTING_FLOOD_NOTIFICATION_METHOD, TestingDbOptions, TestingTableLock,
-    create_testing_flood_notifications_action_spec, daemon_token_state, fresh_test_db_pool,
-    grant_role, grant_scoped_role, mint_api_token, mint_session_cookie, seed_account_actor,
-    seed_extra_actor, testing_keyring,
+    TESTING_DAEMON_TOKEN, TESTING_FLOOD_NOTIFICATION_METHOD, TestDb, TestEngine, TestingDbOptions,
+    TestingTableLock, create_testing_flood_notifications_action_spec, daemon_token_state,
+    fresh_test_db, grant_role, grant_scoped_role, mint_api_token, mint_session_cookie,
+    seed_account_actor, seed_extra_actor, testing_keyring,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -117,17 +107,22 @@ use uuid::Uuid;
 
 /// The suite's database — the auth chain is all an upgrade reads.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_ACTIONS_TEST_URL",
-    default_db: "fuz_actions_test",
+    suite: "fuz_actions",
     migrations: &[AUTH_MIGRATIONS],
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
 /// Bound on every wait a broken admission could otherwise turn into a hang.
 const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 
-async fn fresh_db_pool() -> Pool {
-    fresh_test_db_pool(DB).await
+async fn fresh_db() -> TestDb {
+    fresh_test_db(DB).await
+}
+
+/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
+async fn fresh_postgres_db() -> TestDb {
+    fresh_test_db(DB.postgres_only()).await
 }
 
 /// A registry capped at `max` connections per account.
@@ -246,9 +241,8 @@ async fn assert_refused_as_revoked(
 // -- the re-read: a revocation whose close missed the registration -----------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_revoked_session_is_refused_at_admission() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_session_revoked").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
 
@@ -267,9 +261,8 @@ async fn a_revoked_session_is_refused_at_admission() {
 /// case where an admitted zombie session socket could go on to mint a fresh
 /// API token.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_password_change_refuses_sessions_and_tokens_at_admission() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_password_changed").await;
     let (_, session) = resolve_session(&pool, account_id).await;
     let token = resolve_api_token(&pool, account_id).await;
@@ -288,9 +281,8 @@ async fn a_password_change_refuses_sessions_and_tokens_at_admission() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_revoked_api_token_is_refused_at_admission() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_token_revoked").await;
     let resolved = resolve_api_token(&pool, account_id).await;
     let token_id = resolved
@@ -312,9 +304,8 @@ async fn a_revoked_api_token_is_refused_at_admission() {
 /// The session and token rows are left in place, so the account read alone
 /// refuses.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_soft_deleted_account_is_refused_at_admission() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_account_deleted").await;
     let (_, session) = resolve_session(&pool, account_id).await;
     let token = resolve_api_token(&pool, account_id).await;
@@ -338,9 +329,8 @@ async fn a_soft_deleted_account_is_refused_at_admission() {
 /// is admitted, receives the fan-out, and — at the cap — supersedes the
 /// account's oldest socket, which a refused upgrade never does.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn another_sessions_revocation_still_admits() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_control").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
     let (_, other) = resolve_session(&pool, account_id).await;
@@ -381,9 +371,8 @@ async fn another_sessions_revocation_still_admits() {
 
 /// Dropping the guard `admit_upgrade` returns removes the admitted entry.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn the_returned_guard_owns_the_admitted_entry() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_guard").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
     let registry = Arc::new(ConnectionRegistry::new());
@@ -429,9 +418,8 @@ async fn seed_admin_upgrade(pool: &Pool, username: &str) -> (Uuid, Uuid, Resolve
 /// A held role admits, and the registration carries the endpoint's roles: a
 /// role close reaches the admitted connection and marks it for 4006.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_held_role_is_admitted_under_the_endpoint_roles() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id, resolved) = seed_admin_upgrade(&pool, "ws_role_held").await;
     let registry = Arc::new(ConnectionRegistry::new());
 
@@ -455,9 +443,8 @@ async fn a_held_role_is_admitted_under_the_endpoint_roles() {
 /// is delivered — the shape of a role revocation whose close ran before the
 /// socket registered. The re-read alone refuses: 4006, not 4001.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_revoked_role_is_refused_at_admission_with_4006() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id, resolved) = seed_admin_upgrade(&pool, "ws_role_revoked").await;
     pool.get()
         .await
@@ -483,9 +470,8 @@ async fn a_revoked_role_is_refused_at_admission_with_4006() {
 
 /// A scoped grant of the role never admits at a role gate.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_scoped_grant_is_refused_at_admission_with_4006() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_role_scoped").await;
     grant_scoped_role(&pool, actor_id, ROLE_ADMIN, "space", Uuid::new_v4()).await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
@@ -502,9 +488,8 @@ async fn a_scoped_grant_is_refused_at_admission_with_4006() {
 /// identity rather than a lost role. The grant read alone counts none of a
 /// tombstoned actor's grants either, and counts them again on undelete.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_soft_deleted_actor_is_refused_at_admission_with_4001() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id, resolved) = seed_admin_upgrade(&pool, "ws_actor_deleted").await;
     let client = pool.get().await.unwrap();
     assert!(
@@ -549,9 +534,8 @@ async fn a_soft_deleted_actor_is_refused_at_admission_with_4001() {
 /// The same tombstone on an **ungated** endpoint: no role is re-read, so the
 /// actor re-read alone refuses — 4001, nothing admitted, nothing evicted.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_soft_deleted_actor_is_refused_at_ungated_admission() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_actor_deleted_ungated").await;
     let (_, session) = resolve_session(&pool, account_id).await;
     let token = resolve_api_token(&pool, account_id).await;
@@ -569,9 +553,9 @@ async fn a_soft_deleted_actor_is_refused_at_ungated_admission() {
 /// the role row is untouched, so only the pending registration can refuse —
 /// with 4006, the reason its closer recorded, not a revocation's 4001.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_role_close_during_admission_refuses_the_upgrade_with_4006() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, actor_id, resolved) =
         seed_admin_upgrade(&pool, "ws_role_closed_pending").await;
     let registry = Arc::new(ConnectionRegistry::new());
@@ -610,9 +594,8 @@ async fn a_role_close_during_admission_refuses_the_upgrade_with_4006() {
 /// `role_grant` is renamed out from under it — the credential re-read before
 /// it reads no `role_grant`, so it passes.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_failing_role_recheck_refuses_the_upgrade_with_1011() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, actor_id, resolved) = seed_admin_upgrade(&pool, "ws_role_recheck_fails").await;
     pool.get()
         .await
@@ -637,9 +620,9 @@ async fn a_failing_role_recheck_refuses_the_upgrade_with_1011() {
 /// the pending registration can refuse it: 4001, and the account's live socket
 /// at the cap is not evicted.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_close_during_admission_refuses_the_upgrade() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_closed_pending").await;
     let other_account = seed_account_actor(&pool, "ws_closed_pending_other").await.0;
     let (_, resolved) = resolve_session(&pool, account_id).await;
@@ -685,9 +668,9 @@ async fn a_close_during_admission_refuses_the_upgrade() {
 /// shutdown, so the upgrade is refused with 1001 — the client reconnects,
 /// rather than giving its credential up as a 4001 would make it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_shutdown_during_admission_refuses_the_upgrade_with_1001() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_shutdown_pending").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
     let registry = Arc::new(ConnectionRegistry::new());
@@ -722,9 +705,8 @@ async fn a_shutdown_during_admission_refuses_the_upgrade_with_1001() {
 /// An upgrade whose admission starts after the close-all is born closed and
 /// refused with 1001, though its credential is live.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn an_admission_after_the_shutdown_is_refused_with_1001() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_shutdown_after").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
     let registry = Arc::new(ConnectionRegistry::new());
@@ -745,9 +727,9 @@ async fn an_admission_after_the_shutdown_is_refused_with_1001() {
 /// the refusal still comes at once — the shutdown's 1001 never waits on, or
 /// depends on, the database.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn an_admission_after_the_shutdown_needs_no_database() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_shutdown_no_db").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
     let registry = Arc::new(ConnectionRegistry::new());
@@ -770,7 +752,7 @@ async fn an_admission_after_the_shutdown_needs_no_database() {
 
     // nor on the pool: with no database to check out from at all, the
     // refusal is still the shutdown's, not unavailable
-    let dead_pool = fuz_db::create_pool(&DB.url(), &fuz_db::PoolOptions::default()).unwrap();
+    let dead_pool = fuz_db::create_pool(pool.url(), &fuz_db::PoolOptions::default()).unwrap();
     dead_pool.close();
     let (tx, _rx) = connection_channel(1 << 20);
     let refusal = admit_upgrade(&registry, &dead_pool, &resolved, &actor_id, &[], tx)
@@ -780,7 +762,7 @@ async fn an_admission_after_the_shutdown_needs_no_database() {
 
     // nor on a checkout: with the pool's one client held, the refusal comes
     // at once instead of waiting for a client to come back
-    let pg_config: tokio_postgres::Config = DB.url().parse().unwrap();
+    let pg_config: tokio_postgres::Config = pool.url().parse().unwrap();
     let manager = deadpool_postgres::Manager::new(pg_config, tokio_postgres::NoTls);
     let busy_pool = Pool::builder(manager).max_size(1).build().unwrap();
     let held = busy_pool.get().await.unwrap();
@@ -801,9 +783,9 @@ async fn an_admission_after_the_shutdown_needs_no_database() {
 /// shutdown — is refused for the shutdown (1001), not as unavailable (1011).
 /// The re-read's backend is terminated while it waits on the lock.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_recheck_failing_after_the_shutdown_closed_it_is_refused_with_1001() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_shutdown_recheck_fails").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
     let registry = Arc::new(ConnectionRegistry::new());
@@ -850,15 +832,14 @@ async fn a_recheck_failing_after_the_shutdown_closed_it_is_refused_with_1001() {
 /// When the re-read cannot run, the upgrade is refused with 1011 rather than
 /// admitted unchecked — and still evicts nothing.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn an_unreachable_database_refuses_the_upgrade() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_unavailable").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
 
     let registry = capped_registry(1);
     let (bystander, _bystander_rx) = live_socket(&registry, account_id);
-    let dead_pool = fuz_db::create_pool(&DB.url(), &fuz_db::PoolOptions::default()).unwrap();
+    let dead_pool = fuz_db::create_pool(pool.url(), &fuz_db::PoolOptions::default()).unwrap();
     dead_pool.close();
 
     let (outcome, _rx) = admit(&registry, &dead_pool, &resolved, actor_id).await;
@@ -873,9 +854,8 @@ async fn an_unreachable_database_refuses_the_upgrade() {
 /// fails: a query error is not "live". `auth_session` is renamed out from
 /// under the re-read (the next case's fresh schema restores it).
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_failing_recheck_query_refuses_the_upgrade() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_recheck_fails").await;
     let (_, resolved) = resolve_session(&pool, account_id).await;
 
@@ -1060,9 +1040,8 @@ async fn the_upgrade_refuses_a_foreign_origin_at_the_gate() {
 /// `HEAD` (which axum serves through the `GET` route), answer the not-found
 /// the twin's upgrade helper falls through to, and nothing is registered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn an_admitted_request_without_an_upgrade_is_not_found() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_admin_session(&pool, "ws_no_upgrade").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve(&pool, &registry).await;
@@ -1086,11 +1065,10 @@ async fn an_admitted_request_without_an_upgrade_is_not_found() {
 /// checkout is refused: the flat 503 before any upgrade, never the 500 of a
 /// failed read, and nothing registered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_refused_actor_phase_checkout_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_admin_session(&pool, "ws_actor_checkout").await;
-    let budgeted = fuz_testing::budgeted_pool(&DB.url(), 1);
+    let budgeted = fuz_testing::budgeted_pool(pool.url(), 1);
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve(&budgeted, &registry).await;
 
@@ -1115,9 +1093,8 @@ async fn seed_admin_session(pool: &Pool, username: &str) -> (Uuid, String) {
 /// **The regression guard.** An untouched credential upgrades, is admitted,
 /// and its loop runs — a broadcast reaches the socket.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_live_session_upgrades_and_is_admitted() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_admin_session(&pool, "ws_e2e_live").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve(&pool, &registry).await;
@@ -1151,9 +1128,9 @@ async fn a_live_session_upgrades_and_is_admitted() {
 /// account's live socket at the cap is not evicted, and a broadcast sent
 /// meanwhile never reaches it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_session_revoked_mid_upgrade_is_closed_with_4001() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, cookie) = seed_admin_session(&pool, "ws_e2e_revoked").await;
     let registry = capped_registry(1);
     let (bystander, _bystander_rx) = live_socket(&registry, account_id);
@@ -1204,9 +1181,9 @@ async fn a_session_revoked_mid_upgrade_is_closed_with_4001() {
 /// before the handshake keeps the shutdown's wait open for a socket no
 /// registration covers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn an_upgrade_in_flight_at_shutdown_is_refused_with_1001_before_serve_returns() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, cookie) = seed_admin_session(&pool, "ws_e2e_shutdown").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let app = ws_app(&pool, &registry, vec![ROLE_ADMIN]);
@@ -1319,9 +1296,9 @@ impl ShutdownCloser for AnnouncingCloser {
 /// here, in a suite that uses the fixture, because `fuz_testing` has no
 /// database suite of its own.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_dropped_table_lock_frees_the_table() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     // checked out first, so the read below can't be served by the lock's own
     // connection coming back out of the pool
     let reader = pool.get().await.unwrap();
@@ -1497,10 +1474,9 @@ async fn write_text_frame(stream: &mut tokio::net::TcpStream, text: &str) {
 /// [`DEFAULT_WS_OUTBOUND_QUEUE_BYTES`], whatever the cap: a small cap does
 /// not shrink the budget and a large one does not grow it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn the_default_outbound_budget_does_not_follow_the_message_cap() {
     assert_eq!(DEFAULT_WS_OUTBOUND_QUEUE_BYTES, 4 * 1024 * 1024);
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     for (case, max_message_bytes) in [("small", 1024), ("large", 16 * 1024 * 1024)] {
         let (account_id, _actor_id) =
             seed_account_actor(&pool, &format!("ws_e2e_default_{case}")).await;
@@ -1543,9 +1519,8 @@ async fn the_default_outbound_budget_does_not_follow_the_message_cap() {
 /// **The override.** The budget a router's options set is the budget of the
 /// connections it admits, exactly.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn an_explicit_outbound_budget_is_honored() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _actor_id) = seed_account_actor(&pool, "ws_e2e_overflow").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve_bounded(&pool, &registry, account_id).await;
@@ -1556,9 +1531,8 @@ async fn an_explicit_outbound_budget_is_honored() {
 /// **The empty-queue exception.** One frame larger than the whole budget is
 /// still delivered when nothing is waiting, and the connection stays open.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_frame_larger_than_the_budget_is_delivered_into_an_empty_queue() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _actor_id) = seed_account_actor(&pool, "ws_e2e_oversized").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve_bounded(&pool, &registry, account_id).await;
@@ -1584,7 +1558,11 @@ async fn a_frame_larger_than_the_budget_is_delivered_into_an_empty_queue() {
 #[tokio::test]
 #[should_panic(expected = "outbound_queue_bytes is zero")]
 async fn a_zero_outbound_budget_is_refused_at_registration() {
-    let pool = fuz_db::create_pool(&DB.url(), &fuz_db::PoolOptions::default()).unwrap();
+    let pool = fuz_db::create_pool(
+        "postgres://never-connected.invalid/none",
+        &fuz_db::PoolOptions::default(),
+    )
+    .unwrap();
     let registry = Arc::new(ConnectionRegistry::new());
     let options = ActionWsOptions {
         outbound_queue_bytes: 0,
@@ -1600,9 +1578,8 @@ async fn a_zero_outbound_budget_is_refused_at_registration() {
 /// no part of the burst and no response written. A call whose `count` ×
 /// `size` is past the action's total cap is refused and floods nothing.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_flood_past_the_budget_closes_the_callers_socket_with_4005() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (keeper, _actor_id) = seed_account_actor(&pool, "ws_e2e_flood").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve_bounded(&pool, &registry, keeper).await;
@@ -1752,9 +1729,8 @@ async fn seed_two_actor_session(pool: &Pool, username: &str) -> (Uuid, Uuid, Uui
 /// `actor_required`, listing the account's actors — on an endpoint with no
 /// role gate, so the phase runs whether or not a role is read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_multi_actor_upgrade_without_acting_is_refused_actor_required() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, first, second, cookie) = seed_two_actor_session(&pool, "ws_acting_required").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve_gated(&pool, &registry, Vec::new()).await;
@@ -1778,9 +1754,8 @@ async fn a_multi_actor_upgrade_without_acting_is_refused_actor_required() {
 
 /// `?acting=` picks one of the account's actors, and the upgrade proceeds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn acting_as_an_own_actor_upgrades() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _, second, cookie) = seed_two_actor_session(&pool, "ws_acting_own").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve_gated(&pool, &registry, Vec::new()).await;
@@ -1798,9 +1773,8 @@ async fn acting_as_an_own_actor_upgrades() {
 /// A selector naming another account's actor, or no actor at all, is the
 /// twin's 400 `actor_not_on_account`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn acting_as_a_foreign_actor_is_refused_actor_not_on_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _) = seed_account_actor(&pool, "ws_acting_foreign").await;
     let (_, foreign_actor) = seed_account_actor(&pool, "ws_acting_foreign_other").await;
     let cookie =
@@ -1820,9 +1794,8 @@ async fn acting_as_a_foreign_actor_is_refused_actor_not_on_account() {
 /// A malformed selector reads as omitted, as the twin's `parse_acting` reads
 /// it: a single-actor account upgrades, a multi-actor one is told to pick.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_malformed_acting_reads_as_omitted() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (single, _) = seed_account_actor(&pool, "ws_acting_malformed_single").await;
     let single_cookie =
         mint_session_cookie(&pool, &testing_keyring(), single, SESSION_COOKIE_NAME).await;
@@ -1846,9 +1819,8 @@ async fn a_malformed_acting_reads_as_omitted() {
 /// An account whose only actor is soft-deleted has no actor to act as: the
 /// twin's 500 `no_actors_on_account`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn an_account_with_no_active_actor_is_refused_no_actors_on_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "ws_acting_no_actors").await;
     let cookie =
         mint_session_cookie(&pool, &testing_keyring(), account_id, SESSION_COOKIE_NAME).await;
@@ -1870,9 +1842,8 @@ async fn an_account_with_no_active_actor_is_refused_no_actors_on_account() {
 /// endpoint, an account whose first actor is admin is refused 403 acting as
 /// its roleless sibling, and upgrades acting as the admin.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn the_role_gate_reads_the_acting_actors_grants() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, admin, roleless, cookie) =
         seed_two_actor_session(&pool, "ws_acting_role").await;
     grant_role(&pool, admin, ROLE_ADMIN).await;
@@ -1900,9 +1871,8 @@ async fn the_role_gate_reads_the_acting_actors_grants() {
 /// The admission re-read reads the acting actor's grants too: a role held
 /// only by a sibling actor of the account does not admit.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_role_held_by_a_sibling_actor_is_refused_at_admission_with_4006() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, roleless) = seed_account_actor(&pool, "ws_acting_sibling_role").await;
     let admin = seed_extra_actor(&pool, account_id, "ws_acting_sibling_role_admin").await;
     grant_role(&pool, admin, ROLE_ADMIN).await;
@@ -1920,9 +1890,8 @@ async fn a_role_held_by_a_sibling_actor_is_refused_at_admission_with_4006() {
 /// A duplicated `acting` key reads its first occurrence, as Hono's
 /// `c.req.query('acting')` does: the later one is never consulted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_duplicated_acting_reads_its_first_occurrence() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _, second, cookie) = seed_two_actor_session(&pool, "ws_acting_dup").await;
     let registry = Arc::new(ConnectionRegistry::new());
     let addr = serve_gated(&pool, &registry, Vec::new()).await;
@@ -1948,9 +1917,8 @@ async fn a_duplicated_acting_reads_its_first_occurrence() {
 /// multi-actor account omitting `acting` is told about its scope, not asked
 /// to pick an actor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn the_scope_gate_answers_before_the_acting_actor_phase() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _, _, _) = seed_two_actor_session(&pool, "ws_acting_scope_order").await;
     let narrowed = TokenScopeDocument::methods(std::collections::BTreeSet::from([
         "account_status".to_owned(),

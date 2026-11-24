@@ -1,33 +1,39 @@
-//! The hand-kept lists of real-Postgres suites agree with the tree.
+//! The hand-kept lists of database suites agree with the tree.
 //!
-//! The `#[ignore]` real-Postgres suites run only where a list names them: the
-//! `db-tests` job in `.github/workflows/check.yml` (its env block, its
-//! `CREATE DATABASE` step, and its `cargo test -p …` line) and the recipe in
-//! `docs/testing.md` § Postgres suites (the `export` lines, the `createdb`
-//! loop, and the `cargo test -p …` line). A crate missing from a `-p` list
-//! leaves the job green while its suite never runs, so this test holds both
-//! lists to the tree, in both directions.
+//! Every DB test opens its database through `fuz_testing::fresh_test_db`, on
+//! pglet in plain `cargo test` and on PostgreSQL under `FUZ_TEST_POSTGRES_URL`.
+//! The PostgreSQL leg runs only where a list names it: the `db-tests` job in
+//! `.github/workflows/check.yml` (its env block and its `cargo test -p …`
+//! line) and the recipe in `docs/testing.md` § Postgres suites (its `export`
+//! line and its `cargo test -p …` line). A crate missing from a `-p` list
+//! leaves the job green while its tests never meet PostgreSQL, and its
+//! Postgres-only tests never run at all, so this test holds both lists to the
+//! tree, in both directions.
 //!
-//! **Detection.** A workspace member has a real-Postgres suite when one of its
-//! `.rs` files names a `*_TEST_URL` variable as a whole string literal outside
-//! a comment — the `env_var: "…"` of a suite's `TestingDbOptions`, or the
-//! `env::var("…")` of a suite that connects on its own (`fuz_db`'s
-//! integration suite, `fuz_http`'s `ready`). Prose mentions (backticked in a
-//! doc comment, inside an `#[ignore = "…"]` reason) are not literals of the
-//! name and don't count. A crate found this way must also carry an
-//! `#[ignore` attribute, or the suite would run under plain `cargo test`.
-//! This file is not scanned: it names the variables it checks.
+//! **Detection.** A workspace member has database tests when one of its `.rs`
+//! files names `fresh_test_db` as a whole word outside a comment — a call, or
+//! the `use` that imports it, so an `as` alias still counts — or carries one
+//! of the two markers below, or when its `Cargo.toml` lists `fuz_testing`
+//! under `[dev-dependencies]`, which catches an opener reached through a
+//! wrapper or re-export in `fuz_testing` that never names `fresh_test_db`.
+//! Each must be in both `-p` lists, and nothing else may be.
 //!
-//! A suite reads its own crate's variable (`fuz_auth` → `FUZ_AUTH_TEST_URL`),
-//! except where [`SHARED_DATABASES`] says it shares another crate's: `fuz_http`
-//! shares `fuz_db`'s, so it is in each `-p` list with no variable or database
-//! of its own.
+//! **Markers.** In such a crate every `#[ignore` attribute (and every
+//! `#[cfg_attr(…)]` that holds an `ignore`) is one of the two
+//! the PostgreSQL leg is for: `#[ignore = "postgres-only: <why>"]` (a test of
+//! what only PostgreSQL has) or `#[ignore = "pglet: <feature>"]` (a test
+//! waiting on a pglet feature) — the leg runs with `--include-ignored`, so any
+//! other ignored test there would run in it unasked. A crate carrying a marker
+//! must name the Postgres engine (`TestEngine::Postgres` or
+//! `.postgres_only()`), and a crate naming it must carry a marker, or its
+//! Postgres-only test would either run on pglet or never be ignored.
 //!
 //! Both lists must also run what they name: the `cargo test` command takes
-//! only `--locked` and `-p` flags before `--` and exactly `--ignored` and
-//! `--test-threads=1` after it, holds no token the shell would read as a
-//! comment or operator, and is the test step's whole `run:`; neither the job
-//! nor its test step may carry `if:`, `continue-on-error:`, or `shell:`.
+//! only `--locked` and `-p` flags before `--` and exactly `--include-ignored`
+//! after it, holds no token the shell would read as a comment or operator, and
+//! is the test step's whole `run:`; neither the job nor its test step may carry
+//! `if:`, `continue-on-error:`, or `shell:`. Each list sets
+//! `FUZ_TEST_POSTGRES_URL` and no other `*_TEST_URL`.
 //!
 //! The YAML and Markdown are read as text by small readers that skip blank and
 //! comment lines and refuse any other shape they don't expect, so a reshaped
@@ -38,13 +44,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The suffix of every real-Postgres suite's connection variable.
+/// The one variable that moves the DB tests onto PostgreSQL.
+const POSTGRES_URL_VARIABLE: &str = "FUZ_TEST_POSTGRES_URL";
+
+/// The suffix a retired per-crate connection variable carries; neither list
+/// may set one.
 const TEST_URL_SUFFIX: &str = "_TEST_URL";
 
-/// Crates whose suite reads another crate's database: `(crate, owner)`. Each
-/// scopes its rows so the two can share it (`docs/testing.md` § Postgres
-/// suites).
-const SHARED_DATABASES: &[(&str, &str)] = &[("fuz_http", "fuz_db")];
+/// The function whose name, as a whole word, marks a crate as having database
+/// tests.
+const FRESH_DB_FN: &str = "fresh_test_db";
+
+/// The two `#[ignore` reasons a database crate may carry.
+const ENGINE_MARKERS: [&str; 2] = ["#[ignore = \"postgres-only: ", "#[ignore = \"pglet: "];
+
+/// The spellings that declare a test's database Postgres-only.
+const POSTGRES_ENGINE_SITES: [&str; 2] = ["TestEngine::Postgres", ".postgres_only()"];
+
+/// The module that defines the engines, whose own code names them; not scanned
+/// for engine sites.
+const ENGINE_DEFINITION: &str = "crates/fuz_testing/src/fresh_db.rs";
 
 /// This file, relative to the workspace root.
 const THIS_FILE: &str = "crates/xtask/tests/db_suite_lists.rs";
@@ -58,11 +77,6 @@ fn workspace_root() -> Result<PathBuf, String> {
 
 fn read(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))
-}
-
-/// The variable a crate's own suite reads: `fuz_auth` → `FUZ_AUTH_TEST_URL`.
-fn own_variable(crate_name: &str) -> String {
-    format!("{}{TEST_URL_SUFFIX}", crate_name.to_ascii_uppercase())
 }
 
 //
@@ -122,6 +136,25 @@ fn package_name(dir: &Path) -> Result<String, String> {
     Err(format!("{}: no `name` in `[package]`", path.display()))
 }
 
+/// Whether a member's `manifest` lists `fuz_testing` under
+/// `[dev-dependencies]`, read line by line as [`package_name`] reads
+/// `[package]`.
+fn has_fuz_testing_dev_dependency(manifest: &str) -> bool {
+    let mut in_dev_dependencies = false;
+    for line in manifest.lines() {
+        if line.starts_with('[') {
+            in_dev_dependencies = line == "[dev-dependencies]";
+        } else if in_dev_dependencies
+            && (line.starts_with("fuz_testing ")
+                || line.starts_with("fuz_testing.")
+                || line.starts_with("fuz_testing="))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Every `.rs` file under `dir`, skipping build output.
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
@@ -141,46 +174,44 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-/// The `*_TEST_URL` names `line` holds as whole string literals (`"NAME"`).
-fn test_url_literals(line: &str) -> Vec<String> {
-    let needle = format!("{TEST_URL_SUFFIX}\"");
-    let bytes = line.as_bytes();
-    let mut names = Vec::new();
-    let mut from = 0;
-    while let Some(offset) = line[from..].find(&needle) {
-        let end = from + offset + TEST_URL_SUFFIX.len();
-        let mut start = from + offset;
-        while start > 0
-            && (bytes[start - 1].is_ascii_uppercase()
-                || bytes[start - 1].is_ascii_digit()
-                || bytes[start - 1] == b'_')
-        {
-            start -= 1;
-        }
-        if start > 0 && bytes[start - 1] == b'"' && start < from + offset {
-            names.push(line[start..end].to_string());
-        }
-        from = end + 1;
-    }
-    names
-}
-
-/// What the tree says about one crate's real-Postgres suite.
+/// What the tree says about one crate's database tests.
 #[derive(Debug, Default)]
 struct Suite {
-    /// The `*_TEST_URL` variables its code reads.
-    variables: BTreeSet<String>,
-    /// Whether any of its files carries an `#[ignore` attribute.
-    has_ignore: bool,
+    /// Whether any of its files names `fresh_test_db` as a whole word.
+    opens_databases: bool,
+    /// Each `#[ignore` attribute that is not an [`ENGINE_MARKERS`] one, with
+    /// its file.
+    other_ignores: Vec<String>,
+    /// Whether any of its files carries an [`ENGINE_MARKERS`] attribute.
+    has_marker: bool,
+    /// Whether any of its files names a [`POSTGRES_ENGINE_SITES`] spelling.
+    names_postgres_engine: bool,
 }
 
-/// Every workspace member with a real-Postgres suite, by package name.
+/// Whether `code` is a `#[cfg_attr(…)]` that can ignore a test — one that
+/// would dodge the marker rule as `#[ignore` alone can't.
+fn is_cfg_attr_ignore(code: &str) -> bool {
+    code.starts_with("#[cfg_attr(") && names_word(code, "ignore")
+}
+
+/// Whether `line` holds `word` with no identifier character on either side.
+fn names_word(line: &str, word: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    line.match_indices(word).any(|(at, _)| {
+        !line[..at].ends_with(is_ident) && !line[at + word.len()..].starts_with(is_ident)
+    })
+}
+
+/// Every workspace member with database tests, by package name.
 fn suites_in_tree(root: &Path) -> Result<BTreeMap<String, Suite>, String> {
     let this_file = root.join(THIS_FILE);
+    let engine_definition = root.join(ENGINE_DEFINITION);
     let mut suites = BTreeMap::new();
     for (name, dir) in workspace_members(root)? {
         let mut files = Vec::new();
         rust_files(&dir, &mut files)?;
+        let dev_depends_on_fuz_testing =
+            has_fuz_testing_dev_dependency(&read(&dir.join("Cargo.toml"))?);
         let mut suite = Suite::default();
         for file in files.iter().filter(|file| **file != this_file) {
             for line in read(file)?.lines() {
@@ -188,49 +219,79 @@ fn suites_in_tree(root: &Path) -> Result<BTreeMap<String, Suite>, String> {
                 if code.starts_with("//") {
                     continue;
                 }
-                suite.has_ignore |= code.starts_with("#[ignore");
-                suite.variables.extend(test_url_literals(code));
+                suite.opens_databases |= names_word(code, FRESH_DB_FN);
+                if code.starts_with("#[ignore") {
+                    if ENGINE_MARKERS.iter().any(|marker| code.starts_with(marker)) {
+                        suite.has_marker = true;
+                    } else {
+                        suite
+                            .other_ignores
+                            .push(format!("{}: {code}", file.display()));
+                    }
+                } else if is_cfg_attr_ignore(code) {
+                    suite
+                        .other_ignores
+                        .push(format!("{}: {code}", file.display()));
+                }
+                if *file != engine_definition {
+                    suite.names_postgres_engine |=
+                        POSTGRES_ENGINE_SITES.iter().any(|site| code.contains(site));
+                }
             }
         }
-        if !suite.variables.is_empty() {
+        if suite.opens_databases || suite.has_marker || dev_depends_on_fuz_testing {
             suites.insert(name, suite);
         }
     }
     Ok(suites)
 }
 
+/// Every way the tree's own suites break the marker rules.
+fn tree_problems(tree: &BTreeMap<String, Suite>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (crate_name, suite) in tree {
+        for ignore in &suite.other_ignores {
+            problems.push(format!(
+                "crate `{crate_name}` has database tests, so its ignored tests run in the \
+                 PostgreSQL leg; an `#[ignore` there must be `postgres-only: …` or `pglet: …`: \
+                 {ignore}"
+            ));
+        }
+        if suite.has_marker && !suite.names_postgres_engine {
+            problems.push(format!(
+                "crate `{crate_name}` marks a test Postgres-only but never opens a database with \
+                 `TestEngine::Postgres`: the test would run on pglet"
+            ));
+        }
+        if suite.names_postgres_engine && !suite.has_marker {
+            problems.push(format!(
+                "crate `{crate_name}` opens a Postgres-only database but marks no test \
+                 `postgres-only: …` or `pglet: …`: plain `cargo test` would run it and fail"
+            ));
+        }
+    }
+    problems
+}
+
 //
 // The lists
 //
 
-/// One hand-kept list of the suites: what it runs, the variables it sets, and
-/// the databases it creates.
+/// One hand-kept list of the suites: what it runs and the variables it sets.
 #[derive(Debug)]
 struct SuiteList {
     /// Which list, for messages.
     name: &'static str,
     /// The `-p` crates of its `cargo test` line.
     crates: BTreeSet<String>,
-    /// Each `*_TEST_URL` it sets, with the database its URL names.
-    variables: BTreeMap<String, String>,
-    /// The databases it creates.
-    databases: BTreeSet<String>,
+    /// The connection variables it sets.
+    variables: BTreeSet<String>,
 }
 
-/// The database a `postgres://…/<db>` URL names.
-fn database_of(url: &str) -> Result<String, String> {
-    let db = url
-        .strip_prefix("postgres://")
-        .and_then(|rest| rest.rsplit_once('/'))
-        .map(|(_, db)| db.split('?').next().unwrap_or(db))
-        .filter(|db| !db.is_empty())
-        .ok_or_else(|| format!("not a `postgres://…/<db>` URL: {url}"))?;
-    Ok(db.to_string())
-}
-
-/// The libtest arguments a suite run takes after `--`: exactly these. A filter,
-/// `--exact`, or `--skip` would leave some or all of the suites unrun.
-const LIBTEST_ARGS: [&str; 2] = ["--ignored", "--test-threads=1"];
+/// The libtest arguments the PostgreSQL leg takes after `--`: exactly these. A
+/// filter, `--exact`, or `--skip` would leave some or all of the tests unrun,
+/// and without `--include-ignored` the Postgres-only ones never run.
+const LIBTEST_ARGS: [&str; 1] = ["--include-ignored"];
 
 /// The characters that make a shell token more than a word: a comment, a
 /// pipe or `||`, a background or `&&`, a separator, a redirect, an expansion.
@@ -238,10 +299,10 @@ const SHELL_METACHARACTERS: [char; 7] = ['|', '&', ';', '<', '>', '$', '`'];
 
 /// The crates of a `cargo test` command's `tokens` (everything after
 /// `cargo test`), which must take the form `[--locked] -p <crate>… --
-/// --ignored --test-threads=1` (the last two in either order). Any other
-/// token is refused: a flag such as `--no-run` before `--` or a filter after
-/// it leaves suites unrun, and a token starting with `#` or holding a shell
-/// metacharacter (`|| true`, `; exit 0`) comments out or masks the run.
+/// --include-ignored`. Any other token is refused: a flag such as `--no-run`
+/// before `--` or a filter after it leaves tests unrun, and a token starting
+/// with `#` or holding a shell metacharacter (`|| true`, `; exit 0`) comments
+/// out or masks the run.
 fn cargo_test_crates<'a>(
     tokens: impl Iterator<Item = &'a str>,
     context: &str,
@@ -283,8 +344,8 @@ fn cargo_test_crates<'a>(
     }
     if !separated {
         return Err(format!(
-            "{context}: the `cargo test` command has no `--`, so no `--ignored`: the suites \
-             would never run"
+            "{context}: the `cargo test` command has no `--`, so no `--include-ignored`: the \
+             Postgres-only tests would never run"
         ));
     }
     let mut libtest = BTreeSet::new();
@@ -310,6 +371,12 @@ fn cargo_test_crates<'a>(
         return Err(format!("{context}: no `-p` crates"));
     }
     Ok(crates)
+}
+
+/// Whether `name` is a connection variable a list must account for: the one
+/// it must set, or a retired per-crate one it must not.
+fn is_connection_variable(name: &str) -> bool {
+    name == POSTGRES_URL_VARIABLE || name.ends_with(TEST_URL_SUFFIX)
 }
 
 /// The workflow keys that can switch the suite run off (`if`), turn its
@@ -376,7 +443,7 @@ fn ci_list(root: &Path) -> Result<SuiteList, String> {
             env_lines.len()
         ));
     };
-    let mut variables = BTreeMap::new();
+    let mut variables = BTreeSet::new();
     for line in &job[env + 1..] {
         if is_blank_or_comment(line) {
             continue;
@@ -393,32 +460,16 @@ fn ci_list(root: &Path) -> Result<SuiteList, String> {
             .trim_start()
             .split_once(": ")
             .ok_or_else(|| format!("{FILE}: not a `NAME: value` env entry: {line}"))?;
-        if name.ends_with(TEST_URL_SUFFIX) {
-            let db = database_of(value).map_err(|e| format!("{FILE}: `{name}`: {e}"))?;
-            if variables.insert(name.to_string(), db).is_some() {
+        if is_connection_variable(name) {
+            if !value.starts_with("postgres://") {
+                return Err(format!(
+                    "{FILE}: `{name}` is not a `postgres://` URL: {value}"
+                ));
+            }
+            if !variables.insert(name.to_string()) {
                 return Err(format!("{FILE}: `{name}` set twice in `db-tests` env"));
             }
         }
-    }
-    if variables.is_empty() {
-        return Err(format!("{FILE}: no `*{TEST_URL_SUFFIX}` in `db-tests` env"));
-    }
-
-    let mut databases = BTreeSet::new();
-    for line in job.iter().filter(|line| !is_blank_or_comment(line)) {
-        if let Some((_, rest)) = line.split_once("CREATE DATABASE ") {
-            let db = rest
-                .split_once(';')
-                .map(|(db, _)| db.trim())
-                .filter(|db| !db.is_empty() && !db.contains(' '))
-                .ok_or_else(|| format!("{FILE}: unreadable `CREATE DATABASE`: {line}"))?;
-            if !databases.insert(db.to_string()) {
-                return Err(format!("{FILE}: `CREATE DATABASE {db}` twice"));
-            }
-        }
-    }
-    if databases.is_empty() {
-        return Err(format!("{FILE}: no `CREATE DATABASE` in `db-tests`"));
     }
 
     let crates = ci_cargo_test_crates(job, FILE)?;
@@ -426,7 +477,6 @@ fn ci_list(root: &Path) -> Result<SuiteList, String> {
         name: "the `db-tests` job in .github/workflows/check.yml",
         crates,
         variables,
-        databases,
     })
 }
 
@@ -583,11 +633,10 @@ fn docs_list(root: &Path) -> Result<SuiteList, String> {
         .ok_or_else(|| format!("{FILE}: unclosed ```bash block in § Postgres suites"))?;
     let block = &lines[open..close];
 
-    let mut variables = BTreeMap::new();
-    let mut databases = None;
+    let mut variables = BTreeSet::new();
     let mut crates = None;
     for line in block.iter().filter(|line| !is_blank_or_comment(line)) {
-        // A trailing shell comment (` # one-time`) is not part of the command.
+        // A trailing shell comment (` # once`) is not part of the command.
         let command = line
             .split_once(" #")
             .map_or(*line, |(command, _)| command)
@@ -601,27 +650,18 @@ fn docs_list(root: &Path) -> Result<SuiteList, String> {
             let (name, value) = export
                 .split_once('=')
                 .ok_or_else(|| format!("{FILE}: not an `export NAME=value`: {line}"))?;
-            if !name.ends_with(TEST_URL_SUFFIX) {
+            if !is_connection_variable(name) {
                 return Err(format!(
-                    "{FILE}: an export that is no `*{TEST_URL_SUFFIX}`: {line}"
+                    "{FILE}: an export that is no connection variable: {line}"
                 ));
             }
-            let db = database_of(value).map_err(|e| format!("{FILE}: `{name}`: {e}"))?;
-            if variables.insert(name.to_string(), db).is_some() {
+            if !value.starts_with("postgres://") {
+                return Err(format!(
+                    "{FILE}: `{name}` is not a `postgres://` URL: {value}"
+                ));
+            }
+            if !variables.insert(name.to_string()) {
                 return Err(format!("{FILE}: `{name}` exported twice"));
-            }
-        } else if let Some(rest) = command.strip_prefix("for db in ") {
-            let names = rest
-                .strip_suffix("; do createdb $db; done")
-                .ok_or_else(|| format!("{FILE}: not a `createdb` loop: {line}"))?;
-            let mut set = BTreeSet::new();
-            for db in names.split_whitespace() {
-                if !set.insert(db.to_string()) {
-                    return Err(format!("{FILE}: `{db}` twice in the `createdb` loop"));
-                }
-            }
-            if databases.replace(set).is_some() {
-                return Err(format!("{FILE}: two `createdb` loops"));
             }
         } else if let Some(rest) = command.strip_prefix("cargo test ") {
             if crates
@@ -634,14 +674,10 @@ fn docs_list(root: &Path) -> Result<SuiteList, String> {
             return Err(format!("{FILE}: unexpected line in the recipe: {line}"));
         }
     }
-    if variables.is_empty() {
-        return Err(format!("{FILE}: no `export` lines in the recipe"));
-    }
     Ok(SuiteList {
         name: "the recipe in docs/testing.md § Postgres suites",
         crates: crates.ok_or_else(|| format!("{FILE}: no `cargo test` line in the recipe"))?,
         variables,
-        databases: databases.ok_or_else(|| format!("{FILE}: no `createdb` loop in the recipe"))?,
     })
 }
 
@@ -653,84 +689,29 @@ fn docs_list(root: &Path) -> Result<SuiteList, String> {
 fn disagreements(tree: &BTreeMap<String, Suite>, list: &SuiteList) -> Vec<String> {
     let mut problems = Vec::new();
     let name = list.name;
-    let mut wanted_variables = BTreeSet::new();
-    for (crate_name, suite) in tree {
+    for crate_name in tree.keys() {
         if !list.crates.contains(crate_name) {
             problems.push(format!(
-                "crate `{crate_name}` has a real-Postgres suite but is missing from the `-p` \
-                 list of {name}"
+                "crate `{crate_name}` has database tests but is missing from the `-p` list of \
+                 {name}"
             ));
-        }
-        for variable in &suite.variables {
-            wanted_variables.insert(variable.clone());
-            match list.variables.get(variable) {
-                None => problems.push(format!(
-                    "crate `{crate_name}`'s suite reads `{variable}`, which {name} does not set"
-                )),
-                Some(db) if !list.databases.contains(db) => problems.push(format!(
-                    "crate `{crate_name}`'s database `{db}` (`{variable}`) is not created by {name}"
-                )),
-                Some(_) => {}
-            }
         }
     }
     for crate_name in &list.crates {
         if !tree.contains_key(crate_name) {
             problems.push(format!(
-                "{name} lists crate `{crate_name}` with `-p`, but it has no real-Postgres suite"
+                "{name} lists crate `{crate_name}` with `-p`, but it has no database tests"
             ));
         }
     }
-    let mut wanted_databases = BTreeSet::new();
-    for (variable, db) in &list.variables {
-        wanted_databases.insert(db.clone());
-        if !wanted_variables.contains(variable) {
-            problems.push(format!(
-                "{name} sets `{variable}`, which no crate's suite reads"
-            ));
-        }
+    if !list.variables.contains(POSTGRES_URL_VARIABLE) {
+        problems.push(format!("{name} does not set `{POSTGRES_URL_VARIABLE}`"));
     }
-    for db in &list.databases {
-        if !wanted_databases.contains(db) {
+    for variable in &list.variables {
+        if variable != POSTGRES_URL_VARIABLE {
             problems.push(format!(
-                "{name} creates database `{db}`, which no `*{TEST_URL_SUFFIX}` it sets names"
-            ));
-        }
-    }
-    problems
-}
-
-/// Every way the tree's own suites break the naming rule: a suite reads its
-/// crate's variable, or the one [`SHARED_DATABASES`] names, and carries an
-/// `#[ignore`.
-fn tree_problems(tree: &BTreeMap<String, Suite>) -> Vec<String> {
-    let mut problems = Vec::new();
-    for (crate_name, suite) in tree {
-        let owner = SHARED_DATABASES
-            .iter()
-            .find(|(sharer, _)| sharer == crate_name)
-            .map_or(crate_name.as_str(), |(_, owner)| owner);
-        let expected = BTreeSet::from([own_variable(owner)]);
-        if suite.variables != expected {
-            problems.push(format!(
-                "crate `{crate_name}`'s suite reads {:?}, expected exactly {expected:?} \
-                 (a suite sharing another crate's database is listed in SHARED_DATABASES)",
-                suite.variables
-            ));
-        }
-        if !suite.has_ignore {
-            problems.push(format!(
-                "crate `{crate_name}` reads {:?} but has no `#[ignore` test: the suite would \
-                 run under plain `cargo test`",
-                suite.variables
-            ));
-        }
-    }
-    for (sharer, owner) in SHARED_DATABASES {
-        if !tree.contains_key(*sharer) || !tree.contains_key(*owner) {
-            problems.push(format!(
-                "SHARED_DATABASES names `{sharer}` sharing `{owner}`'s database, \
-                 but the tree has no such pair of suites"
+                "{name} sets `{variable}`, which no test reads: `{POSTGRES_URL_VARIABLE}` is the \
+                 one connection variable"
             ));
         }
     }
@@ -743,8 +724,8 @@ fn the_postgres_suite_lists_match_the_tree() {
     let tree = suites_in_tree(&root).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         !tree.is_empty(),
-        "found no real-Postgres suite in the workspace: the detection rule in this \
-         file's doc no longer matches how the suites are written"
+        "found no database tests in the workspace: the detection rule in this file's doc no \
+         longer matches how the suites are written"
     );
     let mut problems = tree_problems(&tree);
     for list in [ci_list(&root), docs_list(&root)] {
@@ -753,26 +734,62 @@ fn the_postgres_suite_lists_match_the_tree() {
     }
     assert!(
         problems.is_empty(),
-        "the real-Postgres suite lists disagree with the tree:\n- {}",
+        "the database suite lists disagree with the tree:\n- {}",
         problems.join("\n- ")
     );
 }
 
 #[test]
-fn a_test_url_literal_is_found_only_whole_and_quoted() {
-    let name = |stem: &str| format!("{stem}{TEST_URL_SUFFIX}");
-    let a = name("FUZ_A");
-    let b = name("FUZ_B");
-    assert_eq!(
-        test_url_literals(&format!("env_var: \"{a}\",")),
-        std::slice::from_ref(&a)
-    );
-    assert_eq!(
-        test_url_literals(&format!("env::var(\"{a}\").or(env::var(\"{b}\"))")),
-        [a.clone(), b]
-    );
-    // Prose inside another string, or a bare suffix, is not a literal of a name.
-    assert!(test_url_literals(&format!("#[ignore = \"needs Postgres ({a})\"]")).is_empty());
-    assert!(test_url_literals(&format!("\"{TEST_URL_SUFFIX}\"")).is_empty());
-    assert!(test_url_literals(&format!("\"x {a}\"")).is_empty());
+fn fresh_test_db_is_found_as_a_whole_word() {
+    // a call, and the import an `as` alias hides the call behind
+    assert!(names_word(
+        "let pool = fresh_test_db(DB).await;",
+        FRESH_DB_FN
+    ));
+    assert!(names_word(
+        "use fuz_testing::{TestEngine, fresh_test_db as open_db};",
+        FRESH_DB_FN
+    ));
+    assert!(names_word("use fuz_testing::fresh_test_db;", FRESH_DB_FN));
+    // a longer identifier is another name
+    assert!(!names_word("fn my_fresh_test_db_helper() {}", FRESH_DB_FN));
+    assert!(!names_word("let x = fresh_test_dbs;", FRESH_DB_FN));
+}
+
+/// The reviewer's re-export probe: `fuz_testing` re-exports the opener under
+/// another name and a crate's tests call only that name, so no file of the
+/// crate names `fresh_test_db`; its `[dev-dependencies]` edge still counts it.
+#[test]
+fn a_crate_reaching_the_opener_through_a_re_export_is_found_by_its_manifest() {
+    assert!(!names_word("let pool = open_db(DB).await;", FRESH_DB_FN));
+    assert!(!names_word(
+        "use fuz_testing::{TestEngine, open_db};",
+        FRESH_DB_FN
+    ));
+    let manifest = "[package]\nname = \"fuz_http\"\n\n[dependencies]\nfuz_db.workspace = true\n\n\
+                    [dev-dependencies]\ntokio = { workspace = true }\nfuz_testing.workspace = true\n";
+    assert!(has_fuz_testing_dev_dependency(manifest));
+    // a normal edge, as a `testing_*` binary has, is not a test suite's
+    let normal =
+        "[package]\nname = \"testing_x\"\n\n[dependencies]\nfuz_testing.workspace = true\n";
+    assert!(!has_fuz_testing_dev_dependency(normal));
+}
+
+#[test]
+fn a_cfg_attr_ignore_counts_as_an_ignore() {
+    assert!(is_cfg_attr_ignore(
+        "#[cfg_attr(not(feature = \"pg\"), ignore = \"needs pg\")]"
+    ));
+    assert!(is_cfg_attr_ignore("#[cfg_attr(ci, ignore)]"));
+    assert!(!is_cfg_attr_ignore("#[cfg_attr(test, derive(Debug))]"));
+}
+
+#[test]
+fn the_libtest_args_are_exactly_include_ignored() {
+    let crates = |args: &str| cargo_test_crates(args.split_whitespace(), "probe");
+    assert!(crates("--locked -p a -p b -- --include-ignored").is_ok());
+    assert!(crates("-p a -- --ignored").is_err());
+    assert!(crates("-p a -- --include-ignored --test-threads=1").is_err());
+    assert!(crates("-p a").is_err());
+    assert!(crates("-p a -- --include-ignored || true").is_err());
 }

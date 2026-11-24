@@ -1,5 +1,5 @@
 //! A cell write naming an actor while that actor's account is purged, against
-//! a real `PostgreSQL`.
+//! a live database.
 //!
 //! The provenance stamps `cell.updated_by` and `cell_grant.granted_by` carry
 //! no foreign key, so a write stamping a purged actor neither waits on the
@@ -9,13 +9,6 @@
 //! before any cell row.
 //!
 //! Twin of `fuz_app`'s `src/test/db/cell_queries.races.db.test.ts`.
-//!
-//! `--ignored`-gated (needs Postgres). Run single-threaded against the
-//! shared `fuz_cell_test` DB:
-//!
-//! ```sh
-//! cargo test -p fuz_cell --test cell_purge_races -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -26,7 +19,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::fresh_db_pool;
+use common::{fresh_db, fresh_postgres_db};
 use fuz_auth::account_queries::query_purge_account;
 use fuz_cell::cell_grant_queries::query_cell_grant_create;
 use fuz_cell::cell_grant_schema::{CellGrantLevel, CellGrantPrincipalInput};
@@ -77,9 +70,9 @@ async fn insert_grant(pool: &Pool, actor: uuid::Uuid) -> uuid::Uuid {
 /// foreign key), and `updated_by` keeps the purged actor's id. Twin of the TS
 /// case.
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_owners_first_edit_of_their_cell_across_their_purge_both_commit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (owner_account, owner) = seed_account_actor(&pool, "cell_race_owner").await;
     let pinned = insert_grant(&pool, owner).await;
     let client = pool.get().await.unwrap();
@@ -184,9 +177,8 @@ async fn an_owners_first_edit_of_their_cell_across_their_purge_both_commit() {
 /// foreign key, so the insert no longer fails on it (`23503` with one). Twin
 /// of the TS case.
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn a_cell_grant_by_a_purged_granter_is_written() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (granter_account, granter) = seed_account_actor(&pool, "cell_race_granter").await;
     let (_, grantee) = seed_account_actor(&pool, "cell_race_grantee").await;
     let client = pool.get().await.unwrap();

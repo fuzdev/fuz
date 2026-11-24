@@ -1,7 +1,7 @@
 //! The account / actor / role-grant fixture rows shared by the spine's
-//! `#[ignore]` `PostgreSQL` suites.
+//! database suites.
 //!
-//! Sibling of [`crate::fresh_db`]: that module hands a suite a migrated pool,
+//! Sibling of [`crate::fresh_db`]: that module hands a test a migrated database,
 //! this one seeds the identity rows nearly every case then needs, and
 //! [`crate::credentials`] mints the credential those identities authenticate
 //! with. `fuz_auth`, `fuz_cell`, `fuz_actions`, and `fuz_fact_serving` each

@@ -5,15 +5,6 @@
 //! but the audit ids survive (no FK) with identity snapshotted in metadata.
 //! A self-delete is session-only (handler-enforced, ahead of the keeper /
 //! last-admin guards); an admin deleting another account keeps any credential.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test account_delete -- --ignored --test-threads=1
-//! ```
-//!
-//! `--test-threads=1` is required because every test drops + recreates
-//! the shared schema; parallel runs race on the `schema_version` table.
 
 #![expect(
     clippy::expect_used,
@@ -39,7 +30,7 @@ use serde_json::{Value, json};
 
 mod common;
 use common::{
-    build_audit, closer, ctx, fresh_db_pool, seed_account_actor, seed_admin, seed_extra_actor,
+    build_audit, closer, ctx, fresh_db, seed_account_actor, seed_admin, seed_extra_actor,
     seed_role_grant_direct,
 };
 
@@ -84,9 +75,8 @@ async fn audit_rows_for_target(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_soft_deletes_and_audits() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -142,11 +132,10 @@ async fn account_delete_soft_deletes_and_audits() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_undelete_reactivates_and_audits() {
     // Admin soft-deletes then reactivates — the tombstone clears, auth
     // resolution finds the account again, and undelete events are emitted.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -198,10 +187,9 @@ async fn account_undelete_reactivates_and_audits() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_undelete_missing_or_active_404() {
     // Undeleting an account that isn't soft-deleted is a not-found no-op.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -221,11 +209,10 @@ async fn account_undelete_missing_or_active_404() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_self_without_account_id() {
     // Self-delete: omit `account_id` → the caller's own account is
     // tombstoned (no admin role needed) — over a session, `ctx`'s default.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let self_account_id = auth.account.id;
     let audit = build_audit(pool.clone());
@@ -247,9 +234,8 @@ async fn account_delete_self_without_account_id() {
 /// naming the caller in either case — is refused with the dispatcher's own
 /// `credential_type_required` body, and the account survives.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_self_refuses_a_token() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let self_account_id = auth.account.id;
     let audit = build_audit(pool.clone());
@@ -288,9 +274,8 @@ async fn account_delete_self_refuses_a_token() {
 /// self-deleting over a token learns `credential_type_required`, not
 /// `cannot_delete_keeper`.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_self_credential_check_precedes_the_keeper_guard() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     seed_role_grant_direct(&pool, auth.actor.id, ROLE_KEEPER, None).await;
     let audit = build_audit(pool.clone());
@@ -324,9 +309,8 @@ async fn account_delete_self_credential_check_precedes_the_keeper_guard() {
 /// An admin deleting **another** account keeps any credential — the spec
 /// gate is `Any` and the handler's session check is the self path's alone.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_other_admits_a_token() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -352,9 +336,8 @@ async fn account_delete_other_admits_a_token() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_missing_account_404() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -373,11 +356,10 @@ async fn account_delete_missing_account_404() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_refuses_keeper() {
     // The keeper account is never API-removable — soft-delete is refused
     // with cannot_delete_keeper and the row is untouched.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -413,11 +395,10 @@ async fn account_delete_refuses_keeper() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_purge_refuses_keeper() {
     // Even keeper-authorized purge refuses to remove a keeper account —
     // purging the last keeper would brick keeper/daemon auth.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -452,12 +433,11 @@ async fn account_purge_refuses_keeper() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_refuses_last_admin_then_allows_with_a_second() {
     // The sole active admin can't be deleted; adding a second lifts the guard.
     // `seed_admin` creates the caller account but no admin role_grant row, so
     // the only DB admin is the one we seed directly.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -505,9 +485,8 @@ async fn account_delete_refuses_last_admin_then_allows_with_a_second() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_purge_requires_confirm() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -539,7 +518,6 @@ async fn account_purge_requires_confirm() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn purge_soft_deleted_admin_succeeds_with_another_active_admin() {
     // Regression: a last-admin guard that tests the target with the
     // tombstone-blind `query_account_has_global_role` disagrees with the
@@ -548,7 +526,7 @@ async fn purge_soft_deleted_admin_succeeds_with_another_active_admin() {
     // `count=1` and be falsely blocked as `cannot_delete_last_admin`, even
     // though a tombstoned admin can't lower the active count. The admin branch
     // uses the active-account predicate (`query_account_has_active_global_role`).
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -588,12 +566,11 @@ async fn purge_soft_deleted_admin_succeeds_with_another_active_admin() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn last_active_admin_blocked_even_with_a_tombstoned_admin() {
     // Safety counterpart: the active-account predicate must not swing too far.
     // A tombstoned admin doesn't rescue the sole *active* admin — deleting it
     // would leave no admin that can authenticate, so it stays blocked.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -636,7 +613,6 @@ async fn last_active_admin_blocked_even_with_a_tombstoned_admin() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn last_admin_guard_ignores_an_admin_grant_on_a_tombstoned_actor() {
     // End-to-end fail-open closure, at the guard (not just the query). An
     // account that is *active* but whose only admin grant sits on a *tombstoned
@@ -647,7 +623,7 @@ async fn last_admin_guard_ignores_an_admin_grant_on_a_tombstoned_actor() {
     // only its actor is soft-deleted (the latent per-actor-delete state, which
     // the handler can't yet produce, so it's seeded directly). Without the
     // `act.deleted_at IS NULL` filter the delete would be allowed.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -691,9 +667,8 @@ async fn last_admin_guard_ignores_an_admin_grant_on_a_tombstoned_actor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_purge_removes_rows_but_audit_id_survives() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -738,9 +713,8 @@ async fn account_purge_removes_rows_but_audit_id_survives() {
 /// Guards against the multi-actor privilege-confusion hazard where a
 /// tombstoned actor's `role_grants` leak into the role gate.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn soft_deleted_actor_not_resolved_as_acting_actor() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, primary_actor_id) = seed_account_actor(&pool, "two_actor").await;
     let extra_actor_id = seed_extra_actor(&pool, account_id, "tombstoned").await;
     let client = pool.get().await.expect("pool.get");
@@ -792,9 +766,8 @@ async fn soft_deleted_actor_not_resolved_as_acting_actor() {
 /// (fail-open). Same tombstone-exclusion the acting-actor / public-read
 /// resolution paths apply, pushed down to the account-grain role guards.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn tombstoned_actor_admin_grant_excluded_from_last_admin_guards() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
 
     // Account 1: an active actor holding admin — a genuinely usable admin.
     let (a1, a1_actor) = seed_account_actor(&pool, "usable_admin").await;
@@ -861,9 +834,8 @@ async fn tombstoned_actor_admin_grant_excluded_from_last_admin_guards() {
 /// unconditional so the keeper is never deleted out from under daemon auth, even
 /// when its keeper actor is already tombstoned.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn tombstoned_keeper_actor_excluded_from_resolution_not_removability() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (k_account, k_base) = seed_account_actor(&pool, "keeper_host").await;
     let k_extra = seed_extra_actor(&pool, k_account, "keeper_actor").await;
     seed_role_grant_direct(&pool, k_extra, ROLE_KEEPER, None).await;
@@ -959,9 +931,8 @@ async fn supersede_rows(
 /// each with a `role_grant_offer_supersede` row (`reason: account_deleted`,
 /// `cause_id`: the account). Another grantor's offer is untouched.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_removal_supersedes_the_accounts_outgoing_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1031,9 +1002,8 @@ async fn account_removal_supersedes_the_accounts_outgoing_offers() {
 /// account); an offer to another account is untouched, and an undelete brings
 /// none back.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_delete_supersedes_the_offers_made_to_the_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1109,9 +1079,8 @@ async fn account_delete_supersedes_the_offers_made_to_the_account() {
 /// account, whoever made it and however it is addressed, each with its
 /// grantor's account, and leaves a terminal offer and another account's alone.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn query_role_grant_offer_supersede_incoming_ends_the_accounts_pending_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (recipient, _) = seed_account_actor(&pool, "q_incoming_recipient").await;
     let (bystander, _) = seed_account_actor(&pool, "q_incoming_bystander").await;
@@ -1168,9 +1137,8 @@ async fn query_role_grant_offer_supersede_incoming_ends_the_accounts_pending_off
 /// so the join to the grantors' actors, whichever side drives it, also puts the
 /// first offer last. Twin of the TS supersede order case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_cascade_returns_its_offers_oldest_first() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let mut client = pool.get().await.expect("pool.get");
     let (recipient, _) = seed_account_actor(&pool, "order_recipient").await;
     let (_, second_grantor) = seed_account_actor(&pool, "order_second").await;
@@ -1196,9 +1164,8 @@ async fn a_cascade_returns_its_offers_oldest_first() {
 /// each with an `invite_delete` row; a claimed invite and another issuer's
 /// stay, and an undelete brings none back.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_removal_deletes_the_accounts_unclaimed_invites() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = with_admin(seed_admin(&pool).await);
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -1285,9 +1252,8 @@ async fn account_removal_deletes_the_accounts_unclaimed_invites() {
 /// `query_invite_delete_unclaimed_by_creators` deletes the unclaimed invites
 /// the named actors issued and returns their ids; an empty list deletes none.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn query_invite_delete_unclaimed_by_creators_deletes_only_those() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, issuer) = seed_account_actor(&pool, "q_invite_issuer").await;
     let (_, other) = seed_account_actor(&pool, "q_invite_other").await;
@@ -1326,9 +1292,8 @@ async fn query_invite_delete_unclaimed_by_creators_deletes_only_those() {
 /// counts one — so two removals racing for the last two admins can't both
 /// pass.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_admin_count_locks_what_it_counted() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_a1, a1_actor) = seed_account_actor(&pool, "racing_admin_one").await;
     seed_role_grant_direct(&pool, a1_actor, ROLE_ADMIN, None).await;
     let (a2, a2_actor) = seed_account_actor(&pool, "racing_admin_two").await;

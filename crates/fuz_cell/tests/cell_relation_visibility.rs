@@ -14,13 +14,6 @@
 //! drop, the clone silent-drop) stays exercised by `fuz_app`'s cross-backend
 //! `cell.cross.test.ts` against `testing_spine_stub`; this is the primitive's
 //! own crate-local coverage, which the survey flagged as missing.
-//!
-//! `--ignored`-gated (needs Postgres). Run single-threaded against the shared
-//! `fuz_cell_test` DB:
-//!
-//! ```sh
-//! cargo test -p fuz_cell -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -30,7 +23,7 @@
 
 mod common;
 
-use common::fresh_db_pool;
+use common::fresh_db;
 use fuz_auth::{AccountRow, ActorRow, ROLE_ADMIN, RequestActorContext, RoleGrantRow};
 use fuz_cell::cell_grant_queries::query_cell_grant_create;
 use fuz_cell::cell_grant_schema::{CellGrantLevel, CellGrantPrincipalInput};
@@ -90,10 +83,9 @@ async fn seed_cell(pool: &Pool, visibility: CellVisibility, owner: Option<Uuid>)
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn public_target_is_visible_to_anonymous() {
     // A public cell admits via the public branch alone — no auth, no grant load.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let cell = seed_cell(&pool, CellVisibility::Public, None).await;
     let client = pool.get().await.unwrap();
     let visible = filter_visible_targets(&client, None, &[cell])
@@ -103,11 +95,10 @@ async fn public_target_is_visible_to_anonymous() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn private_target_is_hidden_from_a_non_owner() {
     // A private cell owned by someone else, with no grant to the caller, is not
     // viewable — the core enumeration guard.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let stranger = seed_caller(&pool, "stranger", &[]).await;
     let cell = seed_cell(&pool, CellVisibility::Private, Some(owner.actor.id)).await;
@@ -119,9 +110,8 @@ async fn private_target_is_hidden_from_a_non_owner() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn private_target_is_visible_to_its_owner() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let cell = seed_cell(&pool, CellVisibility::Private, Some(owner.actor.id)).await;
     let client = pool.get().await.unwrap();
@@ -132,11 +122,10 @@ async fn private_target_is_visible_to_its_owner() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn private_target_is_visible_to_admin_without_a_grant() {
     // Admin short-circuits `can_view_cell` — visible with neither ownership nor
     // a grant.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let admin = seed_caller(&pool, "admin", &[ROLE_ADMIN]).await;
     let cell = seed_cell(&pool, CellVisibility::Private, Some(owner.actor.id)).await;
@@ -148,11 +137,10 @@ async fn private_target_is_visible_to_admin_without_a_grant() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn viewer_grant_admits_the_grantee() {
     // A `viewer` grant to the caller's actor admits a private target — exercises
     // the auth-gated grant load (skipped entirely for anonymous callers).
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let grantee = seed_caller(&pool, "grantee", &[]).await;
     let cell = seed_cell(&pool, CellVisibility::Private, Some(owner.actor.id)).await;
@@ -178,11 +166,10 @@ async fn viewer_grant_admits_the_grantee() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn soft_deleted_target_is_absent_even_for_the_owner() {
     // The bulk load only returns active cells, so a soft-deleted target is
     // not-viewable for anyone — including its owner.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let cell = seed_cell(&pool, CellVisibility::Public, Some(owner.actor.id)).await;
     {
@@ -201,9 +188,8 @@ async fn soft_deleted_target_is_absent_even_for_the_owner() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn nonexistent_id_is_absent() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.unwrap();
     let visible = filter_visible_targets(&client, None, &[Uuid::new_v4()])
         .await
@@ -212,11 +198,10 @@ async fn nonexistent_id_is_absent() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn mixed_set_returns_only_the_viewable_subset_and_dedups() {
     // A mixed id-set (with a duplicate) returns exactly the viewable ids:
     // anonymous sees the public cell (once), not the private one.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let public = seed_cell(&pool, CellVisibility::Public, None).await;
     let private = seed_cell(&pool, CellVisibility::Private, Some(owner.actor.id)).await;
@@ -231,11 +216,10 @@ async fn mixed_set_returns_only_the_viewable_subset_and_dedups() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn moderation_gates_the_public_and_grant_arms() {
     // A pending public target and a rejected granted one admit only their
     // owner — the filter runs `can_view_cell`, moderation admission included.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let grantee = seed_caller(&pool, "grantee", &[]).await;
     let seed_moderated = async |visibility, moderation| {

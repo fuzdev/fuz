@@ -74,9 +74,8 @@ fn full_scope_json() -> String {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn expired_api_token_is_refused() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let account_id = common::seed_account(&pool, "token_expiry_user", None).await;
     let client = pool.get().await.expect("pool.get");
 
@@ -143,9 +142,8 @@ async fn dispatch_token_create(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn mint_with_ttl_lifetime_stores_a_bounded_expiry() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let auth = seed_request_context(&pool, "ttl_minter").await;
     let before = SystemTime::now();
 
@@ -185,9 +183,8 @@ async fn mint_with_ttl_lifetime_stores_a_bounded_expiry() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn mint_with_eternal_lifetime_stores_null() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let auth = seed_request_context(&pool, "eternal_minter").await;
 
     let result = dispatch_token_create(
@@ -218,9 +215,8 @@ async fn mint_with_eternal_lifetime_stores_null() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn mint_without_lifetime_is_refused_not_defaulted() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let auth = seed_request_context(&pool, "lifetime_omitter").await;
 
     let err = dispatch_token_create(
@@ -250,9 +246,9 @@ async fn mint_without_lifetime_is_refused_not_defaulted() {
 /// connections of each id it returns. A second pass over a capped account
 /// evicts and returns nothing; another account's tokens are never counted.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "pglet: named-argument calls"]
 async fn enforce_limit_returns_exactly_the_evicted_token_ids() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_postgres_db().await;
     let account_id = common::seed_account(&pool, "token_cap_user", None).await;
     let bystander_id = common::seed_account(&pool, "token_cap_bystander", None).await;
     let client = pool.get().await.expect("pool.get");
@@ -370,9 +366,8 @@ async fn store_scope_text(
 /// caller's order), it resolves to its methods and lists as `N methods`; one
 /// byte past the cap, stored directly, fails closed on both reads.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_scope_at_the_byte_cap_reads_whichever_spine_wrote_it() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let account_id = common::seed_account(&pool, "scope_cap_reader", None).await;
     let client = pool.get().await.expect("pool.get");
 
@@ -445,9 +440,8 @@ async fn a_scope_at_the_byte_cap_reads_whichever_spine_wrote_it() {
 /// document the read measured as Postgres printed it, and refused, before the
 /// cap counted the compact JSON.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_scope_under_the_cap_reads_although_its_printed_text_is_past_it() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let account_id = common::seed_account(&pool, "scope_spaced_reader", None).await;
     let client = pool.get().await.expect("pool.get");
 
@@ -477,9 +471,8 @@ async fn a_scope_under_the_cap_reads_although_its_printed_text_is_past_it() {
 /// though it is far under the cap in UTF-16 code units, and mints the one at
 /// the cap.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn mint_measures_the_scope_cap_in_utf8_bytes() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let auth = seed_request_context(&pool, "scope_cap_minter").await;
     let filler = "\u{00E9}".repeat(40);
     let mint = |methods: Vec<String>| {

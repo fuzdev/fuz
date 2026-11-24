@@ -44,14 +44,6 @@
 //! last section refuses each route's row and finds nothing changed. One more
 //! case watches the pool from inside the hasher: the verify and the hash run
 //! with no connection checked out.
-//!
-//! The database cases are gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test rest_internal_errors -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
 #![expect(
     clippy::unwrap_used,
@@ -83,7 +75,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 mod common;
-use common::{fresh_db_pool, seed_account_actor};
+use common::{fresh_db, fresh_postgres_db, seed_account_actor};
 
 /// The body every internal failure answers, byte for byte.
 const INTERNAL_ERROR_BODY: &str = r#"{"error":"internal_error"}"#;
@@ -291,8 +283,8 @@ fn unreachable_pool() -> Pool {
 /// The fault for a `BEGIN`. The checkout itself succeeds, so the handler's
 /// pool arm is not the one reached; the first statement sent on the
 /// connection fails.
-fn pool_with_dead_checkout(nth: usize) -> Pool {
-    let config: tokio_postgres::Config = common::test_url().parse().expect("test URL parses");
+fn pool_with_dead_checkout(url: &str, nth: usize) -> Pool {
+    let config: tokio_postgres::Config = url.parse().expect("test URL parses");
     let checkouts = Arc::new(AtomicUsize::new(0));
     let hook = || {
         let checkouts = Arc::clone(&checkouts);
@@ -735,12 +727,11 @@ fn assert_json(reply: &Reply, status: StatusCode, body: &str) {
 // -- /status ------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_pool_checkout_failure_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "status_pool").await;
     // One checkout: the credential read's. The handler's own is refused.
-    let reply = get_status(account_routes(common::budgeted_pool(1)), &cookie).await;
+    let reply = get_status(account_routes(common::budgeted_pool(&pool, 1)), &cookie).await;
     assert_flat_503(&reply);
 }
 
@@ -748,14 +739,13 @@ async fn status_pool_checkout_failure_answers_the_503() {
 /// ends the walk: the bearer sent beside the cookie is never looked up, so
 /// its `last_used_at` stays unset.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_credential_checkout_failure_answers_the_503_and_ends_the_walk() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _, cookie) = seed_session(&pool, "status_walk_checkout").await;
     let token = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
     let bearer = format!("Bearer {}", token.token);
     let reply = send(
-        account_routes(common::budgeted_pool(0)),
+        account_routes(common::budgeted_pool(&pool, 0)),
         "GET",
         "/status",
         &[(header::COOKIE, &cookie), (header::AUTHORIZATION, &bearer)],
@@ -782,16 +772,15 @@ async fn status_credential_checkout_failure_answers_the_503_and_ends_the_walk() 
 /// A failed query on the credential walk's checked-out client keeps the text
 /// 500 — only the checkout phase is the 503.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_credential_query_failure_answers_the_text_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "status_walk_query").await;
     execute(
         &pool,
         "ALTER TABLE auth_session RENAME TO auth_session_gone",
     )
     .await;
-    let reply = get_status(account_routes(pool), &cookie).await;
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
     assert_eq!(
         (
             reply.status,
@@ -807,9 +796,8 @@ async fn status_credential_query_failure_answers_the_text_500() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_account_summary_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "status_summary").await;
     // The summary projects `email_verified`; the credential read does not.
     execute(
@@ -817,28 +805,26 @@ async fn status_account_summary_failure_answers_the_flat_500() {
         "ALTER TABLE account RENAME COLUMN email_verified TO email_verified_gone",
     )
     .await;
-    let reply = get_status(account_routes(pool), &cookie).await;
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_actor_resolution_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "status_actor").await;
     execute(&pool, "ALTER TABLE actor RENAME TO actor_gone").await;
-    let reply = get_status(account_routes(pool), &cookie).await;
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_role_grant_read_failure_answers_the_flat_500() {
     // A single-actor account, so the persona resolves and its grants are read.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "status_grants").await;
     execute(&pool, "ALTER TABLE role_grant RENAME TO role_grant_gone").await;
-    let reply = get_status(account_routes(pool), &cookie).await;
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
@@ -871,27 +857,25 @@ async fn login_trims_the_js_whitespace_set() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_account_lookup_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     execute(&pool, "ALTER TABLE account RENAME TO account_gone").await;
-    let reply = post_login(account_routes(pool), "anyone").await;
+    let reply = post_login(account_routes(pool.clone()), "anyone").await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_session_creation_failure_answers_the_flat_500() {
     // The account resolves and the stub hasher accepts the password, so the
     // request reaches the session insert — into a table that is gone.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_actor(&pool, "login_session").await;
     execute(
         &pool,
         "ALTER TABLE auth_session RENAME TO auth_session_gone",
     )
     .await;
-    let reply = post_login(account_routes(pool), "login_session").await;
+    let reply = post_login(account_routes(pool.clone()), "login_session").await;
     assert_flat_500(&reply);
 }
 
@@ -899,12 +883,11 @@ async fn login_session_creation_failure_answers_the_flat_500() {
 /// back in the pool; a refused second checkout is the 503, not the 500 of a
 /// failed insert.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_session_checkout_failure_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_account_actor(&pool, "login_session_checkout").await;
     let reply = post_login(
-        account_routes(common::budgeted_pool(1)),
+        account_routes(common::budgeted_pool(&pool, 1)),
         "login_session_checkout",
     )
     .await;
@@ -914,43 +897,40 @@ async fn login_session_checkout_failure_answers_the_503() {
 // -- /logout ------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn logout_pool_checkout_failure_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "logout_pool").await;
     // One checkout: the credential read's. The handler's own is refused.
-    let reply = post_logout(account_routes(common::budgeted_pool(1)), &cookie).await;
+    let reply = post_logout(account_routes(common::budgeted_pool(&pool, 1)), &cookie).await;
     assert_flat_503(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn logout_session_delete_failure_answers_the_flat_500() {
     // The credential read selects from `auth_session`, so the table stays and
     // only its DELETE is refused.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, _, cookie) = seed_session(&pool, "logout_delete").await;
     refuse_statement(&pool, "DELETE", "auth_session").await;
-    let reply = post_logout(account_routes(pool), &cookie).await;
+    let reply = post_logout(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 // -- /password ----------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_pool_checkout_failure_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_pool").await;
     // One checkout: the credential read's. The handler's own is refused.
-    let reply = post_password(account_routes(common::budgeted_pool(1)), &cookie).await;
+    let reply = post_password(account_routes(common::budgeted_pool(&pool, 1)), &cookie).await;
     assert_flat_503(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_account_lookup_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_lookup").await;
     // The lookup projects `password_hash`; the credential read does not.
     execute(
@@ -958,46 +938,47 @@ async fn password_account_lookup_failure_answers_the_flat_500() {
         "ALTER TABLE account RENAME COLUMN password_hash TO password_hash_gone",
     )
     .await;
-    let reply = post_password(account_routes(pool), &cookie).await;
+    let reply = post_password(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_hash_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_hash").await;
-    let router = account_router(account_state(pool, StubHasher::failing_to_hash()));
+    let router = account_router(account_state(pool.clone(), StubHasher::failing_to_hash()));
     let reply = post_password(router, &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_transaction_checkout_failure_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_tx_pool").await;
     // Two checkouts: the credential read's and the account lookup's. The
     // change's own, taken after the hash, is refused.
-    let reply = post_password(account_routes(common::budgeted_pool(2)), &cookie).await;
+    let reply = post_password(account_routes(common::budgeted_pool(&pool, 2)), &cookie).await;
     assert_flat_503(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: terminates a backend (pg_terminate_backend)"]
 async fn password_transaction_begin_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_begin").await;
     // The third checkout is the change's: the credential read and the account
     // lookup each took and returned one before it.
-    let reply = post_password(account_routes(pool_with_dead_checkout(3)), &cookie).await;
+    let reply = post_password(
+        account_routes(pool_with_dead_checkout(pool.url(), 3)),
+        &cookie,
+    )
+    .await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_update_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_update").await;
     // The UPDATE sets `updated_at`; no read before it names the column.
     execute(
@@ -1005,40 +986,39 @@ async fn password_update_failure_answers_the_flat_500() {
         "ALTER TABLE account RENAME COLUMN updated_at TO updated_at_gone",
     )
     .await;
-    let reply = post_password(account_routes(pool), &cookie).await;
+    let reply = post_password(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn password_session_revocation_failure_answers_the_flat_500() {
     // The credential read selects from `auth_session`, so the table stays and
     // only its DELETE is refused.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_sessions").await;
     refuse_statement(&pool, "DELETE", "auth_session").await;
-    let reply = post_password(account_routes(pool), &cookie).await;
+    let reply = post_password(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_token_revocation_failure_answers_the_flat_500() {
     // Nothing before the token revocation touches `api_token` on a session.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_tokens").await;
     execute(&pool, "ALTER TABLE api_token RENAME TO api_token_gone").await;
-    let reply = post_password(account_routes(pool), &cookie).await;
+    let reply = post_password(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn password_commit_failure_answers_the_flat_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, _, cookie) = seed_session(&pool, "password_commit").await;
     refuse_commit(&pool, "account").await;
-    let reply = post_password(account_routes(pool), &cookie).await;
+    let reply = post_password(account_routes(pool.clone()), &cookie).await;
     assert_flat_500(&reply);
 }
 
@@ -1048,9 +1028,9 @@ async fn password_commit_failure_answers_the_flat_500() {
 /// update: the stored hash is still the old one, and the old session still
 /// authenticates.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn password_refused_session_revocation_changes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_atomic_sessions").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
     refuse_statement(&pool, "DELETE", "auth_session").await;
@@ -1063,16 +1043,16 @@ async fn password_refused_session_revocation_changes_nothing() {
         Credentials::seeded()
     );
     assert_eq!(closer.closes(), [], "a failed change closes nothing");
-    let reply = get_status(account_routes(pool), &cookie).await;
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
     assert_eq!(reply.status, StatusCode::OK, "the session is still live");
 }
 
 /// A token revocation that fails is the last statement of the change, and it
 /// undoes the two before it: the hash and the sessions are as they were.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn password_refused_token_revocation_changes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_atomic_tokens").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
     refuse_statement(&pool, "DELETE", "api_token").await;
@@ -1090,9 +1070,9 @@ async fn password_refused_token_revocation_changes_nothing() {
 /// A commit that fails after all three statements succeeded changes nothing
 /// and closes nothing — the close waits for the commit's answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn password_failed_commit_changes_nothing_and_closes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_atomic_commit").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
     refuse_commit(&pool, "account").await;
@@ -1111,9 +1091,8 @@ async fn password_failed_commit_changes_nothing_and_closes_nothing() {
 /// is gone, the cookie is cleared, and the account's connections are closed
 /// once — at a moment when a separate connection already reads the change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_committed_change_closes_once_after_the_commit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_committed").await;
     // A second account, which the change must not reach.
     let (bystander_id, _) = seed_credentials(&pool, "password_bystander").await;
@@ -1151,9 +1130,8 @@ async fn password_committed_change_closes_once_after_the_commit() {
 /// `password_change` row refused, the change rolls back — the flat 500, the
 /// hash, sessions, and tokens as seeded, and nothing closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_refused_audit_row_changes_nothing_and_closes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_audit_refused").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
     fuz_testing::seed::refuse_audit_rows(&pool, &["password_change"]).await;
@@ -1173,9 +1151,8 @@ async fn password_refused_audit_row_changes_nothing_and_closes_nothing() {
 /// checked out: the account read has returned its own, and the change's
 /// transaction is not open yet.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_verifies_and_hashes_holding_no_connection() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_no_connection").await;
     let in_use = Arc::new(Mutex::new(Vec::new()));
     let hasher = Arc::new(PoolWatchingHasher {
@@ -1198,9 +1175,8 @@ async fn password_verifies_and_hashes_holding_no_connection() {
 /// hash, revokes nothing, closes nothing, and audits the failure with its
 /// reason.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_superseded_change_answers_the_401_and_writes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_superseded").await;
     let closer = ProbingCloser::new(pool.clone());
     let mut state = account_state(
@@ -1303,9 +1279,9 @@ fn limited_signup_router(pool: Pool, ip: &Arc<RateLimiter>, account: &Arc<RateLi
 /// explicitly. The control beside them is a classified denial from the same
 /// address, which is charged to both, so the IP half is live.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: terminates a backend (pg_terminate_backend)"]
 async fn signup_unclassified_failure_costs_no_attempt() {
-    let db = fresh_db_pool().await;
+    let db = fresh_postgres_db().await;
     for step in [
         "the checkout before the hash",
         "the checkout after the hash",
@@ -1315,8 +1291,8 @@ async fn signup_unclassified_failure_costs_no_attempt() {
         let account = limiter(ATTEMPTS_MAX);
         let pool = match step {
             "the checkout before the hash" => unreachable_pool(),
-            "the checkout after the hash" => common::budgeted_pool(1),
-            _ => pool_with_dead_checkout(2),
+            "the checkout after the hash" => common::budgeted_pool(&db, 1),
+            _ => pool_with_dead_checkout(db.url(), 2),
         };
         let reply = post_signup(limited_signup_router(pool, &ip, &account)).await;
         if step == "the BEGIN" {
@@ -1337,7 +1313,7 @@ async fn signup_unclassified_failure_costs_no_attempt() {
     // control: closed signup and no invite — the classified 403 is charged
     let ip = limiter(ATTEMPTS_MAX);
     let account = limiter(ATTEMPTS_MAX);
-    let reply = post_signup(limited_signup_router(db, &ip, &account)).await;
+    let reply = post_signup(limited_signup_router(db.clone(), &ip, &account)).await;
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.body);
     assert_eq!(
         (
@@ -1356,9 +1332,8 @@ async fn signup_unclassified_failure_costs_no_attempt() {
 /// disposition of a route that answers anonymous callers. The full-scope token
 /// beside it reads the account, so the 401 is the scope, not the bearer.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn status_answers_a_narrowed_token_as_anonymous() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _, _) = seed_session(&pool, "status_narrowed").await;
     let narrowed_scope = fuz_testing::narrowed_scope(&["account_verify"]);
     let narrowed = fuz_testing::mint_api_token(&pool, account_id, &narrowed_scope).await;
@@ -1721,18 +1696,17 @@ async fn token_last_used_at(pool: &Pool, token_id: &str) -> Option<String> {
 /// read's checkout. (A failed query on the leg is the text 500 —
 /// `status_credential_query_failure_answers_the_text_500`.)
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_failed_credential_checkout_answers_the_503() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, _, cookie) = seed_session(&pool, "credential_read").await;
-    let reply = get_status(account_routes(pool), &cookie).await;
+    let reply = get_status(account_routes(pool.clone()), &cookie).await;
     assert_eq!(reply.status, StatusCode::OK, "the session is live");
 
-    let reply = get_status(account_routes(common::budgeted_pool(0)), &cookie).await;
+    let reply = get_status(account_routes(common::budgeted_pool(&pool, 0)), &cookie).await;
     assert_flat_503(&reply);
-    let reply = post_logout(account_routes(common::budgeted_pool(0)), &cookie).await;
+    let reply = post_logout(account_routes(common::budgeted_pool(&pool, 0)), &cookie).await;
     assert_flat_503(&reply);
-    let reply = post_password(account_routes(common::budgeted_pool(0)), &cookie).await;
+    let reply = post_password(account_routes(common::budgeted_pool(&pool, 0)), &cookie).await;
     assert_flat_503(&reply);
 }
 
@@ -1742,9 +1716,9 @@ async fn a_failed_credential_checkout_answers_the_503() {
 /// a dead connection and every later checkout a live one, so the bearer leg
 /// would read its token if the walk went on to it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: terminates a backend (pg_terminate_backend)"]
 async fn a_failed_cookie_read_does_not_fall_through_to_the_bearer() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, _, cookie) = seed_session(&pool, "fall_through").await;
     let control = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
     let token = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
@@ -1771,7 +1745,7 @@ async fn a_failed_cookie_read_does_not_fall_through_to_the_bearer() {
 
     let bearer = format!("Bearer {}", token.token);
     let reply = send(
-        account_routes(pool_with_dead_checkout(1)),
+        account_routes(pool_with_dead_checkout(pool.url(), 1)),
         "GET",
         "/status",
         &[(header::COOKIE, &cookie), (header::AUTHORIZATION, &bearer)],
@@ -1792,9 +1766,8 @@ async fn a_failed_cookie_read_does_not_fall_through_to_the_bearer() {
 /// The answers that need the database — the denials past the credential read
 /// and each account route's success — on a schema with no fault in it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn answers_past_the_credential_read_keep_their_shape() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id, cookie) = seed_session(&pool, "neighbour").await;
     let refusing = || account_router(account_state(pool.clone(), StubHasher::refusing()));
 
@@ -1891,7 +1864,7 @@ async fn answers_past_the_credential_read_keep_their_shape() {
         SESSION_COOKIE_NAME,
     )
     .await;
-    let reply = post_logout(account_routes(pool), &cookie).await;
+    let reply = post_logout(account_routes(pool.clone()), &cookie).await;
     assert_json(
         &reply,
         StatusCode::OK,
@@ -1955,10 +1928,10 @@ impl ConnectionCloser for AuditWatchingCloser {
 /// A change that fails writes no `password_change` row of either outcome —
 /// the success row commits with the change or not at all.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn password_failed_change_audits_nothing() {
     for fault in ["session revocation", "token revocation", "commit"] {
-        let pool = fresh_db_pool().await;
+        let pool = fresh_postgres_db().await;
         let (_, cookie) = seed_credentials(&pool, "password_unaudited").await;
         match fault {
             "session revocation" => refuse_statement(&pool, "DELETE", "auth_session").await,
@@ -1978,9 +1951,8 @@ async fn password_failed_change_audits_nothing() {
 /// committed with the change, so a separate connection already reads it when
 /// the close runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_committed_change_audits_its_counts_with_the_commit_before_the_close() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     // Two sessions and one token, so the two counts cannot stand in for each
     // other.
     let (account_id, cookie) = seed_credentials(&pool, "password_audited").await;
@@ -2077,9 +2049,8 @@ impl Limited {
 
 /// A refused current password costs one attempt on each bucket.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_refused_current_password_costs_an_attempt_on_each_bucket() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_limited_wrong").await;
     let limited = Limited::new();
 
@@ -2092,9 +2063,8 @@ async fn password_refused_current_password_costs_an_attempt_on_each_bucket() {
 /// A change that goes through clears the account's bucket and leaves the IP
 /// bucket — the one `/login` spends from the same address — as it was.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_change_clears_the_account_bucket_and_not_the_ip_bucket() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_limited_ok").await;
     let limited = Limited::new();
     let reply = post_password(limited.routes(&pool, StubHasher::refusing()), &cookie).await;
@@ -2110,9 +2080,8 @@ async fn password_change_clears_the_account_bucket_and_not_the_ip_bucket() {
 /// history: the bucket is cleared only once the hash and the UPDATE have
 /// settled, so a caller observing 500s can't wipe it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_change_that_fails_to_hash_keeps_the_account_bucket() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_limited_hash_fault").await;
     let limited = Limited::new();
     let reply = post_password(limited.routes(&pool, StubHasher::refusing()), &cookie).await;
@@ -2137,9 +2106,8 @@ async fn password_change_that_fails_to_hash_keeps_the_account_bucket() {
 /// limiter: each attempt is reserved before the credential walk, so the burst
 /// can't all pass before any of it records.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_burst_of_refused_changes_spends_at_most_the_cap() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_limited_burst").await;
     let limited = Limited::new();
     let router = limited.routes(&pool, StubHasher::refusing());
@@ -2165,9 +2133,8 @@ async fn password_burst_of_refused_changes_spends_at_most_the_cap() {
 /// A superseded change is a failed attempt: the settled UPDATE cleared the
 /// account's bucket, and the refusal then costs one attempt on each.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_superseded_change_costs_an_attempt_on_each_bucket() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_limited_raced").await;
     let limited = Limited::new();
     let reply = post_password(limited.routes(&pool, StubHasher::refusing()), &cookie).await;
@@ -2243,9 +2210,8 @@ async fn drop_once_parked(
 /// one does: the Argon2 work it started runs on regardless, so releasing the
 /// slots would let one address keep every Argon2 permit busy uncharged.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_dropped_mid_verify_costs_an_attempt_on_each_bucket() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _) = seed_credentials(&pool, "login_dropped_mid_verify").await;
     let limited = Limited::new();
     let (hasher, started) = ParkedHasher::new();
@@ -2260,9 +2226,8 @@ async fn login_dropped_mid_verify_costs_an_attempt_on_each_bucket() {
 /// A password change dropped mid-verify of the current password costs an
 /// attempt on each bucket, as on login.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn password_dropped_mid_verify_costs_an_attempt_on_each_bucket() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_dropped_mid_verify").await;
     let limited = Limited::new();
     let (hasher, started) = ParkedHasher::new();
@@ -2324,9 +2289,8 @@ async fn account_count(pool: &Pool, username: &str) -> i64 {
 
 /// A refused `login` row mints no session and sets no cookie.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn login_refused_audit_row_mints_no_session() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _) = seed_account_actor(&pool, "login_audit_refused").await;
     fuz_testing::seed::refuse_audit_rows(&pool, &["login"]).await;
 
@@ -2340,9 +2304,8 @@ async fn login_refused_audit_row_mints_no_session() {
 /// A refused `logout` row ends no session and closes nothing: the session
 /// still authenticates.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn logout_refused_audit_row_ends_no_session_and_closes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "logout_audit_refused").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
     fuz_testing::seed::refuse_audit_rows(&pool, &["logout"]).await;
@@ -2359,9 +2322,8 @@ async fn logout_refused_audit_row_ends_no_session_and_closes_nothing() {
 
 /// A refused `signup` row creates no account.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_refused_audit_row_creates_no_account() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     execute(
         &pool,
         "UPDATE app_settings SET open_signup = true WHERE id = 1",
@@ -2396,9 +2358,8 @@ impl BootstrapTokenStore for BurnRecordingTokenStore {
 /// A refused `bootstrap` row creates nothing, leaves the lock unflipped and
 /// the window open, and burns no token — the operator retries the same one.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_refused_audit_row_creates_nothing_and_keeps_the_token() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     fuz_testing::seed::refuse_audit_rows(&pool, &["bootstrap"]).await;
     let store = Arc::new(BurnRecordingTokenStore {
         burned: AtomicBool::new(false),

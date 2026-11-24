@@ -5,9 +5,9 @@
 //! `mod common;` and pulls the helpers it needs.
 //!
 //! Helpers here cover:
-//! - The drop-and-migrate cycle every PG-backed test runs at startup
-//!   ([`fresh_db_pool`], a thin call into the shared
-//!   `fuz_testing::fresh_test_db_pool`).
+//! - The fresh database every DB test opens ([`fresh_db`], and
+//!   [`fresh_postgres_db`] for a Postgres-only test), thin calls into the
+//!   shared `fuz_testing::fresh_test_db`.
 //! - Account / actor / audit-row seeding shared across the PG-backed
 //!   integration-test files ([`seed_admin`], [`seed_account`],
 //!   [`seed_audit_log_row`], [`seed_role_grant_direct`]), plus the
@@ -22,12 +22,6 @@
 //!   committed transaction), `race!` (a held transaction against a second
 //!   call, reporting whether the second waited), [`blocked_by`], and
 //!   [`LOCK_WAIT_DEADLINE`].
-//!
-//! Test files using this module require `--test-threads=1` because the
-//! pool points at a single shared `fuz_auth_test` database (override
-//! with `FUZ_AUTH_TEST_URL`) and concurrent DROP+CREATE on the
-//! `schema_version` table races — `fuz_testing::fresh_db` carries the
-//! full statement of that constraint.
 
 #![expect(
     clippy::expect_used,
@@ -44,7 +38,7 @@ use fuz_auth::{
     NoopConnectionCloser, NoopNotificationSender, NotificationSender,
 };
 use fuz_db::Pool;
-use fuz_testing::{TestingDbOptions, fresh_test_db_pool};
+use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
 use serde_json::Value;
 
 /// The `account` + `actor` pair (and the second-actor variant) every PG suite
@@ -59,13 +53,12 @@ use serde_json::Value;
 )]
 pub use fuz_testing::seed::{seed_account_actor, seed_extra_actor};
 
-/// This suite's database: `FUZ_AUTH_TEST_URL` (default `fuz_auth_test`),
-/// the auth chain, no scratch DDL.
+/// This suite's database: the auth chain, no scratch DDL.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_AUTH_TEST_URL",
-    default_db: "fuz_auth_test",
+    suite: "fuz_auth",
     migrations: &[AUTH_MIGRATIONS],
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
 /// Dispatch an admin action with the builtin-only [`fuz_auth::RoleRegistry`].
@@ -91,16 +84,17 @@ pub async fn admin_dispatch(
     .await
 }
 
-/// Resolve the test-DB URL, with env override.
+/// A fresh database with the auth chain, ready for the test body's own
+/// fixture seeding.
 #[allow(dead_code, reason = "each test binary uses only part of this module")]
-pub fn test_url() -> String {
-    DB.url()
+pub async fn fresh_db() -> TestDb {
+    fresh_test_db(DB).await
 }
 
-/// Reset the `public` schema, then run the auth migration chain. Returns a
-/// `Pool` ready for the test body's own fixture seeding.
-pub async fn fresh_db_pool() -> Pool {
-    fresh_test_db_pool(DB).await
+/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+pub async fn fresh_postgres_db() -> TestDb {
+    fresh_test_db(DB.postgres_only()).await
 }
 
 /// Seed an admin (`account` + `actor`) and return a `RequestActorContext`
@@ -318,14 +312,14 @@ pub fn ctx_observed<'a>(
     }
 }
 
-/// [`fuz_testing::budgeted_pool`] on the suite's database: `checkouts`
-/// connections, then every checkout refused — the fault for a handler that
-/// checks a connection out *after* its credential was resolved on an earlier
-/// one (a pool that is simply down fails the credential read first, and that is
-/// the credential-read fault's answer, never the handler's own arm).
+/// [`fuz_testing::budgeted_pool`] on `db`: `checkouts` connections, then every
+/// checkout refused — the fault for a handler that checks a connection out
+/// *after* its credential was resolved on an earlier one (a pool that is simply
+/// down fails the credential read first, and that is the credential-read
+/// fault's answer, never the handler's own arm).
 #[allow(dead_code, reason = "each test binary uses only part of this module")]
-pub fn budgeted_pool(checkouts: usize) -> Pool {
-    fuz_testing::budgeted_pool(&test_url(), checkouts)
+pub fn budgeted_pool(db: &TestDb, checkouts: usize) -> Pool {
+    fuz_testing::budgeted_pool(db.url(), checkouts)
 }
 
 /// How long a lock wait a test arranged may take to show, a bound on a hang only.

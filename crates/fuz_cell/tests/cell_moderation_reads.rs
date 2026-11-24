@@ -8,12 +8,6 @@
 //! SQL twin of `can_steward_cell`) admits the owner of a live governing root
 //! to the pending and rejected contributions under it — the moderation queue
 //! — and the `shared_with` semi-join has no steward arm.
-//!
-//! `--ignored`-gated (needs Postgres):
-//!
-//! ```sh
-//! cargo test -p fuz_cell --test cell_moderation_reads -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::expect_used,
@@ -24,7 +18,7 @@ mod common;
 
 use std::collections::HashSet;
 
-use common::{fresh_db_pool, seed_actor};
+use common::{fresh_db, seed_actor};
 use fuz_cell::cell_grant_queries::query_cell_grant_create;
 use fuz_cell::cell_grant_schema::{CellGrantLevel, CellGrantPrincipalInput};
 use fuz_cell::cell_queries::{
@@ -123,9 +117,8 @@ async fn seed_cells(
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn list_gates_the_public_and_grant_arms_on_moderation() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let stranger = seed_actor(&pool, "stranger").await;
@@ -247,9 +240,8 @@ async fn create_in_tree(
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn list_steward_arm_admits_the_root_owner_to_pending_and_rejected() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let root_owner = seed_actor(&pool, "root_owner").await;
     let other_root_owner = seed_actor(&pool, "other_root_owner").await;

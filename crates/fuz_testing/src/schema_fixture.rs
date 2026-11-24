@@ -18,7 +18,7 @@ pub const UPDATE_SCHEMA_READY: &str = "UPDATE_SCHEMA_READY";
 
 /// Assert the fixture at `path` equals the `public` column map of `pool`, a
 /// fresh bootstrap of the server's migration chain
-/// ([`crate::fresh_test_db_pool`]).
+/// ([`crate::fresh_test_db`]).
 ///
 /// `/ready` checks only that the live database has every column the fixture
 /// names, so a stale fixture fails one of two ways: naming a column a

@@ -1,7 +1,4 @@
 //! PG-backed integration tests for `PgFactStore` + the fact queries.
-//!
-//! `--ignored`-gated (needs Postgres). Run:
-//! `cargo test -p fuz_fact -- --ignored --test-threads=1`.
 
 #![expect(
     clippy::unwrap_used,
@@ -13,7 +10,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{fresh_db_pool, held_put, insert_cell_ref, system_put};
+use common::{fresh_db, held_put, insert_cell_ref, system_put};
 use fuz_crypto::ContentHash;
 use fuz_fact::{
     FactContent, FactError, FactStore, PgFactStore, PutOptions, fact_disk_path, mint_fact_file_url,
@@ -21,10 +18,9 @@ use fuz_fact::{
 };
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn put_embedded_then_get_round_trips() {
-    let pool = fresh_db_pool().await;
-    let store = PgFactStore::new(pool);
+    let pool = fresh_db().await;
+    let store = PgFactStore::new(pool.clone());
     let data = b"hello fact";
 
     let hash = store
@@ -53,11 +49,10 @@ async fn put_embedded_then_get_round_trips() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn put_oversize_spills_to_disk_and_serves() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
-    let store = PgFactStore::new(pool)
+    let store = PgFactStore::new(pool.clone())
         .with_disk_root(facts_dir.path().to_path_buf())
         .with_threshold(8);
     let data = b"this body exceeds the eight byte embedded threshold";
@@ -87,10 +82,9 @@ async fn put_oversize_spills_to_disk_and_serves() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn explicit_refs_are_recorded() {
-    let pool = fresh_db_pool().await;
-    let store = PgFactStore::new(pool);
+    let pool = fresh_db().await;
+    let store = PgFactStore::new(pool.clone());
     let target = store.put(b"target", system_put()).await.unwrap();
     let source = store
         .put(
@@ -108,13 +102,12 @@ async fn explicit_refs_are_recorded() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn content_naming_a_hash_records_no_refs() {
     // JSON-typed content whose body names another stored fact's address:
     // with no declared `refs`, no edge is written — the store never scans
     // content, whatever its type
-    let pool = fresh_db_pool().await;
-    let store = PgFactStore::new(pool);
+    let pool = fresh_db().await;
+    let store = PgFactStore::new(pool.clone());
     let json_put = || PutOptions {
         content_type: Some("application/json".to_owned()),
         refs: None,
@@ -134,9 +127,8 @@ async fn content_naming_a_hash_records_no_refs() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn orphan_predicate_tracks_cell_refs() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let store = PgFactStore::new(pool.clone());
     let a = store.put(b"fact A", system_put()).await.unwrap();
 
@@ -212,11 +204,10 @@ async fn orphans_past_an_hour(pool: &fuz_db::Pool) -> Vec<String> {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn orphan_cutoff_keeps_a_fact_put_within_the_window() {
     // A dedup put adds no `fact` row, so `fact.created_at` stays old; the
     // holder row's `created_at` is what marks the fact as recently put.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, alice) = fuz_testing::seed_account_actor(&pool, "alice").await;
     let (_, bob) = fuz_testing::seed_account_actor(&pool, "bob").await;
     let store = PgFactStore::new(pool.clone());
@@ -308,11 +299,10 @@ async fn seed_external_row(pool: &fuz_db::Pool, hash: &ContentHash, external_url
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn get_external_verify_mismatch_is_none() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
-    let store = disk_store(pool, facts_dir.path());
+    let store = disk_store(pool.clone(), facts_dir.path());
     let hash = store.put(DISK_BODY, system_put()).await.unwrap();
     let path = cas_path(facts_dir.path(), &hash);
 
@@ -331,11 +321,10 @@ async fn get_external_verify_mismatch_is_none() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn get_external_missing_file_is_none() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
-    let store = disk_store(pool, facts_dir.path());
+    let store = disk_store(pool.clone(), facts_dir.path());
     // Written through the streaming door, which spills to the same CAS.
     let outcome = store
         .put_stream(Box::pin(DISK_BODY), DISK_BODY.len(), system_put())
@@ -357,11 +346,10 @@ async fn get_external_missing_file_is_none() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn get_external_unreadable_file_is_none() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
-    let store = disk_store(pool, facts_dir.path());
+    let store = disk_store(pool.clone(), facts_dir.path());
     let hash = store.put(DISK_BODY, system_put()).await.unwrap();
     let path = cas_path(facts_dir.path(), &hash);
     assert_eq!(store.get(&hash).await.unwrap().as_deref(), Some(DISK_BODY));
@@ -374,14 +362,13 @@ async fn get_external_unreadable_file_is_none() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn get_external_non_file_url_is_none() {
     // Two rows over the same facts dir, each with its bytes sitting at the
     // canonical `<shard>/<rest>` path. One row names them by the canonical
     // `file:` URL; the other by the same `<shard>/<rest>` under another scheme.
     // Only the scheme differs, so a reader that resolved the second row would
     // find intact bytes that verify.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
     let dir = facts_dir.path();
     let size = i64::try_from(DISK_BODY.len()).unwrap();
@@ -408,7 +395,7 @@ async fn get_external_non_file_url_is_none() {
     .await;
     assert!(cas_path(dir, &other_hash).is_file());
 
-    let store = disk_store(pool, dir);
+    let store = disk_store(pool.clone(), dir);
     // The seeded canonical row reads: the fixture serves.
     assert_eq!(
         store.get(&canonical_hash).await.unwrap().as_deref(),
@@ -425,13 +412,12 @@ async fn get_external_non_file_url_is_none() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn external_url_naming_another_facts_file_is_not_read() {
     // A row for one hash whose `external_url` is another stored fact's
     // canonical `file:` URL. The shape is valid and the file is intact, so only
     // the hash-to-path binding refuses it: `open` streams without re-hashing,
     // and would otherwise hand out the other fact's bytes under this address.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
     let dir = facts_dir.path();
     let store = disk_store(pool.clone(), dir);
@@ -456,9 +442,8 @@ async fn external_url_naming_another_facts_file_is_not_read() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn get_external_without_facts_dir_is_none() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let facts_dir = tempfile::tempdir().unwrap();
     let writer = disk_store(pool.clone(), facts_dir.path());
     let hash = writer.put(DISK_BODY, system_put()).await.unwrap();
@@ -466,7 +451,7 @@ async fn get_external_without_facts_dir_is_none() {
 
     // The same row through a store with no facts dir: it sees a disk-backed
     // fact it has no way to read.
-    let store = PgFactStore::new(pool);
+    let store = PgFactStore::new(pool.clone());
     assert!(store.get_meta(&hash).await.unwrap().expect("meta").external);
     assert_eq!(store.get(&hash).await.unwrap(), None);
     assert!(matches!(
@@ -498,9 +483,8 @@ async fn held_by(pool: &fuz_db::Pool, actor: uuid::Uuid) -> Vec<String> {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn put_records_the_holder_on_insert_and_on_a_dedup_hit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, first) = fuz_testing::seed_account_actor(&pool, "first").await;
     let (_, second) = fuz_testing::seed_account_actor(&pool, "second").await;
     let facts_dir = tempfile::tempdir().unwrap();
@@ -545,9 +529,8 @@ async fn put_records_the_holder_on_insert_and_on_a_dedup_hit() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn holder_rows_cascade_with_the_actor_and_the_fact() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account, actor) = fuz_testing::seed_account_actor(&pool, "leaver").await;
     let (_, keeper) = fuz_testing::seed_account_actor(&pool, "keeper").await;
     let store = PgFactStore::new(pool.clone());
@@ -570,11 +553,10 @@ async fn holder_rows_cascade_with_the_actor_and_the_fact() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_FACT_TEST_URL)"]
 async fn concurrent_puts_of_new_bytes_record_every_holder() {
     // Racing first puts of identical bytes: one inserts the fact, the others
     // dedup on its key — every actor ends up a holder, and no put fails.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let mut actors = Vec::new();
     for i in 0..8 {
         actors.push(

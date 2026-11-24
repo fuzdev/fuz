@@ -6,17 +6,10 @@
 //! soft-delete freeing the partial-unique `path`, the duplicate-`path`
 //! unique violation, the first-cut `cell_list` visibility predicate, and the
 //! root-only, object-only `policy` column.
-//!
-//! `--ignored`-gated (needs Postgres). Run single-threaded against the
-//! shared `fuz_cell_test` DB:
-//!
-//! ```sh
-//! cargo test -p fuz_cell -- --ignored --test-threads=1
-//! ```
 
 mod common;
 
-use common::{fresh_db_pool, seed_actor};
+use common::{fresh_db, seed_actor};
 use fuz_cell::CellVisibility;
 use fuz_cell::cell_queries::{
     CELL_LIST_LIMIT_MAX, CellListParams, query_cell_create, query_cell_delete, query_cell_get,
@@ -28,9 +21,8 @@ use fuz_db::is_pg_unique_violation;
 use serde_json::json;
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn create_then_get_round_trips_wire_shape() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "creator").await;
 
@@ -83,9 +75,8 @@ async fn create_then_get_round_trips_wire_shape() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn update_partial_keeps_then_clears_path() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "editor").await;
 
@@ -148,9 +139,8 @@ async fn update_partial_keeps_then_clears_path() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn soft_delete_hides_row_and_is_idempotent() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "deleter").await;
 
@@ -191,9 +181,8 @@ async fn soft_delete_hides_row_and_is_idempotent() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn path_reuse_allowed_after_soft_delete() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "reuser").await;
 
@@ -235,9 +224,8 @@ async fn path_reuse_allowed_after_soft_delete() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn duplicate_active_path_is_unique_violation() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "dupes").await;
 
@@ -282,9 +270,8 @@ async fn duplicate_active_path_is_unique_violation() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn list_visibility_predicate_filters_by_viewer() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "owner").await;
     let stranger = seed_actor(&pool, "stranger").await;
@@ -393,9 +380,8 @@ async fn list_visibility_predicate_filters_by_viewer() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn list_by_kind_is_unbounded_newest_first_and_skips_tombstones() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let owner = seed_actor(&pool, "kind_owner").await;
 
@@ -471,9 +457,8 @@ async fn list_by_kind_is_unbounded_newest_first_and_skips_tombstones() {
 /// to JSON objects; `query_cell_set_policy` writes only a root and
 /// `query_cell_update` never touches it.
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn policy_is_a_roots_json_object() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let actor = seed_actor(&pool, "owner").await;
     let policy = json!({"post": {"moderation_required": true}});
@@ -580,9 +565,8 @@ async fn policy_is_a_roots_json_object() {
 /// `cell_policy_set`'s audited `previous_policy` is what the write replaced.
 /// Twin of `fuz_app`'s `cell_queries.set_policy.db.test.ts`.
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn policy_set_reads_the_previous_policy_under_its_lock() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let actor = seed_actor(&pool, "owner").await;
     let first_policy = json!({"post": {"moderation_required": true}});
     let second_policy = json!({"post": {"moderation_required": false}});

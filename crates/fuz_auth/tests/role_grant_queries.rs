@@ -1,16 +1,7 @@
 //! Integration tests for the `role_grant` writes and reads in
-//! `actor_queries` against a real `PostgreSQL`: the idempotent grant over an
+//! `actor_queries` against a live database: the idempotent grant over an
 //! expired row and the global-only keeper resolution. Twin of `fuz_app`'s
 //! `auth/role_grant_queries.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test role_grant_queries -- --ignored --test-threads=1
-//! ```
-//!
-//! `--test-threads=1` is required because every test drops + recreates
-//! the shared schema; parallel runs race on the `schema_version` table.
 
 #![expect(
     clippy::expect_used,
@@ -23,7 +14,7 @@ use fuz_auth::actor_queries::{query_create_role_grant, query_keeper_account_id};
 use fuz_auth::role::{ROLE_ADMIN, ROLE_KEEPER};
 
 mod common;
-use common::{fresh_db_pool, seed_account_actor};
+use common::{fresh_db, seed_account_actor};
 
 /// The revoke columns of one `role_grant` row: `(revoked, revoked_by, revoked_reason)`.
 async fn revoke_state(
@@ -44,9 +35,8 @@ async fn revoke_state(
 /// re-grant revokes it and inserts a fresh active row instead of handing the
 /// dead row back as the "existing" grant.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn grant_over_expired_row_revokes_it_and_inserts_fresh() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, actor_id) = seed_account_actor(&pool, "expired_regrant").await;
     let client = pool.get().await.expect("pool.get");
     let past = SystemTime::now() - Duration::from_secs(60);
@@ -72,9 +62,8 @@ async fn grant_over_expired_row_revokes_it_and_inserts_fresh() {
 /// An unexpired grant with an expiry is still the active grant: the re-grant
 /// returns the same row.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn grant_over_unexpired_row_returns_same_row() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, actor_id) = seed_account_actor(&pool, "unexpired_regrant").await;
     let client = pool.get().await.expect("pool.get");
     let future = SystemTime::now() + Duration::from_secs(3600);
@@ -116,9 +105,8 @@ async fn grant_teacher(
 /// neighbor: a scoped re-grant leaves the global grant and another scope
 /// alone, and a global re-grant leaves the scoped rows alone.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn expired_row_revoke_touches_only_its_own_slot() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, actor_id) = seed_account_actor(&pool, "expired_scoped_regrant").await;
     let client = pool.get().await.expect("pool.get");
     let scope_a = uuid::Uuid::new_v4();
@@ -153,9 +141,8 @@ async fn expired_row_revoke_touches_only_its_own_slot() {
 /// grant verb writes, but direct SQL or a consumer can) must not resolve the
 /// daemon-token identity.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn scoped_keeper_grant_does_not_resolve_keeper() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (_, scoped_actor) = seed_account_actor(&pool, "scoped_keeper").await;
     let client = pool.get().await.expect("pool.get");
     let scope_id = uuid::Uuid::new_v4();

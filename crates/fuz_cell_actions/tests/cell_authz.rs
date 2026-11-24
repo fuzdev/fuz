@@ -86,14 +86,8 @@
 //!   the same `404 cell_grant_not_found` as no hook, and a soft-deleted cell
 //!   404s before it runs.
 //!
-//! The suite has its own `FUZ_CELL_ACTIONS_TEST_URL` (default
-//! `fuz_cell_actions_test`) database, over the auth + cell chains — plus the
-//! fact chain for the ref-admission cases.
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_cell_actions_test
-//! cargo test -p fuz_cell_actions --test cell_authz -- --ignored --test-threads=1
-//! ```
+//! The suite's databases carry the auth + cell chains — plus the fact chain for
+//! the ref-admission cases.
 
 #![expect(
     clippy::unwrap_used,
@@ -127,7 +121,7 @@ use fuz_fact::{
 use fuz_http::JsonrpcError;
 use fuz_realtime::SignalToken;
 use fuz_testing::{
-    TestingDbOptions, fresh_test_db_pool, grant_role, grant_scoped_role, seed_account_actor,
+    TestEngine, TestingDbOptions, fresh_test_db, grant_role, grant_scoped_role, seed_account_actor,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -136,10 +130,10 @@ use uuid::Uuid;
 const ROLE_MEMBER: &str = "member";
 
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_CELL_ACTIONS_TEST_URL",
-    default_db: "fuz_cell_actions_test",
+    suite: "fuz_cell_actions",
     migrations: &[AUTH_MIGRATIONS, CELL_MIGRATIONS],
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
 /// [`DB`] plus the fact chain — the ref-admission cases need `fact_holder`.
@@ -366,9 +360,8 @@ async fn count_cells(pool: &Pool) -> i64 {
 /// other values (`shared_with`, `order_by`, `order_direction`). A page inside the bounds is served,
 /// `limit` and `offset` honored.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn cell_list_refuses_an_out_of_range_page() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let mut ids = Vec::new();
@@ -433,9 +426,8 @@ async fn cell_list_refuses_an_out_of_range_page() {
 /// written, and `cell_update` / `cell_clone` refuse a mistyped `data` before
 /// the existence and visibility check that 404-masks a missing or hidden cell.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn cell_data_of_the_wrong_type_is_refused_before_any_cell_check() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
@@ -528,9 +520,8 @@ async fn cell_data_of_the_wrong_type_is_refused_before_any_cell_check() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_cell_admin_bypass_requires_a_global_admin() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (_, owner) = seed(&pool, "owner").await;
     let private = seed_cell(&pool, "note", CellVisibility::Private, owner).await;
@@ -583,9 +574,8 @@ async fn the_cell_admin_bypass_requires_a_global_admin() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn cell_clone_runs_the_create_authorizer() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (admin, admin_actor) = seed(&pool, "admin").await;
     grant_role(&pool, admin_actor, ROLE_ADMIN).await;
@@ -645,9 +635,8 @@ async fn seed_post_under_deleted_space(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn create_under_a_deleted_root_is_not_found_without_an_authorizer() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options_with(&pool, None);
     let (member, _) = seed(&pool, "member").await;
     let post = seed_post_under_deleted_space(&options, &member).await;
@@ -665,9 +654,8 @@ async fn create_under_a_deleted_root_is_not_found_without_an_authorizer() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn create_under_a_deleted_root_never_reaches_the_authorizer() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let authorizer = Arc::new(CountingAllow::default());
     let mounted: Arc<dyn CellCreateAuthorize> = Arc::<CountingAllow>::clone(&authorizer);
     let options = options_with(&pool, Some(mounted));
@@ -722,9 +710,8 @@ impl CellCreateAuthorize for RecordingAllow {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_hooks_see_the_cell_and_parent_kinds() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let validated: Arc<Mutex<Vec<KindAndData>>> = Arc::default();
     let validator: CellDataValidator = {
         let validated = Arc::clone(&validated);
@@ -862,9 +849,8 @@ async fn seed_contribution(
 /// once the root owner rejects it — on every write verb, since each echoes or
 /// reveals the row it touches (`cell_update` returns the full cell).
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -945,9 +931,8 @@ async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
 /// holder leaving a rejected cell is not still admitted by a remaining role
 /// grant.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn self_revoke_on_a_rejected_cell_is_not_still_admitted() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (holder, holder_actor) = seed(&pool, "holder").await;
@@ -987,9 +972,8 @@ async fn self_revoke_on_a_rejected_cell_is_not_still_admitted() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn grant_create_refuses_an_unapproved_cell_after_the_manage_gate() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (admin, admin_actor) = seed(&pool, "admin").await;
@@ -1054,9 +1038,8 @@ async fn grant_create_refuses_an_unapproved_cell_after_the_manage_gate() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_root_owner_stewards_a_pending_contribution() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -1166,9 +1149,8 @@ fn status_of(result: &Result<fuz_actions::ActionOutput, JsonrpcError>) -> u16 {
 /// owner reads a nested pending comment under another author's post, and
 /// the post's author does not.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn steward_arm_reaches_a_nested_contribution_through_the_root() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (post_author, post_author_actor) = seed(&pool, "post_author").await;
@@ -1230,9 +1212,8 @@ async fn steward_arm_reaches_a_nested_contribution_through_the_root() {
 /// not approved again but is taken down by a rejection (visibility
 /// untouched); a rejected or unmarked one moves neither way.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn cell_moderate_transitions_carry_their_from_state() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -1379,9 +1360,8 @@ async fn cell_moderate_transitions_carry_their_from_state() {
 /// self-flip to public is inert; the steward arm covers the `ids` batch read
 /// and closes on every surface once the root is tombstoned.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn unknown_markers_and_tombstoned_root() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -1575,9 +1555,8 @@ fn not_held(result: &Result<fuz_actions::ActionOutput, JsonrpcError>) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn create_admits_a_new_ref_only_for_a_holder() {
-    let pool = fresh_test_db_pool(DB_WITH_FACTS).await;
+    let pool = fresh_test_db(DB_WITH_FACTS).await;
     let options = options_with(&pool, None);
     let (alice, alice_actor) = seed(&pool, "alice").await;
     let (bob, bob_actor) = seed(&pool, "bob").await;
@@ -1685,13 +1664,12 @@ async fn sweep_orphans_past_an_hour(pool: &Pool) -> Vec<String> {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn a_sweep_between_a_reupload_and_its_cell_write_keeps_the_fact() {
     // An old orphan re-uploaded (a dedup hit: the `fact` row keeps its old
     // `created_at`) must survive a sweep that runs before the cell write
     // naming it — else the sweep cascades the fresh holder row away and the
     // write is refused as unheld.
-    let pool = fresh_test_db_pool(DB_WITH_FACTS).await;
+    let pool = fresh_test_db(DB_WITH_FACTS).await;
     let options = options_with(&pool, None);
     let (alice, alice_actor) = seed(&pool, "alice").await;
     let (bob, bob_actor) = seed(&pool, "bob").await;
@@ -1753,9 +1731,8 @@ async fn a_sweep_between_a_reupload_and_its_cell_write_keeps_the_fact() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
-    let pool = fresh_test_db_pool(DB_WITH_FACTS).await;
+    let pool = fresh_test_db(DB_WITH_FACTS).await;
     let options = options_with(&pool, None);
     let (bob, bob_actor) = seed(&pool, "bob").await;
     let (_, alice_actor) = seed(&pool, "alice").await;
@@ -1828,9 +1805,8 @@ async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn clone_carries_source_refs_per_row_without_holding() {
-    let pool = fresh_test_db_pool(DB_WITH_FACTS).await;
+    let pool = fresh_test_db(DB_WITH_FACTS).await;
     let options = options_with(&pool, None);
     let (_, alice_actor) = seed(&pool, "alice").await;
     let (bob, bob_actor) = seed(&pool, "bob").await;
@@ -1907,9 +1883,8 @@ async fn clone_carries_source_refs_per_row_without_holding() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn a_global_admin_is_not_gated_on_refs() {
-    let pool = fresh_test_db_pool(DB_WITH_FACTS).await;
+    let pool = fresh_test_db(DB_WITH_FACTS).await;
     let options = options_with(&pool, None);
     let (admin, admin_actor) = seed(&pool, "admin").await;
     grant_role(&pool, admin_actor, ROLE_ADMIN).await;
@@ -1940,11 +1915,10 @@ async fn a_global_admin_is_not_gated_on_refs() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn a_new_ref_is_refused_without_the_fact_chain() {
     // The auth + cell chains alone: no `fact_holder` table, so nobody holds
     // anything — refused as unheld, not a failed query.
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options_with(&pool, None);
     let (bob, _) = seed(&pool, "bob").await;
     let refused = run(
@@ -1960,12 +1934,11 @@ async fn a_new_ref_is_refused_without_the_fact_chain() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn ref_refusal_answers_after_the_masks_and_the_create_policy() {
     // Admission is the last gate: a hidden cell answers its 404 mask whatever
     // `data` names (so the refusal says nothing about a hidden cell's refs),
     // and the create policy answers ahead of it.
-    let pool = fresh_test_db_pool(DB_WITH_FACTS).await;
+    let pool = fresh_test_db(DB_WITH_FACTS).await;
     let options = options(&pool);
     let (_, alice_actor) = seed(&pool, "alice").await;
     let (bob, _) = seed(&pool, "bob").await;
@@ -2095,9 +2068,8 @@ async fn policy_set_audit_metadata(pool: &Pool) -> Vec<Value> {
 /// `cell_policy_unsupported`; the mounted validator's own refusal answers
 /// otherwise. Clearing a policy needs no authorizer.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn policy_writes_need_an_authorizer_that_accepts_them() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let root = seed_cell(&pool, "forum", CellVisibility::Public, owner_actor).await;
     let policy = json!({"post": {"moderation_required": true}});
@@ -2212,9 +2184,8 @@ async fn policy_writes_need_an_authorizer_that_accepts_them() {
 /// `cell_policy_set` is manage-tier and root-only, and the policy is the
 /// column — an editor rewriting the root's `data.policy` loosens nothing.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_root_policy_is_the_managers_alone() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let options = options_with(&pool, Some(Arc::new(ReadsRootPolicy)));
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (editor, editor_actor) = seed(&pool, "editor").await;
@@ -2450,9 +2421,8 @@ async fn count_grant_rows(pool: &Pool) -> (i64, i64) {
 /// The grant authorizer runs only for a manager past the spine's gates, and its
 /// refusal writes nothing.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_grant_authorizer_gates_a_manager_after_the_spine_gates() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let (_, target) = seed(&pool, "target").await;
@@ -2613,9 +2583,8 @@ async fn create_grant(
 /// An allowing hook admits them — the row goes, and the audit row stamps
 /// `steward: true` — after being asked with the grant's own fields.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_revoke_authorizer_admits_a_scope_steward() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (steward, _) = seed(&pool, "steward").await;
     let scope = Uuid::new_v4();
@@ -2669,9 +2638,8 @@ async fn the_revoke_authorizer_admits_a_scope_steward() {
 /// A refusing hook answers the same 404 mask — no 403, no audit row, the grant
 /// kept.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn a_revoke_authorizer_refusal_is_the_404_mask() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let cell = seed_cell(&pool, "note", CellVisibility::Public, owner_actor).await;
@@ -2733,9 +2701,8 @@ impl CellGrantRevokeAuthorize for LevelRaceRevokeAuthorize {
 /// level moved after the hook read it, the delete matches nothing and the
 /// steward gets the 404 mask, no audit row — the grant kept at its old level.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn a_steward_revoke_fences_the_delete_to_the_judged_level() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (steward, _) = seed(&pool, "steward").await;
     let cell = seed_cell(&pool, "note", CellVisibility::Private, owner_actor).await;
@@ -2780,9 +2747,8 @@ async fn a_steward_revoke_fences_the_delete_to_the_judged_level() {
 /// revoke, a self-revoke, and a soft-deleted cell never reach the hook — even
 /// an allowing one.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_cell_actions_test database"]
 async fn the_revoke_authorizer_is_fenced_to_scoped_role_grants_of_non_managers() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let (holder, holder_actor) = seed(&pool, "holder").await;

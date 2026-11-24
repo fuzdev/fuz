@@ -4,32 +4,32 @@
 //! test binary — each integration test file includes it via `mod common;`.
 //! Modeled on `fuz_auth/tests/common/mod.rs`.
 //!
-//! These tests are `--ignored`-gated (they need a reachable Postgres);
-//! run them with `cargo test -p fuz_cell -- --ignored --test-threads=1`.
-//! The pool points at a single shared `fuz_cell_test` database (override
-//! with `FUZ_CELL_TEST_URL`), so the suite runs single-threaded —
-//! concurrent DROP+CREATE on `schema_version` would race. The shared cycle
-//! lives in `fuz_testing::fresh_db`.
+//! Each test opens a database of its own through `fuz_testing::fresh_test_db`.
 
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_cell::CELL_MIGRATIONS;
 use fuz_db::Pool;
-use fuz_testing::{TestingDbOptions, fresh_test_db_pool, seed_account_actor};
+use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db, seed_account_actor};
 
-/// This suite's database: `FUZ_CELL_TEST_URL` (default `fuz_cell_test`) over
-/// the crate's full DDL surface in FK order — auth first (`cell` FKs into
+/// This suite's database: the crate's full DDL surface in FK order — auth first (`cell` FKs into
 /// `actor`), then cell.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_CELL_TEST_URL",
-    default_db: "fuz_cell_test",
+    suite: "fuz_cell",
     migrations: &[AUTH_MIGRATIONS, CELL_MIGRATIONS],
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
-/// Reset the `public` schema, then run the auth + cell + cell-history
-/// chains. Returns a `Pool` ready for fixture seeding.
-pub async fn fresh_db_pool() -> Pool {
-    fresh_test_db_pool(DB).await
+/// A fresh database with the auth and cell chains, ready for fixture seeding.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+pub async fn fresh_db() -> TestDb {
+    fresh_test_db(DB).await
+}
+
+/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
+#[allow(dead_code, reason = "each test binary uses only part of this module")]
+pub async fn fresh_postgres_db() -> TestDb {
+    fresh_test_db(DB.postgres_only()).await
 }
 
 /// Seed an `account` + `actor` pair and return the actor id — the value

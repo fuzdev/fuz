@@ -1,12 +1,4 @@
-//! Integration tests for `fuz_auth::signup` against a real `PostgreSQL`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth -- --ignored signup
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
+//! Integration tests for `fuz_auth::signup` against a live database.
 
 #![expect(
     clippy::expect_used,
@@ -23,7 +15,7 @@ use fuz_auth::{
 use fuz_db::Pool;
 
 mod common;
-use common::fresh_db_pool;
+use common::{fresh_db, fresh_postgres_db};
 
 fn build_options(pool: Pool) -> SignupOptions {
     let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2idHasher::new());
@@ -69,10 +61,9 @@ async fn seed_invite(pool: &Pool, email: Option<&str>, username: Option<&str>) -
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_rejects_invalid_input() {
-    let pool = fresh_db_pool().await;
-    let options = build_options(pool);
+    let pool = fresh_db().await;
+    let options = build_options(pool.clone());
 
     let err = signup_handler(
         &options,
@@ -135,10 +126,9 @@ async fn signup_rejects_invalid_input() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_no_matching_invite_when_invite_gated() {
-    let pool = fresh_db_pool().await;
-    let options = build_options(pool);
+    let pool = fresh_db().await;
+    let options = build_options(pool.clone());
 
     let err = signup_handler(
         &options,
@@ -161,9 +151,8 @@ async fn signup_no_matching_invite_when_invite_gated() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_succeeds_with_open_signup_and_creates_actor() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     enable_open_signup(&pool).await;
     let options = build_options(pool.clone());
 
@@ -211,9 +200,8 @@ async fn signup_succeeds_with_open_signup_and_creates_actor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_succeeds_with_matching_invite_and_claims_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let invite_id = seed_invite(&pool, None, Some("alice")).await;
     let options = build_options(pool.clone());
 
@@ -239,9 +227,9 @@ async fn signup_succeeds_with_matching_invite_and_claims_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn signup_refuses_when_the_invite_claim_misses() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let invite_id = seed_invite(&pool, None, Some("alice")).await;
     // A row trigger that skips every `invite` UPDATE: the claim matches no
     // row inside the signup tx, the state a broken FOR UPDATE invariant
@@ -318,9 +306,9 @@ async fn signup_refuses_when_the_invite_claim_misses() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn signup_audits_a_failed_commit_as_internal_error() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let invite_id = seed_invite(&pool, None, Some("alice")).await;
     // A deferred constraint trigger that raises at commit: every statement in
     // the signup tx succeeds and the `COMMIT` itself fails.
@@ -396,9 +384,8 @@ async fn signup_audits_a_failed_commit_as_internal_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_conflict_on_duplicate_username() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     enable_open_signup(&pool).await;
     let options = build_options(pool.clone());
 
@@ -435,13 +422,12 @@ async fn signup_conflict_on_duplicate_username() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_rejects_oversized_password() {
     // `PASSWORD_LENGTH_MAX + 1` chars must bail with `InvalidInput`
     // without invoking Argon2 or hitting the DB — bounds the blake2b
     // ingestion cost on pathological inputs.
-    let pool = fresh_db_pool().await;
-    let options = build_options(pool);
+    let pool = fresh_db().await;
+    let options = build_options(pool.clone());
 
     let err = signup_handler(
         &options,
@@ -464,13 +450,12 @@ async fn signup_rejects_oversized_password() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_conflict_audit_preserves_invite_id() {
     // Conflict path on the invite branch must record `invite_id` in
     // audit metadata — forensic property tested in parallel to
     // `signup_emits_failure_audit_with_classified_reason` (which
     // covers the `no_match` path).
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let invite_id = seed_invite(&pool, None, Some("alice")).await;
     let options = build_options(pool.clone());
 
@@ -546,13 +531,12 @@ async fn signup_conflict_audit_preserves_invite_id() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_rate_limit_bypasses_deadline_floor() {
     // 429 must short-circuit BEFORE the deadline floor — verifies the
     // fast-path contract. Set a non-zero floor so an applied floor
     // would be observable as wall-clock; assert the 429 returns well
     // under it.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2idHasher::new());
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let ip_limiter = Arc::new(RateLimiter::new(RateLimiterOptions {
@@ -561,7 +545,7 @@ async fn signup_rate_limit_bypasses_deadline_floor() {
         max_keys: None,
     }));
     let options = SignupOptions {
-        pool,
+        pool: pool.clone(),
         password_hasher: hasher,
         audit,
         signup_ip_rate_limiter: Some(Arc::clone(&ip_limiter)),
@@ -605,9 +589,8 @@ async fn signup_rate_limit_bypasses_deadline_floor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_ip_limit_buckets_ipv6_by_64() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let ip_limiter = Arc::new(RateLimiter::new(RateLimiterOptions {
         max_attempts: 1,
         window_ms: 60_000,
@@ -615,7 +598,7 @@ async fn signup_ip_limit_buckets_ipv6_by_64() {
     }));
     let options = SignupOptions {
         signup_ip_rate_limiter: Some(Arc::clone(&ip_limiter)),
-        ..build_options(pool)
+        ..build_options(pool.clone())
     };
     let input = |username: &str| SignupInput {
         username: username.into(),
@@ -673,12 +656,11 @@ async fn signup_ip_limit_buckets_ipv6_by_64() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_creates_session_row() {
     // Asserts the basic correctness chain — signup landing implies a
     // matching `auth_session` row keyed by the blake3 hash of the
     // returned session token.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     enable_open_signup(&pool).await;
     let options = build_options(pool.clone());
 
@@ -711,11 +693,10 @@ async fn signup_creates_session_row() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_email_only_invite_matches_email_only() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let _invite_id = seed_invite(&pool, Some("alice@example.com"), None).await;
-    let options = build_options(pool);
+    let options = build_options(pool.clone());
 
     // Wrong email — no match.
     let err = signup_handler(
@@ -752,11 +733,10 @@ async fn signup_email_only_invite_matches_email_only() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_both_field_invite_requires_both_to_match() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let _invite_id = seed_invite(&pool, Some("alice@example.com"), Some("alice")).await;
-    let options = build_options(pool);
+    let options = build_options(pool.clone());
 
     // Matching username only — fails (invite requires email too).
     let err = signup_handler(
@@ -811,7 +791,6 @@ async fn signup_both_field_invite_requires_both_to_match() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_concurrent_invite_claim_is_atomic() {
     // The load-bearing concurrency property — FOR UPDATE inside the
     // signup tx must serialize find + claim so at most one of two
@@ -819,7 +798,7 @@ async fn signup_concurrent_invite_claim_is_atomic() {
     // `find_for_update` returns no row after the winner commits and
     // falls through to `no_matching_invite`. No second account
     // persists.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let invite_id = seed_invite(&pool, None, Some("alice")).await;
     let options = Arc::new(build_options(pool.clone()));
 
@@ -889,9 +868,8 @@ async fn signup_concurrent_invite_claim_is_atomic() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_emits_failure_audit_with_classified_reason() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let options = build_options(pool.clone());
 
     let _ = signup_handler(
@@ -961,14 +939,13 @@ const fn is_rate_limited(result: &Result<fuz_auth::SignupSuccess, SignupError>) 
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_open_successes_count_toward_the_ip_limit() {
     // With no invite to spend, an open signup is charged to the IP bucket like
     // a failure — otherwise one address mints accounts without bound.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     enable_open_signup(&pool).await;
     let ip_limiter = ip_limiter_of(2);
-    let mut options = build_options(pool);
+    let mut options = build_options(pool.clone());
     options.signup_ip_rate_limiter = Some(Arc::clone(&ip_limiter));
     let ip = Some("10.0.0.7".to_owned());
 
@@ -984,15 +961,14 @@ async fn signup_open_successes_count_toward_the_ip_limit() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_invite_success_does_not_count_toward_the_ip_limit() {
     // An invite-gated success spends an invite an admin minted, so it charges
     // nothing: a class signing up on invites from one address keeps going.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     seed_invite(&pool, None, Some("invited_one")).await;
     seed_invite(&pool, None, Some("invited_two")).await;
     let ip_limiter = ip_limiter_of(1);
-    let mut options = build_options(pool);
+    let mut options = build_options(pool.clone());
     options.signup_ip_rate_limiter = Some(Arc::clone(&ip_limiter));
     let ip = Some("10.0.0.8".to_owned());
 
@@ -1006,14 +982,13 @@ async fn signup_invite_success_does_not_count_toward_the_ip_limit() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_burst_gets_at_most_the_ip_cap_past_the_limiter() {
     // Invite-gated with no invites: every attempt hashes and then fails
     // `no_matching_invite`. A check before the hash let the whole concurrent
     // burst through; the reservation lets exactly the cap through.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let ip_limiter = ip_limiter_of(2);
-    let mut options = build_options(pool);
+    let mut options = build_options(pool.clone());
     options.signup_ip_rate_limiter = Some(Arc::clone(&ip_limiter));
 
     let results = futures::future::join_all((0..4).map(|i| {
@@ -1075,16 +1050,15 @@ impl PasswordHasher for ParkedHasher {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_dropped_mid_hash_costs_an_attempt_on_each_bucket() {
     // The Argon2 hash a dropped request started runs on regardless, so the
     // attempt is charged as a failure: releasing it would let one address keep
     // every Argon2 permit busy uncharged.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let started = Arc::new(tokio::sync::Notify::new());
     let ip_limiter = ip_limiter_of(1);
     let account_limiter = ip_limiter_of(1);
-    let mut options = build_options(pool);
+    let mut options = build_options(pool.clone());
     options.password_hasher = Arc::new(ParkedHasher {
         started: Arc::clone(&started),
     });
@@ -1146,12 +1120,11 @@ impl PasswordHasher for PoolHoldingHasher {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn signup_dropped_after_its_hash_costs_an_attempt_on_each_bucket() {
     // The hash is spent by the time the database steps after it run, so a
     // request dropped there — here, parked on the checkout that follows the
     // hash — is charged as one dropped mid-hash is.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     pool.resize(1);
     let hashed = Arc::new(tokio::sync::Notify::new());
     let held = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1159,7 +1132,7 @@ async fn signup_dropped_after_its_hash_costs_an_attempt_on_each_bucket() {
     let account_limiter = ip_limiter_of(1);
     let mut options = build_options(pool.clone());
     options.password_hasher = Arc::new(PoolHoldingHasher {
-        pool,
+        pool: pool.clone(),
         held: Arc::clone(&held),
         hashed: Arc::clone(&hashed),
     });

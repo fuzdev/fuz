@@ -40,6 +40,10 @@ fuz_storage = { path = "crates/fuz_storage" }
 fuz_sys = { path = "crates/fuz_sys" }
 fuz_wire = { path = "crates/fuz_wire" }
 fuzi_core = { path = "crates/fuzi_core" }
+# The pglet server, run in-process by `fuz_testing` as the default test database.
+# A sibling checkout (`../pglet`), as consumers reach `../fuz`; test-only, so it
+# never reaches a shipped binary.
+pglet_server = { path = "../pglet/crates/pglet_server" }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: parse floats correctly rounded, as `JSON.parse` does — the
 # wire-int adapters' (`fuz_http::deserialize_wire_int`) twin parity rests on it

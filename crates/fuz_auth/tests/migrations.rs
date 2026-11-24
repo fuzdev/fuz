@@ -1,40 +1,30 @@
 //! Integration test: `fuz_auth` migration registers cleanly against a
-//! real `PostgreSQL`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
+//! live database.
 
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_db::{MigrationNamespace, run_migrations};
-use fuz_testing::{TestingDbOptions, fresh_test_db_pool};
+use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
 
-/// This suite's database: `FUZ_AUTH_TEST_URL` (default `fuz_auth_test`) with
-/// an **empty** migration list — the tests below drive `run_migrations`
-/// themselves and assert on what it applies, so the fixture must hand back a
-/// bare `public` schema.
+/// This suite's database: an **empty** migration list — the tests below drive
+/// `run_migrations` themselves and assert on what it applies, so the fixture
+/// must hand back a bare database.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_AUTH_TEST_URL",
-    default_db: "fuz_auth_test",
+    suite: "fuz_auth",
     migrations: &[],
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
 /// Tear down any previous state for a clean re-migration. Resetting the whole
 /// `public` schema wipes every table, type, and sequence — immune to the drift
 /// a hand-maintained drop list invites.
-async fn fresh_db_pool() -> fuz_db::Pool {
-    fresh_test_db_pool(DB).await
+async fn fresh_db() -> TestDb {
+    fresh_test_db(DB).await
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn migrations_run_once() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
 
     let results = run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
@@ -63,9 +53,8 @@ async fn migrations_run_once() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn migrations_idempotent_on_second_run() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
 
     run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
@@ -80,9 +69,8 @@ async fn migrations_idempotent_on_second_run() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn auth_tables_exist_after_migration() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
         .expect("migration run");
@@ -134,11 +122,10 @@ async fn auth_tables_exist_after_migration() {
 ///    absent scope unrepresentable, which is precisely the permissive default
 ///    the scope design refuses.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn api_token_scope_migration_grandfathers_existing_tokens() {
     use fuz_auth::token_scope::{TokenScope, TokenScopeDocument};
 
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
 
     // Bring the DB to the state *before* token scoping by running only the
     // chain **prefix** — a faithful stand-in for a deployment that
@@ -248,9 +235,8 @@ async fn api_token_scope_migration_grandfathers_existing_tokens() {
 /// and rolls its chain back, and once that row is lowercased the chain applies
 /// and the CHECK refuses a mixed-case insert from then on.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_username_lowercase_migration_refuses_a_mixed_case_row() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
 
     // the chain before the migration under test, its tail derived from the data
     let idx = AUTH_MIGRATIONS
@@ -360,9 +346,8 @@ async fn identity_foreign_keys(pool: &fuz_db::Pool) -> Vec<(String, String, Stri
 /// stamps' foreign keys, keeps every reference that carries meaning and the
 /// stamp's value, and a stamp then names an actor no row holds.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn drop_provenance_stamp_foreign_keys_drops_only_the_stamps() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let idx = AUTH_MIGRATIONS
         .migrations
         .iter()

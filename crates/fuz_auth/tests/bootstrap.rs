@@ -1,4 +1,4 @@
-//! Integration tests for `fuz_auth::bootstrap` against a real `PostgreSQL`.
+//! Integration tests for `fuz_auth::bootstrap` against a live database.
 //!
 //! Twin of `fuz_app`'s `src/lib/auth/bootstrap_account.ts` +
 //! `src/test/auth/bootstrap_account.db.test.ts`. The TS spine is canonical for
@@ -27,14 +27,6 @@
 //! - **Minimum token length** — a token file under `BOOTSTRAP_TOKEN_MIN_BYTES`
 //!   (after its one trailing newline) reads as unreadable on both the request
 //!   path and `is_bootstrap_available`, however exactly a caller matches it.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test bootstrap -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
 #![expect(
     clippy::unwrap_used,
@@ -61,7 +53,7 @@ use fuz_sys::secure_file::BurnOutcome;
 use uuid::Uuid;
 
 mod common;
-use common::fresh_db_pool;
+use common::{fresh_db, fresh_postgres_db};
 
 /// In-memory [`BootstrapTokenStore`] that models the burn: `read_token`
 /// returns the configured bytes until `burn_token` takes them, then fails as a
@@ -291,9 +283,8 @@ async fn latest_bootstrap_failure_error(options: &BootstrapOptions) -> String {
 // -- Constant-time token compare --------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_rejects_invalid_token() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -334,11 +325,10 @@ async fn bootstrap_rejects_invalid_token() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_tolerates_single_trailing_newline() {
     // Operator-written token files commonly carry a trailing `\n`; the handler
     // strips exactly one before the constant-time compare.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij\n");
     let available = Arc::new(AtomicBool::new(true));
@@ -360,9 +350,8 @@ async fn bootstrap_tolerates_single_trailing_newline() {
 // -- Success: one-shot deletion + keeper callback + fail-closed flip ---------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_succeeds_and_consumes_the_token() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -453,12 +442,11 @@ async fn bootstrap_succeeds_and_consumes_the_token() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_second_call_after_success_refuses() {
     // After a successful bootstrap the in-memory flag is cleared, so a second
     // attempt with the same (still-readable) token is refused — refuses once
     // consumed, exactly one account survives.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -506,7 +494,6 @@ async fn bootstrap_second_call_after_success_refuses() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_probe_after_success_writes_no_audit_row() {
     // A bootstrapped server writes nothing in response to bootstrap probes.
     //
@@ -516,7 +503,7 @@ async fn bootstrap_probe_after_success_writes_no_audit_row() {
     // request — unbounded, permanent, and with no retention job to reclaim it.
     // Pinned as a property rather than as the absence of a specific call, so it
     // survives a refactor of the short-circuit.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -574,7 +561,6 @@ async fn bootstrap_probe_after_success_writes_no_audit_row() {
 // -- Fail-closed availability -----------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_without_a_token_store_answers_already_bootstrapped() {
     // No token store ⇒ bootstrap disabled (fail-closed), refused as
     // `AlreadyBootstrapped` — the twin's answer with no token path, so an
@@ -582,7 +568,7 @@ async fn bootstrap_without_a_token_store_answers_already_bootstrapped() {
     // no audit row: this leg is reachable for the whole life of a process
     // that never configured bootstrap, so an emit here would be an
     // unauthenticated unbounded write channel.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let available = Arc::new(AtomicBool::new(true));
     let options = build_options(pool.clone(), None, available, None);
 
@@ -609,12 +595,11 @@ async fn bootstrap_without_a_token_store_answers_already_bootstrapped() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_refuses_when_unavailable() {
     // The early in-memory check short-circuits before any file read / crypto
     // when `bootstrap_available` is already false — refuses even with a valid
     // token (`fuz_app` `docs/security.md` §Bootstrap "Early in-memory check").
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(false));
@@ -651,9 +636,8 @@ async fn bootstrap_refuses_when_unavailable() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_token_file_missing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let available = Arc::new(AtomicBool::new(true));
     let options = build_options(
         pool.clone(),
@@ -683,7 +667,6 @@ async fn bootstrap_token_file_missing() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn token_file_missing_closes_the_window() {
     // An unreadable token file means bootstrap can never succeed, so leaving
     // the window advertised as open reopens the exact channel the
@@ -693,7 +676,7 @@ async fn token_file_missing_closes_the_window() {
     // `is_bootstrap_available` already reads an unreadable file as closed; the
     // request path has to agree, and closing the door is the fix rather than
     // rate-limiting the knocking.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let available = Arc::new(AtomicBool::new(true));
     let options = build_options(
         pool.clone(),
@@ -751,7 +734,6 @@ async fn token_file_missing_closes_the_window() {
 /// and the window closes, even for a caller who presents its exact bytes.
 /// One at exactly the minimum bootstraps.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_under_the_minimum_length_reads_as_missing() {
     // the minimum is 32 bytes, written out rather than derived from
     // `BOOTSTRAP_TOKEN_MIN_BYTES`, so changing the constant fails here
@@ -763,7 +745,7 @@ async fn a_token_under_the_minimum_length_reads_as_missing() {
         (short.clone(), short.clone()),
         (format!("{short}\n"), short.clone()),
     ] {
-        let pool = fresh_db_pool().await;
+        let pool = fresh_db().await;
         let available = Arc::new(AtomicBool::new(true));
         let (token_store, burned) = InMemoryTokenStore::with_token(stored.as_bytes());
         let options = build_options(
@@ -798,7 +780,7 @@ async fn a_token_under_the_minimum_length_reads_as_missing() {
         options.audit.drain_inflight().await;
     }
 
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let token = "k".repeat(32);
     let (token_store, _burned) = InMemoryTokenStore::with_token(format!("{token}\n").as_bytes());
     let options = build_options(
@@ -816,10 +798,9 @@ async fn a_token_under_the_minimum_length_reads_as_missing() {
 /// unavailable, exactly as the request path does; one at the minimum is
 /// available.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn availability_refuses_a_token_file_under_the_minimum_length() {
     use std::os::unix::fs::PermissionsExt;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secret_bootstrap_token");
     let write = |contents: &str| {
@@ -845,12 +826,11 @@ async fn availability_refuses_a_token_file_under_the_minimum_length() {
 // -- Input validation (before the window and token checks) ------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_rejects_invalid_input_before_the_token_check() {
     // The body is validated before the window and the token are: even with a
     // matching token, an out-of-bounds password (< 12 chars) is rejected, and
     // no account is created.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -873,14 +853,13 @@ async fn bootstrap_rejects_invalid_input_before_the_token_check() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_refuses_a_token_past_its_maximum_as_invalid_input() {
     // A token past `BOOTSTRAP_TOKEN_LENGTH_MAX` UTF-16 code units is a
     // malformed body, as the twin's `max_length` makes it: refused in the open
     // window before the token is compared, with no failure audit row, and the
     // window left open. The control at the cap is a wrong token, refused at the
     // compare with its row.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -991,13 +970,12 @@ async fn bootstrap_refuses_a_token_past_its_maximum_as_invalid_input() {
 // -- Atomic bootstrap_lock race guard ---------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn bootstrap_lock_serializes_concurrent_attempts() {
     // The load-bearing concurrency property: the single-row `bootstrap_lock`
     // latch UPDATE (`... WHERE bootstrapped = false RETURNING id`) serializes
     // two concurrent bootstraps so exactly one wins; the loser's UPDATE matches
     // zero rows, rolls back, and returns AlreadyBootstrapped. One account total.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) =
         InMemoryTokenStore::with_token(b"correct-token-0123456789abcdefghij");
     let available = Arc::new(AtomicBool::new(true));
@@ -1084,9 +1062,8 @@ async fn session_count(pool: &Pool) -> i64 {
 /// The burn runs after the lock UPDATE (the row is locked when it runs) and
 /// before the commit (the flip is not yet visible to another connection).
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_burn_runs_after_the_lock_and_before_the_commit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let seen = Arc::new(Mutex::new(None));
     let store: Arc<dyn BootstrapTokenStore> = Arc::new(ProbingTokenStore {
         pool: pool.clone(),
@@ -1120,9 +1097,8 @@ async fn the_burn_runs_after_the_lock_and_before_the_commit() {
 /// leaves the window open, so a retry with the same token succeeds once the
 /// file can be burned.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_failed_burn_rolls_the_bootstrap_back_and_leaves_the_window_open() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let available = Arc::new(AtomicBool::new(true));
     let (token_store, _burned) = InMemoryTokenStore::undeletable(TOKEN.as_bytes());
     let options = build_options(
@@ -1171,7 +1147,6 @@ async fn a_failed_burn_rolls_the_bootstrap_back_and_leaves_the_window_open() {
 /// A token file gone by the time of the burn is burned: the postcondition —
 /// no token at the path — holds, so the bootstrap commits.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_already_gone_at_the_burn_counts_as_burned() {
     struct GoneAtBurn;
     impl BootstrapTokenStore for GoneAtBurn {
@@ -1182,7 +1157,7 @@ async fn a_token_already_gone_at_the_burn_counts_as_burned() {
             Box::pin(async { Ok(BurnOutcome::AlreadyGone) })
         }
     }
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let options = build_options(
         pool.clone(),
         Some(Arc::new(GoneAtBurn)),
@@ -1199,9 +1174,8 @@ async fn a_token_already_gone_at_the_burn_counts_as_burned() {
 /// in the database — burns nothing, writes no audit row, closes the window,
 /// and is not charged to the limiter.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_lock_race_loser_burns_nothing_writes_nothing_and_is_not_charged() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     pool.get()
         .await
         .expect("pool.get")
@@ -1258,9 +1232,8 @@ async fn the_lock_race_loser_burns_nothing_writes_nothing_and_is_not_charged() {
 /// past the cap the attempt answers `rate_limit_exceeded` before the token is
 /// read, with no audit row.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_ip_limiter_charges_refused_attempts() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, _burned) = InMemoryTokenStore::with_token(TOKEN.as_bytes());
     let mut options = build_options(
         pool.clone(),
@@ -1313,10 +1286,9 @@ async fn the_ip_limiter_charges_refused_attempts() {
 /// token file — the window would otherwise be advertised while every attempt
 /// is refused in its transaction.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn availability_refuses_a_missing_lock_row() {
     use std::os::unix::fs::PermissionsExt;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secret_bootstrap_token");
     std::fs::write(&path, format!("{TOKEN}\n")).unwrap();
@@ -1337,10 +1309,9 @@ async fn availability_refuses_a_missing_lock_row() {
 /// A bootstrapped database is unavailable whether or not a token file is
 /// still there.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn availability_is_closed_on_a_bootstrapped_database_with_a_token_file() {
     use std::os::unix::fs::PermissionsExt;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secret_bootstrap_token");
     std::fs::write(&path, format!("{TOKEN}\n")).unwrap();
@@ -1385,9 +1356,8 @@ impl BootstrapTokenStore for HeldBurnStore {
 /// bootstrap in half: the token is already gone, so the bootstrap must still
 /// commit, not roll back and leave the window open on a deleted token.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_request_dropped_at_the_burn_still_commits() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let burned = Arc::new(AtomicBool::new(false));
     let reached = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
@@ -1429,9 +1399,8 @@ async fn a_request_dropped_at_the_burn_still_commits() {
 /// (the lock still unflipped), the account insert fails ahead of the burn, so
 /// the token is not burned, the file keeps it, and the lock rolls back.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_failed_insert_burns_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     pool.get()
         .await
         .expect("pool.get")
@@ -1481,9 +1450,8 @@ fn limiter_allows(limiter: &RateLimiter) -> bool {
 
 /// A success is not charged; a failed burn and an unreadable token file are.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_limiter_charges_refusals_and_not_a_success() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let cases: [(Arc<dyn BootstrapTokenStore>, bool, &str); 3] = [
         (
             InMemoryTokenStore::with_token(TOKEN.as_bytes()).0,
@@ -1599,9 +1567,8 @@ async fn an_exhausted_limiter_answers_the_429() {
 /// token unburned — it is signed inside the transaction, ahead of the burn,
 /// never after the commit.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_cookie_that_cannot_be_signed_rolls_back_unburned() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (token_store, burned) = InMemoryTokenStore::with_token(TOKEN.as_bytes());
     let mut options = build_options(
         pool.clone(),
@@ -1665,10 +1632,9 @@ impl LogCapture {
 /// token file info, one with the file still present a warning naming it, an
 /// open window with an unreadable file a warning with the reason.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_boot_report_logs_each_state_at_its_level() {
     use std::os::unix::fs::PermissionsExt;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secret_bootstrap_token");
     let client = pool.get().await.expect("pool.get");
@@ -1766,9 +1732,9 @@ impl BootstrapTokenStore for ConnectionKillingStore {
 /// A COMMIT that fails after the burn is a 500-class error with an `error`
 /// log saying the token is gone and a new one must be written.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: terminates a backend (pg_terminate_backend)"]
 async fn a_commit_that_fails_after_the_burn_logs_that_the_token_is_gone() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let burned = Arc::new(AtomicBool::new(false));
     let store: Arc<dyn BootstrapTokenStore> = Arc::new(ConnectionKillingStore {
         pool: pool.clone(),
@@ -1814,9 +1780,8 @@ impl BootstrapTokenStore for PanickingBurnStore {
 /// A panic on the write task is the task error — a 500, never a domain
 /// refusal — rolls the bootstrap back, and charges nothing.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_panic_on_the_write_task_is_the_task_error() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let limiter = one_attempt_limiter();
     let mut options = build_options(
         pool.clone(),
@@ -1845,10 +1810,9 @@ async fn a_panic_on_the_write_task_is_the_task_error() {
 /// request it answers as an unreadable token does — `token_file_missing`, the
 /// window closed, its one audit row, nothing created, the file left as it was.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_file_with_a_second_hard_link_is_refused() {
     use std::os::unix::fs::PermissionsExt;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secret_bootstrap_token");
     std::fs::write(&path, format!("{TOKEN}\n")).unwrap();

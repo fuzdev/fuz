@@ -1,6 +1,6 @@
 //! A credential minted while the account's authorization state changes under
 //! it: a login or an `account_token_create` racing a password change or an
-//! account delete, against a real `PostgreSQL`.
+//! account delete, against a live database.
 //!
 //! A token create is authorized by a session resolved before its transaction;
 //! the mint re-checks that session after taking the account lock, so a change
@@ -28,12 +28,6 @@
 //! nothing either: it reads the session again under the account lock.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/credential_mint_race.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test credential_mint_race -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -67,7 +61,7 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 mod common;
-use common::{blocked_by, fresh_db_pool, seed_account_actor, seed_admin};
+use common::{blocked_by, fresh_db, fresh_postgres_db, seed_account_actor, seed_admin};
 
 const OLD_PASSWORD: &str = "old-password-race-1";
 const NEW_PASSWORD: &str = "new-password-race-2";
@@ -361,9 +355,8 @@ fn assert_refused_as_wrong_password(answer: &Answer, label: &str) {
 // -- A login held in its verify ------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_login_held_across_a_password_change_is_refused_as_a_wrong_password() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let hasher = Arc::new(LatchHasher::default());
     let state = build_state(pool.clone(), Arc::clone(&hasher));
@@ -400,9 +393,8 @@ async fn a_login_held_across_a_password_change_is_refused_as_a_wrong_password() 
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_login_held_across_a_delete_is_refused_and_the_undelete_restores_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let hasher = Arc::new(LatchHasher::default());
@@ -443,9 +435,8 @@ async fn a_login_held_across_a_delete_is_refused_and_the_undelete_restores_nothi
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_held_across_a_delete_changes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let hasher = Arc::new(LatchHasher::default());
@@ -549,9 +540,9 @@ impl CheckoutLatch {
 }
 
 /// A pool on the suite's database whose checkouts pass `latch`.
-fn latched_pool(latch: &Arc<CheckoutLatch>) -> Pool {
+fn latched_pool(url: &str, latch: &Arc<CheckoutLatch>) -> Pool {
     use deadpool_postgres::{ClientWrapper, Hook, Manager, Runtime};
-    let config: tokio_postgres::Config = common::test_url().parse().expect("test URL parses");
+    let config: tokio_postgres::Config = url.parse().expect("test URL parses");
     let hook = || {
         let latch = Arc::clone(latch);
         Hook::async_fn(move |_: &mut ClientWrapper, _| {
@@ -652,11 +643,11 @@ const OTHER_PASSWORD: &str = "other-password-race-3";
 /// charged to both limiters, whichever password it sends — never verified
 /// against the new hash, and never landing with it. Twin of the TS cases.
 async fn a_password_change_outlived_by_another_after_its_credential_is_read(sent: &str) {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let plain = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let latch = Arc::new(CheckoutLatch::default());
-    let state = limited_state(&pool, latched_pool(&latch));
+    let state = limited_state(&pool, latched_pool(pool.url(), &latch));
     let first = login(&plain, "victim", OLD_PASSWORD).await;
     let second = login(&plain, "victim", OLD_PASSWORD).await;
     assert_eq!(first.status, StatusCode::OK);
@@ -708,28 +699,25 @@ async fn a_password_change_outlived_by_another_after_its_credential_is_read(sent
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_outlived_after_its_credential_is_read_is_a_lost_race_sending_the_old_password()
  {
     a_password_change_outlived_by_another_after_its_credential_is_read(OLD_PASSWORD).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_outlived_after_its_credential_is_read_is_a_lost_race_sending_the_new_one()
  {
     a_password_change_outlived_by_another_after_its_credential_is_read(OTHER_PASSWORD).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_whose_account_is_purged_after_its_credential_is_read_is_a_lost_race() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let plain = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let latch = Arc::new(CheckoutLatch::default());
-    let state = limited_state(&pool, latched_pool(&latch));
+    let state = limited_state(&pool, latched_pool(pool.url(), &latch));
     let first = login(&plain, "victim", OLD_PASSWORD).await;
     assert_eq!(first.status, StatusCode::OK);
 
@@ -831,9 +819,8 @@ async fn assert_change_lost_to_dead_session(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_held_across_a_delete_and_an_undelete_changes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let hasher = Arc::new(LatchHasher::default());
@@ -861,9 +848,8 @@ async fn a_password_change_held_across_a_delete_and_an_undelete_changes_nothing(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_held_across_a_logout_of_its_session_changes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let hasher = Arc::new(LatchHasher::default());
     let state = build_state(pool.clone(), Arc::clone(&hasher));
@@ -895,10 +881,10 @@ async fn a_password_change_held_across_a_logout_of_its_session_changes_nothing()
 /// reads its subquery as of the statement's start, before the wait, and misses
 /// it. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_password_change_waiting_on_the_account_row_across_a_logout_of_its_session_changes_nothing()
  {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let first = login(&state, "victim", OLD_PASSWORD).await;
@@ -953,9 +939,8 @@ async fn a_password_change_waiting_on_the_account_row_across_a_logout_of_its_ses
 // -- The mirror order: the mint commits first -----------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_login_committed_before_a_password_change_is_revoked_by_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let first = login(&state, "victim", OLD_PASSWORD).await;
@@ -968,9 +953,8 @@ async fn a_login_committed_before_a_password_change_is_revoked_by_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_login_committed_before_a_delete_is_revoked_and_stays_dead_after_the_undelete() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
@@ -1019,9 +1003,8 @@ async fn race_against_commit<T>(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_login_waits_on_an_uncommitted_password_change_and_is_then_refused() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
 
@@ -1065,9 +1048,8 @@ async fn hold_a_mint<'a>(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_password_change_waits_on_an_uncommitted_mint_and_then_revokes_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let first = login(&state, "victim", OLD_PASSWORD).await;
@@ -1091,9 +1073,8 @@ async fn a_password_change_waits_on_an_uncommitted_mint_and_then_revokes_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_delete_waits_on_an_uncommitted_mint_and_then_revokes_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
 
@@ -1120,9 +1101,8 @@ async fn a_delete_waits_on_an_uncommitted_mint_and_then_revokes_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_login_at_the_cap_waits_on_an_uncommitted_mint_and_then_evicts_past_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     while session_count(&pool, &account_id).await < DEFAULT_MAX_SESSIONS {
@@ -1170,9 +1150,8 @@ fn assert_unauthenticated(result: Result<Value, fuz_http::JsonrpcError>, label: 
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_create_authorized_before_a_delete_mints_nothing_after_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
@@ -1198,9 +1177,8 @@ async fn a_token_create_authorized_before_a_delete_mints_nothing_after_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_committed_before_a_delete_is_revoked_by_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
@@ -1225,9 +1203,8 @@ async fn a_token_committed_before_a_delete_is_revoked_by_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_create_waits_on_an_uncommitted_delete_and_is_then_refused() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
 
@@ -1250,9 +1227,8 @@ async fn a_token_create_waits_on_an_uncommitted_delete_and_is_then_refused() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_create_authorized_before_a_password_change_mints_nothing_after_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let changer = login(&state, "victim", OLD_PASSWORD).await;
@@ -1268,9 +1244,8 @@ async fn a_token_create_authorized_before_a_password_change_mints_nothing_after_
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_committed_before_a_password_change_is_revoked_by_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let changer = login(&state, "victim", OLD_PASSWORD).await;
@@ -1285,9 +1260,8 @@ async fn a_token_committed_before_a_password_change_is_revoked_by_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_create_waits_on_an_uncommitted_password_change_and_is_then_refused() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
 
@@ -1322,9 +1296,8 @@ async fn a_token_create_waits_on_an_uncommitted_password_change_and_is_then_refu
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_minted_by_a_session_later_logged_out_keeps_working() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
     token_create(&pool, account_id, &session_hash)
@@ -1343,9 +1316,8 @@ async fn a_token_minted_by_a_session_later_logged_out_keeps_working() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_token_create_at_the_cap_waits_on_an_uncommitted_token_create_and_then_evicts_past_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
     while token_count(&pool, &account_id).await < DEFAULT_MAX_TOKENS {

@@ -70,13 +70,11 @@ readiness / snapshot / status queries, the column-projection drift guard, and
 
 ## Testing
 
-`cargo test -p fuz_db` runs the unit tests. The integration tests need a real
-PostgreSQL and are `#[ignore]`, so `cargo test --workspace` stays green without
-one: `createdb fuz_db_test`, then
-`cargo test -p fuz_db -- --ignored --test-threads=1`
-(`FUZ_DB_TEST_URL` to point elsewhere). The status test creates and drops its
-own scratch database beside it, so the test role needs `CREATEDB`. CI runs them
-in the `db-tests` job.
+`cargo test -p fuz_db` runs the unit tests and the integration tests, each on
+a fresh in-process pglet server (`fuz_testing::fresh_test_db`). With
+`FUZ_TEST_POSTGRES_URL` set they run on PostgreSQL instead, and
+`-- --include-ignored` adds the ones that observe what only PostgreSQL has
+(backend cancellation, lock waits); CI runs that leg in the `db-tests` job.
 
 ## See also
 

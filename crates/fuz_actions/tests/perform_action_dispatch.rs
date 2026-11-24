@@ -28,16 +28,8 @@
 //! aborted transaction, so the action fails and its effects are discarded.
 //! The TS twin's `COMMIT` (node-postgres and `PGlite` alike) has no such check.
 //!
-//! The suite has its own `FUZ_ACTIONS_TEST_URL` (default `fuz_actions_test`)
-//! database — cross-crate `#[ignore]` test binaries run in parallel and would
-//! clobber a shared schema. It runs only the auth migrations (for `audit_log` +
-//! `account` / `actor` / `role_grant`) plus a scratch `probe` table.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_actions_test
-//! cargo test -p fuz_actions --test perform_action_dispatch -- --ignored --test-threads=1
-//! ```
+//! The suite runs only the auth migrations (for `audit_log` + `account` /
+//! `actor` / `role_grant`) plus a scratch `probe` table.
 
 #![expect(
     clippy::unwrap_used,
@@ -68,35 +60,38 @@ use fuz_http::InputShape;
 use fuz_realtime::ConnectionIdentity;
 use fuz_realtime::SignalToken;
 use fuz_testing::{
-    TestingDbOptions, fresh_test_db_pool, grant_role, grant_scoped_role, refuse_audit_rows,
-    seed_account_actor,
+    TestDb, TestEngine, TestingDbOptions, fresh_test_db, grant_role, grant_scoped_role,
+    refuse_audit_rows, seed_account_actor,
 };
 use serde_json::{Value, json};
 
 const ADMIN_ROLES: &[&str] = &[ROLE_ADMIN];
 
-/// This suite's database: `FUZ_ACTIONS_TEST_URL` (default
-/// `fuz_actions_test`), the auth chain (for `audit_log` + `account` /
+/// This suite's database: the auth chain (for `audit_log` + `account` /
 /// `actor` / `role_grant`), plus the scratch `probe` table the
 /// side-effecting test handler writes into.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_ACTIONS_TEST_URL",
-    default_db: "fuz_actions_test",
+    suite: "fuz_actions",
     migrations: &[AUTH_MIGRATIONS],
     setup_sql: Some("CREATE TABLE probe (id serial PRIMARY KEY)"),
+    engine: TestEngine::Any,
 };
 
-/// Reset the schema, run the auth chain, and stand up the scratch `probe`
-/// table. Single-threaded (the reset drops + recreates `public`).
-async fn fresh_db_pool() -> Pool {
-    fresh_test_db_pool(DB).await
+/// A fresh database with the auth chain and the scratch `probe` table.
+async fn fresh_db() -> TestDb {
+    fresh_test_db(DB).await
+}
+
+/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
+async fn fresh_postgres_db() -> TestDb {
+    fresh_test_db(DB.postgres_only()).await
 }
 
 /// Test harness: the dispatcher options + the pool + a flag the `probe`
 /// handler's queued post-commit effect flips when it runs.
 struct Harness {
     options: PerformActionOptions,
-    pool: Pool,
+    pool: TestDb,
     effect_fired: Arc<AtomicBool>,
 }
 
@@ -333,7 +328,7 @@ async fn setup() -> Harness {
 /// ordering case. `Some(n)` wires a limiter of `n` attempts over a window long
 /// enough that nothing expires mid-test; `None` leaves both axes unlimited.
 async fn setup_with_account_budget(max_attempts: Option<u32>) -> Harness {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let effect_fired = Arc::new(AtomicBool::new(false));
     let account_rate_limiter = max_attempts.map(|max_attempts| {
         Arc::new(RateLimiter::new(RateLimiterOptions {
@@ -436,7 +431,6 @@ fn assert_status(result: &Result<ActionOutput, fuz_http::JsonrpcError>, expected
 // -- Transactional boundary: commit drains, rollback discards ----------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn output_handler_result_renders_its_typed_output() {
     // An `ActionSpec::new_output` handler runs through the same pipeline — its
     // post-commit effect drains — and its typed output renders as the JSON a
@@ -457,7 +451,6 @@ async fn output_handler_result_renders_its_typed_output() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn side_effect_commit_writes_state_and_audit_and_drains_effects() {
     // The success path: the handler's state INSERT + its in-tx audit row commit
     // together, and the queued post-commit effect drains after the commit.
@@ -477,7 +470,6 @@ async fn side_effect_commit_writes_state_and_audit_and_drains_effects() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn side_effect_rollback_discards_state_audit_and_effects() {
     // The rollback contract (see the module header). A handler that writes
     // state + an in-tx audit row + queues a post-commit effect, then FAILS,
@@ -503,7 +495,6 @@ async fn side_effect_rollback_discards_state_audit_and_effects() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn swallowed_statement_error_fails_the_action_and_discards_effects() {
     // A handler that drops a failed statement's error and returns `Ok` leaves
     // the tx aborted; a bare `COMMIT` would roll it back without an error and
@@ -535,7 +526,6 @@ async fn swallowed_statement_error_fails_the_action_and_discards_effects() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn savepoint_recovered_statement_error_still_commits() {
     // The checked commit refuses only an aborted tx: a handler that recovers
     // from a failed statement through `ROLLBACK TO SAVEPOINT` leaves the tx
@@ -563,7 +553,6 @@ async fn savepoint_recovered_statement_error_still_commits() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn read_only_ok_drains_effects_but_failure_discards_them() {
     // The non-transactional (`dispatch_pooled`) path still honors the
     // "effects run iff the handler returns Ok" contract.
@@ -588,7 +577,6 @@ async fn read_only_ok_drains_effects_but_failure_discards_them() {
 // -- Enforcement order driven through the dispatcher ------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn unknown_method_is_method_not_found_404() {
     let h = setup().await;
     let result = run(&h.options, "does_not_exist", json!({}), None, None).await;
@@ -596,7 +584,6 @@ async fn unknown_method_is_method_not_found_404() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn account_required_without_account_is_401() {
     // Pre-authorization 401 fires before the authorization phase ever runs.
     let h = setup().await;
@@ -605,7 +592,6 @@ async fn account_required_without_account_is_401() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn role_gate_denies_a_resolved_non_admin_actor_403() {
     // Authenticated, actor resolves from the single-actor account, but the
     // resolved actor lacks `admin` → post-authorization 403. Proves authz runs
@@ -624,7 +610,6 @@ async fn role_gate_denies_a_resolved_non_admin_actor_403() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn role_gate_admits_a_resolved_admin_actor_and_runs_the_handler() {
     // Full chain to the handler: the resolved actor holds `admin`, the gate
     // passes, the handler runs and returns Ok.
@@ -658,7 +643,6 @@ async fn seed_scoped_admin(pool: &Pool, username: &str) -> (AccountRow, uuid::Uu
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn role_gate_denies_a_scoped_admin_403() {
     // The spec names `admin` with no scope, so only the global grant passes:
     // a scoped `admin` is denied at the dispatcher, the handler never runs.
@@ -704,9 +688,8 @@ fn plain_auth_spec_options(pool: &Pool) -> PerformActionOptions {
 /// the real dispatcher over the standard auth spec set, so the role gate and
 /// the handler are both in the path.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_scoped_admin_cannot_escalate_or_reach_admin_actions() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let options = plain_auth_spec_options(&pool);
     let (account, actor_id) = seed_scoped_admin(&pool, "scoped_admin").await;
 
@@ -772,9 +755,8 @@ async fn a_scoped_admin_cannot_escalate_or_reach_admin_actions() {
 /// through the same dispatcher path, so the refusal above is the scope, not
 /// the harness.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_global_admin_assigns_through_the_dispatcher() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let options = plain_auth_spec_options(&pool);
     let admin = seed_account(&pool, "global_admin", &[ROLE_ADMIN]).await;
     let (recipient, _) = seed_account_actor(&pool, "recipient").await;
@@ -795,9 +777,8 @@ async fn a_global_admin_assigns_through_the_dispatcher() {
 /// row — while the same admin's session offers. Twin of the TS
 /// `role_grant_offer_actions.create.db.test.ts` credential-channel cases.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn role_grant_offer_create_is_session_only() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let options = plain_auth_spec_options(&pool);
     let admin = seed_account(&pool, "offer_admin", &[ROLE_ADMIN]).await;
     let (recipient, _) = seed_account_actor(&pool, "offer_recipient").await;
@@ -846,7 +827,6 @@ async fn role_grant_offer_create_is_session_only() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn rate_limit_is_charged_ahead_of_the_acting_grammar_check() {
     // The 429-before-400 ordering, driven end to end: a malformed `acting`
     // must burn the budget it would otherwise dodge, and an over-cap caller
@@ -898,7 +878,6 @@ async fn rate_limit_is_charged_ahead_of_the_acting_grammar_check() {
 const NON_OBJECT_PARAMS: [&str; 4] = ["42", "[1]", "\"x\"", "true"];
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn non_object_params_are_invalid_params_and_reach_no_handler() {
     // `GET /rpc` reads `?params=` as any JSON value, so the dispatcher is what
     // holds `params` to absent-or-object: a non-object is the twin's
@@ -939,7 +918,6 @@ async fn non_object_params_are_invalid_params_and_reach_no_handler() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn non_object_params_from_an_anonymous_caller_are_the_401() {
     // The shape check is input validation, so it sits behind the authority
     // gates: an anonymous caller hears the 401 of any anonymous call, never a
@@ -953,7 +931,6 @@ async fn non_object_params_from_an_anonymous_caller_are_the_401() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_void_spec_takes_only_the_no_arg_call() {
     // The twin's `void` input: absent, `null`, and `{}` are the call; a
     // declared key, a scalar, and any array are -32602 "invalid params" with no
@@ -999,7 +976,6 @@ async fn a_void_spec_takes_only_the_no_arg_call() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_void_refusal_sits_behind_the_authority_gates() {
     // The void rule is input validation: an anonymous caller hears the 401,
     // never a 400 confirming the method takes no params.
@@ -1016,7 +992,6 @@ async fn a_void_refusal_sits_behind_the_authority_gates() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn an_own_proto_key_anywhere_in_params_is_refused_with_its_reason() {
     // The dispatcher's walk, the twin's step-5 refusal: every spec, void and
     // object alike, at any depth, ahead of the `acting` check and the void
@@ -1066,7 +1041,6 @@ async fn an_own_proto_key_anywhere_in_params_is_refused_with_its_reason() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_proto_key_refusal_sits_behind_the_authority_gates() {
     // input validation: an anonymous caller hears the 401 of any anonymous
     // call, never the walk's 400
@@ -1077,7 +1051,6 @@ async fn a_proto_key_refusal_sits_behind_the_authority_gates() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_proto_key_refusal_sits_behind_the_role_gate() {
     // a caller the role gate refuses hears the 403, never the walk's 400
     let h = setup().await;
@@ -1095,7 +1068,6 @@ async fn a_proto_key_refusal_sits_behind_the_role_gate() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_proto_key_refusal_sits_behind_the_rate_limit() {
     // the walk is input validation, so it runs after the 429 gate: the first
     // call is within budget and answers the walk's refusal, the second is
@@ -1130,7 +1102,6 @@ async fn a_proto_key_refusal_sits_behind_the_rate_limit() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_void_refusal_sits_behind_the_rate_limit() {
     // The void rule is input validation, so it runs after the 429 gate: the
     // first stray-key call is within budget and answers the void refusal; the
@@ -1318,14 +1289,14 @@ async fn run_ok(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "pglet: named-argument calls"]
 async fn revocations_close_connections_after_the_transaction_commits() {
     // A client whose socket is closed as revoked rechecks its session at once;
     // if the close lands before the commit, that recheck still finds the
     // session and the client keeps a dead socket. So by the time the closer
     // is asked to close, every revocation's deletion must already be
     // committed — probed per handler below.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let closer = Arc::new(CommitProbingCloser::new(&pool));
     let options = auth_spec_options(&pool, Arc::<CommitProbingCloser>::clone(&closer));
     let session = CredentialType::Session;
@@ -1473,9 +1444,9 @@ fn token_create_params() -> Value {
 /// for after the commit. The newest token's connections stay open: the close
 /// names the evicted token, not the account.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "pglet: named-argument calls"]
 async fn a_token_mint_past_the_cap_closes_the_evicted_tokens_connections() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let ws = Arc::new(fuz_realtime::ConnectionRegistry::new());
     let sse = Arc::new(fuz_realtime::SseRegistry::new());
     let options = auth_spec_options(
@@ -1588,9 +1559,8 @@ async fn a_token_mint_past_the_cap_closes_the_evicted_tokens_connections() {
 /// `fuz_auth`'s `no_revocation_is_pool_routed` keeps every revocation on this
 /// side of the line.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_revocation_whose_in_tx_audit_write_fails_is_rolled_back() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let ws = Arc::new(fuz_realtime::ConnectionRegistry::new());
     let sse = Arc::new(fuz_realtime::SseRegistry::new());
     let options = auth_spec_options(
@@ -1646,14 +1616,6 @@ async fn a_revocation_whose_in_tx_audit_write_fails_is_rolled_back() {
     );
 }
 
-/// A pool on the suite's database that hands out `checkouts` connections and
-/// refuses every checkout after them — `post_create` and `pre_recycle` spend
-/// from one budget, so once it is spent a reused connection is discarded and
-/// its replacement refused.
-fn budgeted_pool(checkouts: usize) -> Pool {
-    fuz_testing::budgeted_pool(&DB.url(), checkouts)
-}
-
 /// **A failed checkout is the database unavailable, at every phase.** The
 /// authorization phase's checkout (no budget), the side-effecting dispatch's
 /// (one checkout, spent by the authorization phase), and the read-only
@@ -1661,7 +1623,6 @@ fn budgeted_pool(checkouts: usize) -> Pool {
 /// `database unavailable` and no `data` — and nothing runs past the refused
 /// checkout.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_failed_checkout_answers_service_unavailable_at_every_phase() {
     let h = setup().await;
     for (phase, method, budget) in [
@@ -1670,7 +1631,7 @@ async fn a_failed_checkout_answers_service_unavailable_at_every_phase() {
         ("the read-only dispatch", "probe_ro", 1),
     ] {
         let options = PerformActionOptions {
-            pool: budgeted_pool(budget),
+            pool: fuz_testing::budgeted_pool(h.pool.url(), budget),
             ..h.options.clone()
         };
         let error = run(&options, method, json!({}), None, None)
@@ -1710,9 +1671,8 @@ async fn a_failed_checkout_answers_service_unavailable_at_every_phase() {
 /// which drops its in-flight dispatches), the effect still runs and the
 /// tracker's drain waits for it rather than resolving past it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn a_dropped_dispatch_leaves_its_effects_on_the_shutdown_drain() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let effect_done = Arc::new(AtomicBool::new(false));

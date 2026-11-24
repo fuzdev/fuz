@@ -1,5 +1,5 @@
 //! The authorization phase builds on the account the credential resolved and
-//! never reads it again, against a real `PostgreSQL` — and an account removed
+//! never reads it again, against a live database — and an account removed
 //! after the credential read answers the dead credential's 401, never a 500.
 //!
 //! [`apply_authorization_phase`] takes the [`AccountRow`] the credential walk
@@ -7,12 +7,6 @@
 //! an account-grain spec gets its context built on the carried row, as for
 //! any request a removal lands behind. Twin of `fuz_app`'s
 //! `src/test/auth/authorization_phase.carried_account.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test authorization_phase -- --ignored --test-threads=1
-//! ```
 
 use fuz_auth::account_queries::{
     query_account_by_id, query_account_soft_delete, query_account_summary, query_purge_account,
@@ -27,12 +21,11 @@ use fuz_http::JsonrpcErrorCode;
 use serde_json::json;
 
 mod common;
-use common::{fresh_db_pool, seed_account_actor};
+use common::{fresh_db, seed_account_actor};
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_account_grain_phase_builds_on_the_carried_account_without_reading_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _actor_id) = seed_account_actor(&pool, "carried").await;
     let client = pool.get().await.unwrap();
     // the row the credential walk read
@@ -67,10 +60,9 @@ async fn an_account_grain_phase_builds_on_the_carried_account_without_reading_it
 /// finds the account's actors gone and answers the dead credential's 401 —
 /// soft-deleted (the account and its actors tombstoned) or purged.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_actor_grain_phase_on_a_removed_account_answers_the_dead_credentials_401() {
     for purge in [false, true] {
-        let pool = fresh_db_pool().await;
+        let pool = fresh_db().await;
         let (account_id, actor_id) = seed_account_actor(&pool, "removed").await;
         let client = pool.get().await.unwrap();
         let account = query_account_by_id(&client, &account_id)
@@ -118,9 +110,8 @@ async fn an_actor_grain_phase_on_a_removed_account_answers_the_dead_credentials_
 /// A live account with no active actor is still the 500 — the signup
 /// invariant broken, not a removed account.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_live_account_with_no_actor_is_still_the_500() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, actor_id) = seed_account_actor(&pool, "actorless").await;
     let client = pool.get().await.unwrap();
     let account = query_account_by_id(&client, &account_id)
@@ -148,9 +139,8 @@ async fn a_live_account_with_no_actor_is_still_the_500() {
 /// answers the dead credential's 401, not a 500: its summary read finds no
 /// row.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_verify_on_a_purged_account_answers_the_dead_credentials_401() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _actor_id) = seed_account_actor(&pool, "verified").await;
     let client = pool.get().await.unwrap();
     let account = query_account_by_id(&client, &account_id)
@@ -185,9 +175,8 @@ async fn account_verify_on_a_purged_account_answers_the_dead_credentials_401() {
 /// `account_verify` on an account deleted after its credential was read
 /// answers the dead credential's 401: its summary read finds no live row.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn account_verify_on_a_deleted_account_answers_the_dead_credentials_401() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _actor_id) = seed_account_actor(&pool, "verified_deleted").await;
     let client = pool.get().await.unwrap();
     let account = query_account_by_id(&client, &account_id)
@@ -220,9 +209,8 @@ async fn account_verify_on_a_deleted_account_answers_the_dead_credentials_401() 
 /// account's: a tombstoned one reads as gone, so both answer the dead
 /// credential's 401.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn the_account_summary_of_a_deleted_account_is_none() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let (account_id, _actor_id) = seed_account_actor(&pool, "summary_deleted").await;
     let client = pool.get().await.unwrap();
     assert!(

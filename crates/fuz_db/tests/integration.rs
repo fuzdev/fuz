@@ -1,28 +1,10 @@
-//! Integration tests for `fuz_db` against a real `PostgreSQL` instance.
-//!
-//! All tests are `#[ignore]` so `cargo test --workspace` stays green on
-//! machines without postgres; run explicitly with:
-//!
-//! ```bash
-//! createdb fuz_db_test
-//! cargo test -p fuz_db -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the connection URL with `FUZ_DB_TEST_URL`:
-//!
-//! ```bash
-//! FUZ_DB_TEST_URL=postgres://localhost/some_db cargo test -p fuz_db -- --ignored --test-threads=1
-//! ```
-//!
-//! Tests share the same database and namespace their work via unique
-//! migration namespaces / table names per test. Each test cleans up after itself. One test needs a
-//! database with no `schema_version` tracker at all, so instead of sharing
-//! `fuz_db_test` it creates and drops its own scratch database beside it — the
-//! test role needs `CREATEDB`.
+//! Integration tests for `fuz_db` against a live database, a fresh one per
+//! test (`fuz_testing::fresh_test_db`): pglet by default, PostgreSQL under
+//! `FUZ_TEST_POSTGRES_URL`. The tests that observe what only PostgreSQL has
+//! (backend cancellation, lock waits) run on it alone.
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 #![expect(
@@ -31,7 +13,6 @@
 )]
 
 use std::collections::BTreeMap;
-use std::env;
 
 use fuz_db::{
     DbError, Divergence, Migration, MigrationError, MigrationNamespace, PgErrorKind, Pool,
@@ -39,39 +20,19 @@ use fuz_db::{
     classify_pg_error, commit_checked, create_pool, format_db_status, is_pg_unique_violation,
     query_db_status, query_ready_columns, query_schema_snapshot, run_migrations, sqlstate_in_chain,
 };
+use fuz_testing::{TestEngine, TestingDbOptions, fresh_test_db};
 
-/// Default test database — must be created out of band:
-/// `createdb fuz_db_test`.
-fn test_database_url() -> String {
-    env::var("FUZ_DB_TEST_URL").unwrap_or_else(|_| "postgres://localhost/fuz_db_test".to_owned())
-}
-
-fn build_pool() -> Pool {
-    create_pool(&test_database_url(), &fuz_db::PoolOptions::default()).expect("test pool build")
-}
-
-/// Reset the tables / `schema_version` rows a test will touch.
-async fn clean(pool: &Pool, table_names: &[&str], namespaces: &[&str]) {
-    let client = pool.get().await.expect("clean: pool get");
-    for table in table_names {
-        let stmt = format!("DROP TABLE IF EXISTS {table} CASCADE");
-        client
-            .batch_execute(&stmt)
-            .await
-            .expect("clean: drop table");
-    }
-    for ns in namespaces {
-        client
-            .execute("DELETE FROM schema_version WHERE namespace = $1", &[ns])
-            .await
-            .ok();
-    }
-}
+/// A bare database: no migration chain, no tracker.
+const DB: TestingDbOptions<'static> = TestingDbOptions {
+    suite: "fuz_db",
+    migrations: &[],
+    setup_sql: None,
+    engine: TestEngine::Any,
+};
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn pool_acquire_works() {
-    let pool = build_pool();
+    let pool = fresh_test_db(DB).await;
     let client = pool.get().await.expect("pool get");
     let row = client.query_one("SELECT 42::int4 as v", &[]).await.unwrap();
     let v: i32 = row.get("v");
@@ -79,10 +40,8 @@ async fn pool_acquire_works() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn commit_checked_commits_a_healthy_transaction() {
-    let pool = build_pool();
-    clean(&pool, &["tx_commit_test"], &[]).await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -109,15 +68,11 @@ async fn commit_checked_commits_a_healthy_transaction() {
         .unwrap()
         .get(0);
     assert_eq!(count, 2);
-
-    clean(&pool, &["tx_commit_test"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn transaction_rolls_back_when_an_error_drops_it() {
-    let pool = build_pool();
-    clean(&pool, &["tx_rollback_test"], &[]).await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -152,17 +107,13 @@ async fn transaction_rolls_back_when_an_error_drops_it() {
         .unwrap()
         .get(0);
     assert_eq!(count, 0, "rollback should leave the table empty");
-
-    clean(&pool, &["tx_rollback_test"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn a_healthy_transaction_dropped_before_commit_rolls_back() {
     // An early return on a non-database error leaves the transaction healthy,
     // so only the drop's rollback keeps the insert from persisting.
-    let pool = build_pool();
-    clean(&pool, &["tx_drop_test"], &[]).await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -193,18 +144,14 @@ async fn a_healthy_transaction_dropped_before_commit_rolls_back() {
         .get(0);
     assert_eq!(count, 0, "the dropped transaction should roll back");
     drop(client);
-
-    clean(&pool, &["tx_drop_test"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn commit_checked_refuses_a_transaction_a_swallowed_error_aborted() {
     // Code that drops a failed statement's error and carries on leaves the
     // transaction aborted. `COMMIT` would roll it back without an error;
     // the checked commit reports it instead, and nothing persists.
-    let pool = build_pool();
-    clean(&pool, &["tx_aborted_test"], &[]).await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -240,18 +187,15 @@ async fn commit_checked_refuses_a_transaction_a_swallowed_error_aborted() {
         .unwrap()
         .get(0);
     assert_eq!(count, 0, "the aborted transaction left nothing behind");
-
-    clean(&pool, &["tx_aborted_test"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
+#[ignore = "pglet: DEFERRABLE constraints"]
 async fn commit_checked_reports_a_commit_time_constraint_failure() {
     // A deferred constraint passes the probe (the transaction is healthy) and
     // fails at `COMMIT` itself, which PostgreSQL reports as an error — the
     // checked commit surfaces it as `DbError::Postgres`, never `Ok`.
-    let pool = build_pool();
-    clean(&pool, &["tx_deferred_child", "tx_deferred_parent"], &[]).await;
+    let pool = fresh_test_db(DB.postgres_only()).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -287,12 +231,9 @@ async fn commit_checked_reports_a_commit_time_constraint_failure() {
         .unwrap()
         .get(0);
     assert_eq!(count, 0, "the failed commit left nothing behind");
-
-    clean(&pool, &["tx_deferred_child", "tx_deferred_parent"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn migration_runner_applies_two_namespaces() {
     const MIGRATIONS_A: &[Migration] = &[
         Migration {
@@ -309,13 +250,7 @@ async fn migration_runner_applies_two_namespaces() {
         sql: "CREATE TABLE m_apply_beta (id UUID PRIMARY KEY DEFAULT gen_random_uuid())",
     }];
 
-    let pool = build_pool();
-    clean(
-        &pool,
-        &["m_apply_alpha", "m_apply_beta"],
-        &["fuz_db_test_apply_alpha", "fuz_db_test_apply_beta"],
-    )
-    .await;
+    let pool = fresh_test_db(DB).await;
 
     let namespaces = [
         MigrationNamespace::new("fuz_db_test_apply_alpha", MIGRATIONS_A),
@@ -355,16 +290,9 @@ async fn migration_runner_applies_two_namespaces() {
     assert_eq!(seqs, vec![0, 1]);
 
     drop(client);
-    clean(
-        &pool,
-        &["m_apply_alpha", "m_apply_beta"],
-        &["fuz_db_test_apply_alpha", "fuz_db_test_apply_beta"],
-    )
-    .await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn query_ready_columns_reports_columns_and_drift() {
     // Base migration creates the table; an APPENDED migration adds the column
     // (the append-migration discipline `fuz_auth::migrations` documents). The
@@ -380,8 +308,7 @@ async fn query_ready_columns_reports_columns_and_drift() {
         },
     ];
 
-    let pool = build_pool();
-    clean(&pool, &["m_ready_probe"], &["fuz_db_test_ready"]).await;
+    let pool = fresh_test_db(DB).await;
 
     run_migrations(
         &pool,
@@ -436,11 +363,9 @@ async fn query_ready_columns_reports_columns_and_drift() {
     assert_eq!(drift.missing_tables, vec!["m_ready_absent"]);
 
     drop(client);
-    clean(&pool, &["m_ready_probe"], &["fuz_db_test_ready"]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn migration_runner_detects_name_divergence() {
     const CANONICAL: &[Migration] = &[Migration {
         name: "create_diverge",
@@ -451,8 +376,7 @@ async fn migration_runner_detects_name_divergence() {
         sql: "CREATE TABLE m_diverge (id SERIAL)",
     }];
 
-    let pool = build_pool();
-    clean(&pool, &["m_diverge"], &["fuz_db_test_diverge"]).await;
+    let pool = fresh_test_db(DB).await;
 
     // Apply the canonical chain.
     run_migrations(
@@ -482,12 +406,9 @@ async fn migration_runner_detects_name_divergence() {
         }) => assert_eq!(namespace, "fuz_db_test_diverge"),
         other => panic!("expected a name-mismatch divergence, got {other:?}"),
     }
-
-    clean(&pool, &["m_diverge"], &["fuz_db_test_diverge"]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn migration_runner_detects_binary_older_than_db() {
     const FULL: &[Migration] = &[
         Migration {
@@ -504,8 +425,7 @@ async fn migration_runner_detects_binary_older_than_db() {
         sql: "CREATE TABLE m_older (id SERIAL PRIMARY KEY)",
     }];
 
-    let pool = build_pool();
-    clean(&pool, &["m_older"], &["fuz_db_test_older"]).await;
+    let pool = fresh_test_db(DB).await;
 
     // Apply the full chain.
     run_migrations(&pool, &[MigrationNamespace::new("fuz_db_test_older", FULL)])
@@ -535,15 +455,11 @@ async fn migration_runner_detects_binary_older_than_db() {
         }
         other => panic!("expected a binary-older divergence, got {other:?}"),
     }
-
-    clean(&pool, &["m_older"], &["fuz_db_test_older"]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn baseline_records_names_without_executing() {
-    let pool = build_pool();
-    clean(&pool, &["gamma_test"], &["fuz_db_test_gamma"]).await;
+    let pool = fresh_test_db(DB).await;
 
     const MIGRATIONS_C: &[Migration] = &[
         Migration {
@@ -587,19 +503,17 @@ async fn baseline_records_names_without_executing() {
     assert!(!table_exists, "baseline must not execute migration bodies");
 
     drop(client);
-    clean(&pool, &["gamma_test"], &["fuz_db_test_gamma"]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
+#[ignore = "postgres-only: stalls concurrent boots with pg_sleep"]
 async fn advisory_lock_two_concurrent_boots_both_succeed() {
     // Two runners on one namespace at once, the chain held open by a sleep
     // after its DDL so the two overlap. The advisory lock serializes them:
     // the second waits for the first's commit, reads the migration applied,
     // and succeeds with nothing to do. Without the lock both chains run the
     // `CREATE TABLE` and the loser fails on the catalog's unique index.
-    let pool = build_pool();
-    clean(&pool, &["delta_test"], &["fuz_db_test_delta"]).await;
+    let pool = fresh_test_db(DB.postgres_only()).await;
 
     const MIGRATIONS_D: &[Migration] = &[Migration {
         name: "create_delta",
@@ -629,12 +543,10 @@ async fn advisory_lock_two_concurrent_boots_both_succeed() {
         ["create_delta"],
         "one boot applies, the other finds it applied"
     );
-
-    clean(&pool, &["delta_test"], &["fuz_db_test_delta"]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
+#[ignore = "postgres-only: reads pg_locks"]
 async fn migration_waits_on_the_ts_twins_namespace_lock() {
     // The TS twin takes `pg_advisory_xact_lock` on the same `bigint` key
     // inside its chain transaction. Held here in that form, it keeps this
@@ -643,8 +555,7 @@ async fn migration_waits_on_the_ts_twins_namespace_lock() {
     // djb2 of the namespace, sign-extended (`namespace_lock_key`).
     const NAMESPACE: &str = "fuz_db_test_lock_wait";
     const KEY: i64 = -1_425_090_598;
-    let pool = build_pool();
-    clean(&pool, &["lock_wait_test"], &[NAMESPACE]).await;
+    let pool = fresh_test_db(DB.postgres_only()).await;
 
     let mut holder = pool.get().await.expect("holder: pool get");
     let tx = holder.transaction().await.expect("holder: begin");
@@ -706,11 +617,10 @@ async fn migration_waits_on_the_ts_twins_namespace_lock() {
 
     drop(observer);
     drop(holder);
-    clean(&pool, &["lock_wait_test"], &[NAMESPACE]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
+#[ignore = "postgres-only: cancels a backend (pg_cancel_backend)"]
 async fn a_failed_namespace_lock_names_the_namespace_and_keeps_its_sqlstate() {
     // The runner waits on a lock held here until an observer cancels its
     // wait, failing the lock statement with `57014`. The run fails naming
@@ -718,8 +628,7 @@ async fn a_failed_namespace_lock_names_the_namespace_and_keeps_its_sqlstate() {
     const NAMESPACE: &str = "fuz_db_test_lock_fail";
     // djb2 of the namespace, sign-extended (`namespace_lock_key`).
     const KEY: i64 = -1_425_701_535;
-    let pool = build_pool();
-    clean(&pool, &["lock_fail_test"], &[NAMESPACE]).await;
+    let pool = fresh_test_db(DB.postgres_only()).await;
 
     let mut holder = pool.get().await.expect("holder: pool get");
     let tx = holder.transaction().await.expect("holder: begin");
@@ -803,14 +712,11 @@ async fn a_failed_namespace_lock_names_the_namespace_and_keeps_its_sqlstate() {
         .expect("check: tracker rows");
     assert!(rows.is_empty());
     drop(client);
-    clean(&pool, &["lock_fail_test"], &[NAMESPACE]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn pg_error_classification_unique_violation() {
-    let pool = build_pool();
-    clean(&pool, &["pg_err_uniq"], &[]).await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -833,14 +739,11 @@ async fn pg_error_classification_unique_violation() {
     assert_eq!(sqlstate_in_chain(&DbError::Postgres(err)), Some("23505"));
 
     drop(client);
-    clean(&pool, &["pg_err_uniq"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn pg_error_classification_foreign_key_violation() {
-    let pool = build_pool();
-    clean(&pool, &["pg_err_fk_child", "pg_err_fk_parent"], &[]).await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -865,19 +768,11 @@ async fn pg_error_classification_foreign_key_violation() {
     assert_eq!(classify_pg_error(&err), PgErrorKind::ForeignKeyViolation);
 
     drop(client);
-    clean(&pool, &["pg_err_fk_child", "pg_err_fk_parent"], &[]).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn pg_error_classification_restrict_violation() {
-    let pool = build_pool();
-    clean(
-        &pool,
-        &["pg_err_restrict_child", "pg_err_restrict_parent"],
-        &[],
-    )
-    .await;
+    let pool = fresh_test_db(DB).await;
 
     let client = pool.get().await.unwrap();
     client
@@ -915,12 +810,6 @@ async fn pg_error_classification_restrict_violation() {
     );
 
     drop(client);
-    clean(
-        &pool,
-        &["pg_err_restrict_child", "pg_err_restrict_parent"],
-        &[],
-    )
-    .await;
 }
 
 #[test]
@@ -983,7 +872,6 @@ async fn reserved_namespace_rejection() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn schema_snapshot_is_deterministic_and_shaped() {
     const MIGRATIONS: &[Migration] = &[
         Migration {
@@ -999,8 +887,7 @@ async fn schema_snapshot_is_deterministic_and_shaped() {
         },
     ];
 
-    let pool = build_pool();
-    clean(&pool, &["snap_test"], &["fuz_db_test_snapshot"]).await;
+    let pool = fresh_test_db(DB).await;
     run_migrations(
         &pool,
         &[MigrationNamespace::new("fuz_db_test_snapshot", MIGRATIONS)],
@@ -1071,7 +958,6 @@ async fn schema_snapshot_is_deterministic_and_shaped() {
     );
 
     drop(client);
-    clean(&pool, &["snap_test"], &["fuz_db_test_snapshot"]).await;
 }
 
 /// Seed one `schema_version` row directly — a tracker history the runner would
@@ -1088,7 +974,6 @@ async fn seed_tracker_row(pool: &Pool, namespace: &str, name: &str, sequence: i3
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn query_db_status_reads_each_namespace_from_the_tracker() {
     const CLEAN: &[Migration] = &[Migration {
         name: "create_status_widget",
@@ -1115,8 +1000,7 @@ async fn query_db_status_reads_each_namespace_from_the_tracker() {
         "fuz_db_test_status_older",
     ];
 
-    let pool = build_pool();
-    clean(&pool, &["status_widget"], NAMESPACES).await;
+    let pool = fresh_test_db(DB).await;
 
     // The clean namespace migrates for real, which also creates the tracker.
     let clean_ns = MigrationNamespace::new("fuz_db_test_status_clean", CLEAN);
@@ -1145,7 +1029,7 @@ async fn query_db_status_reads_each_namespace_from_the_tracker() {
     .await
     .unwrap();
 
-    // The shared database holds other tests' tables too — look up by name.
+    // Look up by name: the status lists every table the chains created.
     assert_eq!(status.table_count, status.tables.len());
     let widget = status
         .tables
@@ -1206,47 +1090,11 @@ async fn query_db_status_reads_each_namespace_from_the_tracker() {
                                    diverged: database has 3 applied but code declares 2 (binary older than database)
 "
     );
-
-    clean(&pool, &["status_widget"], NAMESPACES).await;
 }
 
-/// `url` with its database name swapped for `name` (query string kept).
-fn database_url_with_name(url: &str, name: &str) -> String {
-    let path_start = url.find("://").map_or(0, |i| i + 3);
-    let db_start = url[path_start..]
-        .find('/')
-        .map_or(url.len(), |i| path_start + i);
-    let db_end = url[db_start..]
-        .find('?')
-        .map_or(url.len(), |i| db_start + i);
-    format!("{}/{name}{}", &url[..db_start], &url[db_end..])
-}
-
-#[test]
-fn database_url_with_name_swaps_only_the_database() {
-    assert_eq!(
-        database_url_with_name("postgres://localhost/fuz_db_test", "scratch"),
-        "postgres://localhost/scratch"
-    );
-    assert_eq!(
-        database_url_with_name(
-            "postgres://u:p@localhost:5432/fuz_db_test?sslmode=disable",
-            "scratch"
-        ),
-        "postgres://u:p@localhost:5432/scratch?sslmode=disable"
-    );
-}
-
-/// A database this test creates empty and drops after, so the reader meets a
-/// database with no `schema_version` at all. Dropping the shared tracker in
-/// `fuz_db_test` instead would wipe every namespace's rows out from under the
-/// other tests here (and `fuz_http`'s `ready` suite, which shares the
-/// database). Needs `CREATEDB`; a run that panics leaves the database behind
-/// and the next run drops it first.
-const SCRATCH_DATABASE: &str = "fuz_db_test_status_scratch";
-
+/// A fresh database has no `schema_version` at all, so the reader meets every
+/// namespace pending.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_db_test database and CREATEDB"]
 async fn query_db_status_without_a_tracker_pends_every_namespace() {
     const FRESH: &[Migration] = &[
         Migration {
@@ -1258,26 +1106,8 @@ async fn query_db_status_without_a_tracker_pends_every_namespace() {
             sql: "",
         },
     ];
-    let drop_scratch = format!("DROP DATABASE IF EXISTS {SCRATCH_DATABASE} WITH (FORCE)");
-
-    let admin_pool = build_pool();
-    let admin = admin_pool.get().await.unwrap();
-    admin.batch_execute(&drop_scratch).await.unwrap();
-    admin
-        .batch_execute(&format!(
-            "CREATE DATABASE {SCRATCH_DATABASE} TEMPLATE template0"
-        ))
-        .await
-        .unwrap();
-
-    let scratch_pool = create_pool(
-        &database_url_with_name(&test_database_url(), SCRATCH_DATABASE),
-        &fuz_db::PoolOptions::default(),
-    )
-    .unwrap();
-    let status = query_db_status(&scratch_pool, &[MigrationNamespace::new("fresh", FRESH)]).await;
-    drop(scratch_pool);
-    admin.batch_execute(&drop_scratch).await.unwrap();
+    let pool = fresh_test_db(DB).await;
+    let status = query_db_status(&pool, &[MigrationNamespace::new("fresh", FRESH)]).await;
     let status = status.unwrap();
 
     assert_eq!(status.table_count, 0);

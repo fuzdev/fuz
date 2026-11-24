@@ -64,7 +64,7 @@ pub use credentials::{
 pub use daemon_token::{init_daemon_token, init_daemon_token_from_env};
 pub use db_reset::FUZ_TESTING_RESET_DB_ON_STARTUP;
 pub use fresh_db::{
-    ScratchDb, TestingDbOptions, budgeted_pool, database_url_with_name, fresh_test_db_pool,
+    FUZ_TEST_POSTGRES_URL, TestDb, TestEngine, TestingDbOptions, budgeted_pool, fresh_test_db,
 };
 pub use migration_tables::migration_created_tables;
 pub use password_argon2::TestingArgon2idHasher;

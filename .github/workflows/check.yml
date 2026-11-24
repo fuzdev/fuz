@@ -7,10 +7,11 @@
 # `fuz_audit` / `fuz_sign`, the weakened test-mode Argon2 params, and every
 # `test_*` feature seam out of production builds), and rustdoc held at zero
 # warnings across all features.
-# `cargo test --workspace` skips the `#[ignore]` real-Postgres suites, so this
-# job needs no services.
+# Its `cargo test --workspace` runs every DB test on pglet, in-process
+# (`fuz_testing::fresh_test_db`), so this job needs no services.
 #
-# `db-tests` — the `#[ignore]` real-Postgres suites against a Postgres service.
+# `db-tests` — the PostgreSQL leg: every DB test again, the Postgres-only ones
+# included, each in a database of its own on a Postgres service.
 # `fuz_storage`'s backends are not covered here: they ride unit tests plus the
 # `#[ignore]` SSH round-trip that needs a real host.
 #
@@ -30,6 +31,15 @@
 # regressed. Needs no Rust build. The mutation gate also carries the `redirect`
 # case's non-vacuity — a silently-regressed HTTP listener would leave `redirect`
 # passing on its own, since curl refuses `http://localhost:0/…` pre-connect.
+#
+# Layout: `fuz_testing` path-depends on the pglet server in the sibling `pglet`
+# repository (`../pglet/crates/pglet_server`), and Cargo loads it for any build
+# in this workspace. `actions/checkout` can't write outside `$GITHUB_WORKSPACE`,
+# so every job that runs cargo checks out into subdirectories — `fuz/`,
+# `pglet/` — and runs its steps in `fuz/`. `PGLET_REF` pins the pglet commit
+# checked against, a full SHA bumped deliberately together with `Cargo.lock`
+# (which `--locked` holds to the pglet crates and their dependencies);
+# `cross-contract.yml` pins the same SHA and moves with it.
 
 name: check
 
@@ -52,15 +62,30 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  PGLET_REF: 86c5fc318419912c7a3e5f03c6c6fe0e780fb620
+
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    defaults:
+      run:
+        working-directory: fuz
+
     steps:
       # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          path: fuz
+          persist-credentials: false
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: fuzdev/pglet
+          ref: ${{ env.PGLET_REF }}
+          path: pglet
           persist-credentials: false
 
       # The toolchain is pinned in rust-toolchain.toml, not `stable`: the
@@ -76,6 +101,8 @@ jobs:
           cargo --version
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuz -> target
 
       - name: Format
         run: cargo fmt --all --check
@@ -133,10 +160,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    defaults:
+      run:
+        working-directory: fuz
+
     steps:
       # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          path: fuz
+          persist-credentials: false
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: fuzdev/pglet
+          ref: ${{ env.PGLET_REF }}
+          path: pglet
           persist-credentials: false
 
       # Installs the toolchain pinned in rust-toolchain.toml (see `check`).
@@ -146,6 +185,8 @@ jobs:
           rustup show active-toolchain
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuz -> target
 
       # Strict: a skipped npm cross-check (npm ci failing) fails the job.
       - name: fuzi empirical gate (glibc)
@@ -196,23 +237,28 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    # Each crate's `#[ignore]` suite points at its own database via these
-    # env vars (`fuz_http`'s `ready` suite shares `fuz_db_test` with `fuz_db`).
+    # Each DB test creates a database of its own through this server and role
+    # and drops it after (`fuz_testing::fresh_test_db`); the service's user is
+    # a superuser, so it has `CREATEDB`.
     env:
-      FUZ_DB_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_db_test
-      FUZ_AUTH_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_auth_test
-      FUZ_CELL_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_cell_test
-      FUZ_FACT_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_fact_test
-      FUZ_FACT_SERVING_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_fact_serving_test
-      FUZ_ACTIONS_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_actions_test
-      FUZ_DB_ADMIN_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_db_admin_test
-      FUZ_REALTIME_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_realtime_test
-      FUZ_CELL_ACTIONS_TEST_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_cell_actions_test
+      FUZ_TEST_POSTGRES_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_test
+
+    defaults:
+      run:
+        working-directory: fuz
 
     steps:
       # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          path: fuz
+          persist-credentials: false
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: fuzdev/pglet
+          ref: ${{ env.PGLET_REF }}
+          path: pglet
           persist-credentials: false
 
       # Installs the toolchain pinned in rust-toolchain.toml (see `check`).
@@ -222,25 +268,13 @@ jobs:
           rustup show active-toolchain
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fuz -> target
 
-      - name: Create test databases
-        run: |
-          psql postgres://fuz_test:fuz_test@localhost:5432/fuz_test \
-            -c 'CREATE DATABASE fuz_db_test;' \
-            -c 'CREATE DATABASE fuz_auth_test;' \
-            -c 'CREATE DATABASE fuz_cell_test;' \
-            -c 'CREATE DATABASE fuz_fact_test;' \
-            -c 'CREATE DATABASE fuz_fact_serving_test;' \
-            -c 'CREATE DATABASE fuz_actions_test;' \
-            -c 'CREATE DATABASE fuz_db_admin_test;' \
-            -c 'CREATE DATABASE fuz_realtime_test;' \
-            -c 'CREATE DATABASE fuz_cell_actions_test;'
-
-      # `--test-threads=1`: the suites share one database per crate and some
-      # tests read the whole `public` schema (`fuz_db`'s snapshot test), so
-      # they must not run concurrently within a binary.
-      - name: DB integration tests
+      # `--include-ignored`: every DB test, and the Postgres-only ones beside
+      # them. Each test has a database of its own, so they run in parallel.
+      - name: DB tests on PostgreSQL
         run: >-
           cargo test --locked
-          -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact_serving -p fuz_actions -p fuz_db_admin -p fuz_realtime -p fuz_cell_actions
-          -- --ignored --test-threads=1
+          -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact_serving -p fuz_actions -p fuz_db_admin -p fuz_realtime -p fuz_cell_actions -p fuz_testing
+          -- --include-ignored

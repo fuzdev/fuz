@@ -10,18 +10,12 @@
 //! grant holder, role grant holder, stranger, admin), that each list and
 //! `cell_list` return exactly the cells `can_view_cell` admits. A tombstoned
 //! cell rides along to pin the liveness clause.
-//!
-//! `--ignored`-gated (needs Postgres):
-//!
-//! ```sh
-//! cargo test -p fuz_cell --test cell_view_sql -- --ignored --test-threads=1
-//! ```
 
 mod common;
 
 use std::collections::{BTreeSet, HashMap};
 
-use common::fresh_db_pool;
+use common::fresh_db;
 use fuz_auth::{AccountRow, ActorRow, ROLE_ADMIN, RequestActorContext, RoleGrantRow};
 use fuz_cell::can_view_cell;
 use fuz_cell::cell_field_queries::{
@@ -77,9 +71,8 @@ enum Grant {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn the_sql_view_filter_admits_exactly_what_can_view_cell_admits() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let grantee = seed_caller(&pool, "grantee", &[]).await;
     let member = seed_caller(&pool, "member", &[MEMBER_ROLE]).await;
@@ -270,10 +263,9 @@ async fn the_sql_view_filter_admits_exactly_what_can_view_cell_admits() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn the_view_filter_runs_before_the_limit() {
     // Hidden sources older than a visible one never crowd it out of a page.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_caller(&pool, "owner", &[]).await;
     let client = pool.get().await.unwrap();
     let create = async |visibility| {
@@ -351,11 +343,10 @@ async fn seed_scoped_caller(
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres (FUZ_CELL_TEST_URL)"]
 async fn scoped_principals_admit_the_same_cells_in_sql_and_in_memory() {
     // Scoped role grants on both sides, a scoped (non-global) admin grant, an
     // editor-level grant, a multi-role caller, and an empty-string marker.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let scope_a = Uuid::new_v4();
     let scope_b = Uuid::new_v4();
     let owner = seed_caller(&pool, "owner", &[]).await;

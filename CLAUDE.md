@@ -185,8 +185,9 @@ contract. `--json` is on `fuz self status`, `fuzd status`, `fuz artifact list` /
 # Checks — local equivalents of the CI gates (exact list: docs/testing.md § CI)
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace                # DB tests on pglet, in-process (a `pglet` checkout beside this one)
 (umask 000; cargo test --workspace)   # CI's umask leg: the ~/.fuz mode assertions
+# the PostgreSQL leg (db-tests): the recipe in docs/testing.md § Postgres suites
 cargo xtask check-release        # release audit: forbidden crates, layering, test_* features on release edges, re-declared lint tables
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items
 
@@ -346,8 +347,8 @@ shipped).
 - `fuz_fact` / `fuz_fact_serving` — the content-addressed byte store / its sole
   authz'd reader.
 - `fuz_db_admin` — the allowlist-gated table browser.
-- `fuz_testing` — test-only spine fixtures, the Postgres harness, and the
-  shared request-reads census.
+- `fuz_testing` — test-only spine fixtures, the test-database harness, and
+  the shared request-reads census.
 
 **npm bridge** — `fuzi_core`, the engine behind `fuzi`: prints nothing, never
 runs package code.

@@ -1,6 +1,6 @@
 //! An offer-create or an invite-create in flight while an account it names is
 //! deleted — the offer's recipient, the offer's grantor, the invite's issuer —
-//! against a real `PostgreSQL`.
+//! against a live database.
 //!
 //! The rule is that nothing is left standing for a deleted account: an offer
 //! pending to or from it, an invite it issued. `query_role_grant_offer_create`
@@ -41,12 +41,6 @@
 //! at the purge lock.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/account_delete.races.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test account_delete_races -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -69,12 +63,13 @@ use fuz_auth::role_grant_schema::RoleGrantRow;
 use fuz_auth::{AdminOfferAuthorize, InviteCreateError, RoleGrantOfferActionSpecs, RoleRegistry};
 use fuz_db::{ActionDb, Pool};
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
+use fuz_testing::TestDb;
 use serde_json::{Value, json};
 
 mod common;
 use common::{
-    LOCK_WAIT_DEADLINE, fresh_db_pool, in_tx, seed_account_actor, seed_actor_context, seed_admin,
-    seed_role_grant_direct,
+    LOCK_WAIT_DEADLINE, fresh_db, fresh_postgres_db, in_tx, seed_account_actor, seed_actor_context,
+    seed_admin, seed_role_grant_direct,
 };
 
 /// How long a blocked call is given to show it is blocked.
@@ -95,7 +90,7 @@ fn with_admin(mut auth: RequestActorContext) -> RequestActorContext {
 /// The fixture's accounts: the deleter (an admin), a grantor and an issuer
 /// holding `admin`, and a recipient.
 struct Fixture {
-    pool: Pool,
+    pool: TestDb,
     deleter: RequestActorContext,
     grantor: RequestActorContext,
     issuer: RequestActorContext,
@@ -103,7 +98,11 @@ struct Fixture {
 }
 
 async fn setup() -> Fixture {
-    let pool = fresh_db_pool().await;
+    setup_on(fresh_db().await).await
+}
+
+/// [`setup`] on `pool`, for a test that names its own engine.
+async fn setup_on(pool: TestDb) -> Fixture {
     let deleter = with_admin(seed_admin(&pool).await);
     let grantor = with_admin(seed_actor_context(&pool, "race_grantor").await);
     let issuer = with_admin(seed_actor_context(&pool, "race_issuer").await);
@@ -232,7 +231,6 @@ async fn race_against_commit<T>(
 // -- authorized before the delete ----------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_offer_create_authorized_before_its_recipient_is_deleted_is_refused() {
     let f = setup().await;
     delete(&f, f.recipient).await;
@@ -244,7 +242,6 @@ async fn an_offer_create_authorized_before_its_recipient_is_deleted_is_refused()
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_offer_create_authorized_before_its_grantor_is_deleted_is_refused() {
     let f = setup().await;
     delete(&f, f.grantor.account.id).await;
@@ -256,7 +253,6 @@ async fn an_offer_create_authorized_before_its_grantor_is_deleted_is_refused() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_invite_create_authorized_before_its_issuer_is_deleted_is_refused() {
     let f = setup().await;
     delete(&f, f.issuer.account.id).await;
@@ -274,7 +270,6 @@ async fn an_invite_create_authorized_before_its_issuer_is_deleted_is_refused() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_invite_committed_before_its_issuer_is_deleted_is_deleted_by_it() {
     let f = setup().await;
     in_tx!(f.pool, |tx| admin_action(
@@ -291,7 +286,6 @@ async fn an_invite_committed_before_its_issuer_is_deleted_is_deleted_by_it() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn query_create_invite_refuses_an_issuer_deleted_before_it() {
     let f = setup().await;
     delete(&f, f.issuer.account.id).await;
@@ -328,7 +322,6 @@ async fn hold_a_delete(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_delete_waits_on_an_uncommitted_offer_to_the_account_and_then_supersedes_it() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -349,7 +342,6 @@ async fn a_delete_waits_on_an_uncommitted_offer_to_the_account_and_then_supersed
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_offer_create_waits_on_an_uncommitted_delete_of_its_recipient_and_is_then_refused() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -375,7 +367,6 @@ async fn an_offer_create_waits_on_an_uncommitted_delete_of_its_recipient_and_is_
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_delete_waits_on_an_uncommitted_offer_from_the_account_and_then_supersedes_it() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -396,7 +387,6 @@ async fn a_delete_waits_on_an_uncommitted_offer_from_the_account_and_then_supers
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_offer_create_waits_on_an_uncommitted_delete_of_its_grantor_and_is_then_refused() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -422,7 +412,6 @@ async fn an_offer_create_waits_on_an_uncommitted_delete_of_its_grantor_and_is_th
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_delete_waits_on_an_uncommitted_invite_from_the_account_and_then_deletes_it() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -445,7 +434,6 @@ async fn a_delete_waits_on_an_uncommitted_invite_from_the_account_and_then_delet
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_invite_create_waits_on_an_uncommitted_delete_of_its_issuer_and_is_then_refused() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -472,7 +460,6 @@ async fn an_invite_create_waits_on_an_uncommitted_delete_of_its_issuer_and_is_th
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn query_create_invite_waits_on_an_uncommitted_delete_of_its_issuer_and_is_then_refused() {
     let f = setup().await;
     let mut client = f.pool.get().await.unwrap();
@@ -526,9 +513,9 @@ async fn lock_waiters(pool: &Pool) -> i64 {
 /// while waiting on the grantor — a deadlock. Run in both directions, so each
 /// party is once the lower id and once the higher. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_offer_between_two_admins_and_a_third_admins_delete_never_deadlock() {
-    let f = setup().await;
+    let f = setup_on(fresh_postgres_db().await).await;
     // Two admins written in the reverse of their id order: an unordered guard
     // reaches them in the order they were written, so it disagrees with an
     // id-ordered offer — the case where only both orders hold.
@@ -620,10 +607,10 @@ async fn an_offer_between_two_admins_and_a_third_admins_delete_never_deadlock() 
 /// the accept commits and the removal goes on. One delete, one revoke of the
 /// grantor's grant, one purge. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admin_offer_accept_and_a_removal_of_its_grantor_never_deadlock() {
     for removal in ["delete", "revoke", "purge"] {
-        let f = setup().await;
+        let f = setup_on(fresh_postgres_db().await).await;
         // the deleter's grant is in the database too, so the grantor is not
         // the last admin the guard counts
         seed_role_grant_direct(&f.pool, f.deleter.actor.id, ROLE_ADMIN, None).await;
@@ -761,10 +748,10 @@ async fn an_admin_offer_accept_and_a_removal_of_its_grantor_never_deadlock() {
 /// hold the row the removal's supersede needs, and the two deadlock. Twin of
 /// the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admin_offer_accept_sent_across_a_removal_of_its_grantor_is_refused() {
     for removal in ["delete", "revoke", "purge"] {
-        let f = setup().await;
+        let f = setup_on(fresh_postgres_db().await).await;
         seed_role_grant_direct(&f.pool, f.deleter.actor.id, ROLE_ADMIN, None).await;
         let grantor = with_admin(seed_actor_context(&f.pool, "ahead_grantor").await);
         let grant_id = seed_role_grant_direct(&f.pool, grantor.actor.id, ROLE_ADMIN, None).await;
@@ -1001,9 +988,9 @@ macro_rules! against_held {
 /// the row the played supersede needs. Twin of the TS case in
 /// `role_grant_offer.lock_order.db.test.ts`.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn two_sibling_accepts_take_turns_at_the_recipient() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, g1) = seed_account_actor(&pool, "lo_sib_g1").await;
     let (_, g2) = seed_account_actor(&pool, "lo_sib_g2").await;
     let (r_account, r_actor) = seed_account_actor(&pool, "lo_sib_r").await;
@@ -1048,9 +1035,9 @@ async fn two_sibling_accepts_take_turns_at_the_recipient() {
 /// first holds it while the guard reaches it, and the two deadlock. Twin of
 /// the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admin_recipient_sorting_below_its_grantor_waits_on_the_guard_holding_neither() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let a = seed_account_actor(&pool, "lo_cyc_a").await;
     let b = seed_account_actor(&pool, "lo_cyc_b").await;
     let third = seed_account_actor(&pool, "lo_cyc_c").await;
@@ -1093,9 +1080,9 @@ async fn an_admin_recipient_sorting_below_its_grantor_waits_on_the_guard_holding
 /// grant: `granted_by` is a provenance stamp, with no foreign key, so it keeps
 /// the purged actor's id. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_accept_across_a_purge_of_a_recipient_whose_actor_granted_the_grantors_admin() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let a = seed_account_actor(&pool, "lo_gb_a").await;
     let b = seed_account_actor(&pool, "lo_gb_b").await;
     let (g, r) = if a.0 < b.0 { (a, b) } else { (b, a) };
@@ -1142,9 +1129,9 @@ async fn an_accept_across_a_purge_of_a_recipient_whose_actor_granted_the_grantor
 /// an id-ordered sweep waits holding neither. No spine serves the sweep over
 /// the wire. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn the_expiry_sweep_takes_its_offers_in_id_order() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let a = seed_account_actor(&pool, "lo_sweep_a").await;
     let b = seed_account_actor(&pool, "lo_sweep_b").await;
     let (x, _) = seed_account_actor(&pool, "lo_sweep_x").await;
@@ -1185,9 +1172,9 @@ async fn the_expiry_sweep_takes_its_offers_in_id_order() {
 /// one that updates the grant first holds the slot the insert waits on while
 /// waiting on the offer, and the two deadlock. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_revoke_locks_its_offers_before_its_grant() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, g) = seed_account_actor(&pool, "lo_rv_g").await;
     let (r_account, r_actor) = seed_account_actor(&pool, "lo_rv_r").await;
     let held_grant = insert_grant(&pool, r_actor, LOCK_ORDER_ROLE, None, None).await;
@@ -1210,9 +1197,9 @@ async fn a_revoke_locks_its_offers_before_its_grant() {
 /// A scope teardown locks the offers it supersedes before it updates its
 /// grants — the revoke's order, for the same reason. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_scope_teardown_locks_its_offers_before_its_grants() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (_, g) = seed_account_actor(&pool, "lo_sc_g").await;
     let (r_account, r_actor) = seed_account_actor(&pool, "lo_sc_r").await;
     let scope_id = uuid::Uuid::new_v4();
@@ -1253,9 +1240,9 @@ async fn a_scope_teardown_locks_its_offers_before_its_grants() {
 /// before the upsert commits, which then writes a fresh pending offer after the
 /// revoke. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_revoke_takes_its_revokees_account_before_its_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (g_account, g) = seed_account_actor(&pool, "lo_rva_g").await;
     let (r_account, r_actor) = seed_account_actor(&pool, "lo_rva_r").await;
     let held_grant = insert_grant(&pool, r_actor, LOCK_ORDER_ROLE, None, None).await;
@@ -1298,9 +1285,9 @@ async fn a_revoke_takes_its_revokees_account_before_its_offers() {
 /// nothing keeps an offer at a scope out, so an offer it didn't lock is one it
 /// would take out of order. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_scope_teardown_supersedes_only_the_offers_its_lock_took() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (g_account, g) = seed_account_actor(&pool, "lo_sco_g").await;
     let (r_account, r_actor) = seed_account_actor(&pool, "lo_sco_r").await;
     let scope_id = uuid::Uuid::new_v4();
@@ -1404,9 +1391,9 @@ async fn purge(
 /// The stamp has none, so the revoke commits, the purge's cascade never writes
 /// the grant, and the stamps keep the purged actor's id. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_admins_revoke_of_a_grant_they_granted_across_their_purge_both_commit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = with_admin(seed_admin(&pool).await);
     seed_role_grant_direct(&pool, keeper.actor.id, ROLE_ADMIN, None).await;
     let admin = seed_actor_context(&pool, "purged_admin").await;
@@ -1472,10 +1459,10 @@ async fn an_admins_revoke_of_a_grant_they_granted_across_their_purge_both_commit
 /// and deadlocked. Every purge first takes the advisory lock only purges take,
 /// so the second waits there holding nothing. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn two_purges_whose_accounts_rows_cross_both_commit() {
     for shape in ["accepted", "declined", "invites"] {
-        let pool = fresh_db_pool().await;
+        let pool = fresh_postgres_db().await;
         let keeper = with_admin(seed_admin(&pool).await);
         seed_role_grant_direct(&pool, keeper.actor.id, ROLE_ADMIN, None).await;
         let x = seed_account_actor(&pool, "crossed_x").await;
@@ -1559,7 +1546,7 @@ async fn two_purges_whose_accounts_rows_cross_both_commit() {
 /// `query_account_lock_live` — then resumes on the commit with the target the
 /// last admin: its guard runs again under the row lock and refuses.
 async fn a_removal_whose_target_turns_the_last_admin_is_refused(method: &str) {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = with_admin(seed_admin(&pool).await);
     seed_role_grant_direct(&pool, keeper.actor.id, ROLE_ADMIN, None).await;
     let (target_account, target_actor) = seed_account_actor(&pool, "turned_admin").await;
@@ -1626,7 +1613,7 @@ async fn a_removal_whose_target_turns_the_last_admin_is_refused(method: &str) {
 /// A purge whose target turns the last admin while it waits at its row is
 /// refused. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_purge_whose_target_turns_the_last_admin_while_it_waits_at_its_row_is_refused() {
     a_removal_whose_target_turns_the_last_admin_is_refused("account_purge").await;
 }
@@ -1634,7 +1621,7 @@ async fn a_purge_whose_target_turns_the_last_admin_while_it_waits_at_its_row_is_
 /// A delete whose target turns the last admin while it waits at its row is
 /// refused. Twin of the TS case.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_whose_target_turns_the_last_admin_while_it_waits_at_its_row_is_refused() {
     a_removal_whose_target_turns_the_last_admin_is_refused("account_delete").await;
 }

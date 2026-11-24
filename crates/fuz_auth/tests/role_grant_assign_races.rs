@@ -1,5 +1,5 @@
 //! `role_grant_assign` in flight across a removal of either party's account,
-//! against a real `PostgreSQL`.
+//! against a live database.
 //!
 //! The rule is offer-create's: an assign writes no grant to a recipient
 //! deleted or purged before it — none on the tombstone, where an undelete would
@@ -29,12 +29,6 @@
 //! both rows in the opposite order between the two statements.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/role_grant_offer_actions.assign_races.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test role_grant_assign_races -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -56,7 +50,10 @@ use fuz_http::{JsonrpcError, JsonrpcErrorCode};
 use serde_json::{Value, json};
 
 mod common;
-use common::{fresh_db_pool, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct};
+use common::{
+    fresh_db, fresh_postgres_db, in_tx, race, seed_actor_context, seed_admin,
+    seed_role_grant_direct,
+};
 
 /// The admin-grantable role the caller assigns.
 const ROLE: &str = "race_assign_role";
@@ -294,9 +291,8 @@ macro_rules! both_orders {
 // -- authorized before the caller's removal -------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_assign_authorized_before_a_delete_of_its_caller_is_refused_writing_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -322,9 +318,8 @@ async fn an_assign_authorized_before_a_delete_of_its_caller_is_refused_writing_n
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_assign_authorized_before_its_caller_actor_is_tombstoned_is_refused_writing_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
     // the actor alone, its account left live — a state no handler produces yet
@@ -351,9 +346,8 @@ async fn an_assign_authorized_before_its_caller_actor_is_tombstoned_is_refused_w
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_admin_assigns_to_its_own_account_by_account_and_by_actor() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     // one id twice in the lock statement
     for named in [false, true] {
@@ -372,9 +366,9 @@ async fn an_admin_assigns_to_its_own_account_by_account_and_by_actor() {
 // -- an assign across a removal of the recipient --------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_waits_on_an_uncommitted_delete_of_its_recipient_then_404s() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -400,10 +394,10 @@ async fn an_assign_waits_on_an_uncommitted_delete_of_its_recipient_then_404s() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_naming_an_actor_waits_on_an_uncommitted_delete_of_its_recipient_then_is_the_mismatch()
  {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -429,9 +423,9 @@ async fn an_assign_naming_an_actor_waits_on_an_uncommitted_delete_of_its_recipie
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_waits_on_an_uncommitted_purge_of_its_recipient_then_404s_not_500s() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -452,9 +446,9 @@ async fn an_assign_waits_on_an_uncommitted_purge_of_its_recipient_then_404s_not_
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_of_the_recipient_waits_on_an_uncommitted_assign_which_commits_while_live() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -479,9 +473,9 @@ async fn a_delete_of_the_recipient_waits_on_an_uncommitted_assign_which_commits_
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_purge_of_the_recipient_waits_on_an_uncommitted_assign_then_removes_its_grant() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -511,7 +505,7 @@ async fn a_purge_of_the_recipient_waits_on_an_uncommitted_assign_then_removes_it
 /// admin's account row — the caller's among them — in id order: both commit,
 /// in either order.
 async fn an_assign_and_another_admins_removal_commit_in_either_order(method: &str) {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -529,21 +523,21 @@ async fn an_assign_and_another_admins_removal_commit_in_either_order(method: &st
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_and_another_admins_delete_commit_in_either_order() {
     an_assign_and_another_admins_removal_commit_in_either_order("account_delete").await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_and_another_admins_purge_commit_in_either_order() {
     an_assign_and_another_admins_removal_commit_in_either_order("account_purge").await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_and_the_recipients_accept_commit_in_either_order() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -571,9 +565,9 @@ async fn an_assign_and_the_recipients_accept_commit_in_either_order() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_and_a_revoke_of_the_recipients_other_grant_commit_in_either_order() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
@@ -593,9 +587,9 @@ async fn an_assign_and_a_revoke_of_the_recipients_other_grant_commit_in_either_o
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_and_the_recipients_own_toggle_commit_in_either_order() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let caller = seed_admin_actor(&pool, "race_caller").await;
     let recipient = seed_actor_context(&pool, "race_recipient").await;
     both_orders!(&pool, &caller, &recipient, "the toggle", |order, tx| {

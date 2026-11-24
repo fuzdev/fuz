@@ -24,7 +24,7 @@ use fuz_db::{ColumnProjections, Pool, column_projection_mismatches_merged, query
 /// `pool` exactly — every table projected or exempt, every projection const
 /// naming exactly its live columns, no stale entry.
 ///
-/// `pool` is the suite's `fresh_test_db_pool` handle, so "live" means the
+/// `pool` is the test's `fresh_test_db` database, so "live" means the
 /// schema the crate's migration chains just built.
 ///
 /// # Panics

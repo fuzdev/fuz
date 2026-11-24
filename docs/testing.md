@@ -1,8 +1,8 @@
 # Testing
 
-How the workspace is tested: the CI jobs, the real-Postgres suites, the
-cross-backend suite, and the known flakes. CI's reasons per job are the
-comments at the top of `.github/workflows/check.yml`.
+How the workspace is tested: the CI jobs, the database tests on pglet and
+PostgreSQL, the cross-backend suite, and the known flakes. CI's reasons per
+job are the comments at the top of `.github/workflows/check.yml`.
 
 ## CI
 
@@ -22,13 +22,20 @@ manual dispatch:
 
   `--document-private-items` matters: rustdoc checks only the docs it renders,
   so without it private and `pub(crate)` doc comments go unchecked.
-- `db-tests` — the `#[ignore]` real-Postgres suites against a `postgres:18`
-  service (§ Postgres suites).
+- `db-tests` — the PostgreSQL leg: every DB test again, the Postgres-only ones
+  included, against a `postgres:18` service (§ Postgres suites).
 - `fuzi-gate` — `FUZI_GATE_STRICT=1 scripts/fuzi-gate.sh --glibc-only` (set
   the strict flag locally to match CI); the musl leg is manual
   (`scripts/fuzi-gate/README.md`).
 - `install-test` — `scripts/install-test.sh` and its mutation gate
   `scripts/install-test-mutants.sh` (`scripts/install-test/README.md`).
+
+Every job that runs cargo checks this repo out into `fuz/` and fuzdev/pglet
+beside it into `pglet/`: `fuz_testing` path-depends on pglet's server crate,
+and Cargo loads it for any build in the workspace. `check.yml`'s `PGLET_REF`
+pins the pglet commit, a full SHA that `cross-contract.yml` repeats; it moves
+deliberately, with `Cargo.lock` re-locked to the pglet crates at that commit.
+Locally, keep a `pglet` checkout beside this one.
 
 `.github/workflows/cross-contract.yml` runs nightly and by manual dispatch,
 never on a push: it checks out fuz_app's `main` beside this checkout, builds
@@ -58,61 +65,59 @@ independent of the developer's `~/.fuz/`.
 
 ## Postgres suites
 
-A local Postgres is the expected path for the `#[ignore]` suites — write and
-verify them locally, don't defer to CI. Point each crate's `*_TEST_URL` at a
-local server, `createdb` the databases once, then run with
-`--ignored --test-threads=1` (required — each crate's suite shares one
-database it resets per test, most by wiping its `public` schema through
-`fuz_testing::fresh_test_db_pool`, and `fuz_db`'s snapshot test reads the
-whole schema, so a suite's tests must not run concurrently):
+Every DB test opens its database with `fuz_testing::fresh_test_db`, which
+starts a pglet server of its own for the test, in-process on a loopback port,
+runs the suite's migrations, and stops it when the returned `TestDb` drops. So
+the DB tests run in plain `cargo test`, in parallel, with nothing to set up.
+
+Set `FUZ_TEST_POSTGRES_URL` to a PostgreSQL server and a role with `CREATEDB`
+and every DB test instead creates a database of its own there, named
+`fuz_testing_<suite>_<pid>_<n>`, and drops it after. That's the PostgreSQL
+leg, the `db-tests` job, and a local Postgres is the expected way to run it —
+write and verify a change locally, don't defer to CI:
 
 ```bash
-export FUZ_DB_TEST_URL=postgres://<user>@localhost:5432/fuz_db_test
-export FUZ_AUTH_TEST_URL=postgres://<user>@localhost:5432/fuz_auth_test
-export FUZ_CELL_TEST_URL=postgres://<user>@localhost:5432/fuz_cell_test
-export FUZ_FACT_TEST_URL=postgres://<user>@localhost:5432/fuz_fact_test
-export FUZ_FACT_SERVING_TEST_URL=postgres://<user>@localhost:5432/fuz_fact_serving_test
-export FUZ_ACTIONS_TEST_URL=postgres://<user>@localhost:5432/fuz_actions_test
-export FUZ_DB_ADMIN_TEST_URL=postgres://<user>@localhost:5432/fuz_db_admin_test
-export FUZ_REALTIME_TEST_URL=postgres://<user>@localhost:5432/fuz_realtime_test
-export FUZ_CELL_ACTIONS_TEST_URL=postgres://<user>@localhost:5432/fuz_cell_actions_test
-for db in fuz_db_test fuz_auth_test fuz_cell_test fuz_fact_test fuz_fact_serving_test fuz_actions_test fuz_db_admin_test fuz_realtime_test fuz_cell_actions_test; do createdb $db; done   # one-time
-cargo test -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact_serving -p fuz_actions -p fuz_db_admin -p fuz_realtime -p fuz_cell_actions -- --ignored --test-threads=1
+export FUZ_TEST_POSTGRES_URL=postgres://<user>@localhost:5432/postgres
+cargo test -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact_serving -p fuz_actions -p fuz_db_admin -p fuz_realtime -p fuz_cell_actions -p fuz_testing -- --include-ignored
 ```
 
-**A crate that gains an `#[ignore]` Postgres suite** joins both the recipe above
-and the `db-tests` job in `check.yml` — env var, database, and `-p` entry in
-each. `xtask`'s `tests/db_suite_lists.rs`, in the `check` job's
-`cargo test --workspace`, holds both lists to the tree in both directions: a
-crate whose code names a `*_TEST_URL` literal must be in each `-p` list with its
-variable set and its database created, and nothing else may be listed; each
-`cargo test` takes only `--locked` and `-p` before `--` and exactly
-`--ignored --test-threads=1` after it, with no shell comment or operator, as its
-step's whole `run:`, and the job and its test step take no `if:`,
-`continue-on-error:`, or `shell:`. Its doc has the detection rule; a suite that
-shares another crate's database, as `fuz_http`'s does, is named in its
-`SHARED_DATABASES`.
+A run killed before its tests' drops ran leaves their databases behind; drop
+them by that name prefix.
 
-Each suite's purpose is in its file's `//!` doc. Schema handling:
+**Postgres-only tests.** A test of what only PostgreSQL has (backends and
+their cancellation, lock waits and `LOCK TABLE` stalls, triggers,
+`ALTER DATABASE … SET`, a DST `SET TIME ZONE`) opens its database with
+`TestEngine::Postgres` (`TestingDbOptions::postgres_only`) and carries
+`#[ignore = "postgres-only: <why>"]`. One waiting on a pglet feature carries
+`#[ignore = "pglet: <feature>"]` and the same engine, so it is found by
+searching for the marker once pglet has the feature. Plain `cargo test`
+reports them ignored; run with `--ignored` but without
+`FUZ_TEST_POSTGRES_URL`, each fails naming the variable rather than passing
+unrun.
 
-- Most suites drop and recreate their schema through
-  `fuz_testing::fresh_test_db_pool`: a new suite declares a `TestingDbOptions`
-  const (env var, default DB, migration chains, optional scratch DDL) and
-  delegates. `fuz_auth`'s `tests/common/` (seeding over `fuz_testing::seed`) and
-  `tests/signup.rs` are the template for a new per-handler suite.
-- `fuz_http`'s `ready` suite shares `FUZ_DB_TEST_URL` with `fuz_db`, so both
-  scope themselves per table / per namespace and neither adopts
-  `fresh_test_db_pool` — a `DROP SCHEMA` from either would destroy the other's
-  rows mid-run.
-- `fuz_db`'s status test needs a database with no `schema_version` tracker, so
-  it creates and drops its own scratch database (`fuz_db_test_status_scratch`)
-  — the test role needs `CREATEDB`, and a run that panics leaves that database
-  for the next run to drop.
+**A crate that gains DB tests** joins both `-p` lists, the recipe above and
+the `db-tests` job in `check.yml`. `xtask`'s `tests/db_suite_lists.rs`, in the
+`check` job's `cargo test --workspace`, holds both lists to the tree in both
+directions: a crate whose code names `fresh_test_db` (an aliased import
+included), carries a marker, or lists `fuz_testing` under `[dev-dependencies]`
+must be in each `-p` list and nothing else may be; each list sets
+`FUZ_TEST_POSTGRES_URL` and no other connection variable; each `cargo test`
+takes only `--locked` and `-p` before `--` and exactly `--include-ignored`
+after it, with no shell comment or operator, as its step's whole `run:`; and
+the job and its test step take no `if:`, `continue-on-error:`, or `shell:`. In
+such a crate every `#[ignore` (and every `#[cfg_attr(…)]` holding an `ignore`)
+is one of the two markers, and a crate with a marker names the Postgres engine
+and the other way round. Its doc has the detection rule. `tests/pglet_pin.rs`
+holds `cross-contract.yml`'s pglet checkout to `check.yml`'s `PGLET_REF`.
+
+Each suite's purpose is in its file's `//!` doc. `fuz_auth`'s `tests/common/`
+(seeding over `fuz_testing::seed`) and `tests/signup.rs` are the template for
+a new per-handler suite.
 
 `fuz_auth`'s `credential_mint_race` and `account_delete_races` play two
-transactions against each other; only real Postgres shows a lock wait or a
-lock order, so they exist only as `#[ignore]` suites, and a change to a row
-lock, a locking read or a `RETURNING` order runs them.
+transactions against each other; only PostgreSQL shows a lock wait or a lock
+order, so their racing tests are Postgres-only, and a change to a row lock, a
+locking read or a `RETURNING` order runs the PostgreSQL leg.
 
 ## Cross-backend suite
 

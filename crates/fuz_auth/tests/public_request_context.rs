@@ -24,14 +24,6 @@
 //! walk resolved is `PublicContextFault::CallerRead`.
 //!
 //! Twin of `fuz_app`'s `serve_fact_route.ts` `build_public_request_context`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test public_request_context -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
 #![expect(
     clippy::expect_used,
@@ -52,7 +44,7 @@ use fuz_testing::{
 };
 
 mod common;
-use common::{fresh_db_pool, seed_account_actor, seed_extra_actor};
+use common::{fresh_db, seed_account_actor, seed_extra_actor};
 
 /// Resolve with no daemon-token state and no client IP — the shape every
 /// cookie / bearer case below wants.
@@ -134,11 +126,10 @@ async fn tombstone_actor(pool: &Pool, actor_id: uuid::Uuid) {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_resolves_single_active_actor() {
     // Control: an account with exactly one (active) actor resolves to that
     // actor — the normal single-actor path the tombstone cases must preserve.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, actor_id) = seed_account_actor(&pool, "solo").await;
     let headers = session_headers(&pool, &keyring, account_id).await;
@@ -150,12 +141,11 @@ async fn public_context_resolves_single_active_actor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_ignores_tombstoned_actor_in_count() {
     // Functional half: 1 active + 1 tombstoned is still a single-actor account.
     // The tombstone must not push the count to 2 and demote the owner to
     // anonymous (denying them their own actor's view on a public read).
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, active_id) = seed_account_actor(&pool, "primary").await;
     let extra_id = seed_extra_actor(&pool, account_id, "to_delete").await;
@@ -172,13 +162,12 @@ async fn public_context_ignores_tombstoned_actor_in_count() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_does_not_resolve_a_tombstoned_only_account() {
     // Security half (the hazard the active-actor filter closes): an account whose only actor is
     // tombstoned has *zero* active actors → anonymous. An unfiltered count
     // would see one actor, resolve the deleted actor, and carry its
     // `role_grants` into a public read.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, actor_id) = seed_account_actor(&pool, "ghost").await;
     tombstone_actor(&pool, actor_id).await;
@@ -194,11 +183,10 @@ async fn public_context_does_not_resolve_a_tombstoned_only_account() {
 // -- Credential dispositions: scope narrowing downgrades, nothing else ------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_resolves_a_full_scope_bearer() {
     // The leg the Rust side was missing entirely: a `Full` bearer is a
     // first-class caller here, exactly as the session cookie is.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, actor_id) = seed_account_actor(&pool, "full_bearer").await;
     let headers = bearer_headers(&pool, account_id, &TokenScopeDocument::full()).await;
@@ -210,7 +198,6 @@ async fn public_context_resolves_a_full_scope_bearer() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_downgrades_a_narrowed_bearer_to_anonymous() {
     // The hole this closed. `Methods(∅)` is the sharpest case — a token that
     // can call no RPC method at all read every fact its account's viewable
@@ -218,7 +205,7 @@ async fn public_context_downgrades_a_narrowed_bearer_to_anonymous() {
     // a method downgrades identically. A REST fact read has no RPC method name
     // to test a scope against, and inventing a route→method mapping is the
     // coupling the blanket rule declines.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, _actor_id) = seed_account_actor(&pool, "narrow_bearer").await;
 
@@ -232,12 +219,11 @@ async fn public_context_downgrades_a_narrowed_bearer_to_anonymous() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_resolves_the_daemon_token_keeper() {
     // The other converged leg: `X-Daemon-Token` is `TokenScope::Full` by
     // construction (no minting step at which a narrowing could be chosen), so
     // it keeps full visibility rather than tripping the downgrade.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, actor_id) = seed_account_actor(&pool, "keeper").await;
     let (state, headers) = daemon_state_and_headers(account_id);
@@ -253,11 +239,10 @@ async fn public_context_resolves_the_daemon_token_keeper() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn public_context_ignores_an_unknown_bearer() {
     // An unknown token is anonymous, not an error — the same disposition an
     // absent credential gets, so a caller can't probe token existence here.
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     seed_account_actor(&pool, "somebody").await;
     let mut headers = HeaderMap::new();
@@ -298,10 +283,9 @@ async fn failed_leg(
 /// bearer whose token lookup fails. The fast-lane cases fail the checkout, so
 /// none of them reaches these reads.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_failed_read_past_the_lookup_ends_the_walk() {
     use fuz_auth::CredentialType;
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, _) = seed_account_actor(&pool, "read_fails").await;
     let (state, daemon) = daemon_state_and_headers(account_id);
@@ -376,7 +360,6 @@ async fn a_failed_read_past_the_lookup_ends_the_walk() {
 /// context is `CallerRead` — the route's flat 500 — never the anonymous caller
 /// that a public cell would still serve.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_failed_caller_read_past_the_walk_is_a_fault() {
     for (label, ddl) in [
         ("actor read", "ALTER TABLE actor RENAME TO actor_gone"),
@@ -385,7 +368,7 @@ async fn a_failed_caller_read_past_the_walk_is_a_fault() {
             "ALTER TABLE role_grant RENAME TO role_grant_gone",
         ),
     ] {
-        let pool = fresh_db_pool().await;
+        let pool = fresh_db().await;
         let keyring = testing_keyring();
         let (account_id, actor_id) = seed_account_actor(&pool, "caller_read_fails").await;
         let headers = session_headers(&pool, &keyring, account_id).await;
@@ -421,11 +404,11 @@ async fn a_failed_caller_read_past_the_walk_is_a_fault() {
 
     // the walk spends the one checkout the pool allows, and the caller read's
     // own checkout is refused
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let keyring = testing_keyring();
     let (account_id, _) = seed_account_actor(&pool, "caller_checkout_fails").await;
     let headers = session_headers(&pool, &keyring, account_id).await;
-    let gate = gate(&common::budgeted_pool(1), &keyring, None);
+    let gate = gate(&common::budgeted_pool(&pool, 1), &keyring, None);
     let origin = gate.check_origin(&headers).expect("no foreign origin");
     let fault = gate
         .public_request_context(origin, fuz_http::UNRESOLVED_CLIENT_IP)

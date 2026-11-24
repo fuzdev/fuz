@@ -1,5 +1,5 @@
 //! A scope's teardown against the writes that bring a grant or an offer into
-//! the scope, against a real `PostgreSQL`.
+//! the scope, against a live database.
 //!
 //! The scope lock (`query_scope_lock_shared` / `query_scope_lock_exclusive`)
 //! orders them: `query_role_grant_revoke_for_scope` takes it exclusive first;
@@ -34,12 +34,6 @@
 //!   test in `role_grant_offer_queries`.
 //!
 //! Twin of `fuz_app`'s `src/test/auth/role_grant_scope_teardown_races.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test scope_teardown_races -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::unwrap_used,
@@ -64,11 +58,14 @@ use fuz_auth::{
 };
 use fuz_db::{ActionDb, Pool};
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
+use fuz_testing::TestDb;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 mod common;
-use common::{fresh_db_pool, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct};
+use common::{
+    fresh_postgres_db, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct,
+};
 
 /// The admin-grantable role every scoped write here confers.
 const ROLE: &str = "scope_race_role";
@@ -322,12 +319,12 @@ fn assert_no_server_error(result: &Result<Value, JsonrpcError>, label: &str) {
 /// The fixture: the keeper removes; `caller` (a global admin) assigns and
 /// offers to `recipient`.
 async fn setup() -> (
-    Pool,
+    TestDb,
     RequestActorContext,
     RequestActorContext,
     RequestActorContext,
 ) {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let keeper = seed_keeper(&pool).await;
     let caller = seed_admin_actor(&pool, "scope_caller").await;
     let recipient = seed_actor_context(&pool, "scope_recipient").await;
@@ -337,7 +334,7 @@ async fn setup() -> (
 // -- a teardown held: a write authorized against the scope waits, then is refused
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_waits_on_an_uncommitted_teardown_then_answers_403_writing_nothing() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let scope_id = create_scope(&pool).await;
@@ -366,7 +363,7 @@ async fn an_assign_waits_on_an_uncommitted_teardown_then_answers_403_writing_not
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_offer_create_waits_on_an_uncommitted_teardown_then_answers_403_writing_nothing() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let scope_id = create_scope(&pool).await;
@@ -395,7 +392,7 @@ async fn an_offer_create_waits_on_an_uncommitted_teardown_then_answers_403_writi
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_accept_waits_on_an_uncommitted_teardown_then_finds_its_offer_superseded() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let (scope_id, offer_id) = offer_at_new_scope(&pool, &caller, &recipient).await;
@@ -430,7 +427,7 @@ async fn an_accept_waits_on_an_uncommitted_teardown_then_finds_its_offer_superse
 // -- a write held: the teardown waits, then ends what it wrote -----------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_waits_on_an_uncommitted_assign_then_revokes_its_grant() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let scope_id = create_scope(&pool).await;
@@ -446,7 +443,7 @@ async fn a_teardown_waits_on_an_uncommitted_assign_then_revokes_its_grant() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_waits_on_an_uncommitted_offer_create_then_supersedes_the_offer() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let scope_id = create_scope(&pool).await;
@@ -462,7 +459,7 @@ async fn a_teardown_waits_on_an_uncommitted_offer_create_then_supersedes_the_off
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_waits_on_an_uncommitted_accept_then_revokes_its_grant() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let (scope_id, offer_id) = offer_at_new_scope(&pool, &caller, &recipient).await;
@@ -480,7 +477,7 @@ async fn a_teardown_waits_on_an_uncommitted_accept_then_revokes_its_grant() {
 // No handler around the query: the lock the query takes itself is all that
 // orders it.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_waits_on_an_uncommitted_direct_query_create_role_grant_then_revokes_it() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let scope_id = create_scope(&pool).await;
@@ -512,7 +509,7 @@ async fn a_teardown_waits_on_an_uncommitted_direct_query_create_role_grant_then_
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_waits_on_an_uncommitted_direct_query_role_grant_offer_create_then_supersedes_it()
  {
     let (pool, _keeper, caller, recipient) = setup().await;
@@ -553,7 +550,7 @@ async fn a_teardown_waits_on_an_uncommitted_direct_query_role_grant_offer_create
 // A teardown holding the scope lock and no offer yet: the accept waits at the
 // lock, before it claims the offer the teardown would lock next.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_accept_waits_on_a_scope_lock_held_exclusive_before_its_claim() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let (scope_id, offer_id) = offer_at_new_scope(&pool, &caller, &recipient).await;
@@ -589,14 +586,14 @@ async fn a_write_at_scope_b_answers_while_a_teardown_of_scope_a_is_uncommitted(m
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_assign_at_scope_b_answers_while_a_teardown_of_scope_a_is_uncommitted() {
     a_write_at_scope_b_answers_while_a_teardown_of_scope_a_is_uncommitted("role_grant_assign")
         .await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_offer_create_at_scope_b_answers_while_a_teardown_of_scope_a_is_uncommitted() {
     a_write_at_scope_b_answers_while_a_teardown_of_scope_a_is_uncommitted(
         "role_grant_offer_create",
@@ -609,7 +606,7 @@ async fn an_offer_create_at_scope_b_answers_while_a_teardown_of_scope_a_is_uncom
 // Shared, not exclusive: two writes into one scope take turns with a teardown
 // only, never with each other.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_offer_create_answers_while_an_assign_at_the_same_scope_is_uncommitted() {
     let (pool, _keeper, caller, recipient) = setup().await;
     let scope_id = create_scope(&pool).await;
@@ -694,19 +691,19 @@ async fn a_teardown_and_a_removal_of_the_recipient_commit_in_either_order(method
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_and_a_delete_of_the_recipient_commit_in_either_order() {
     a_teardown_and_a_removal_of_the_recipient_commit_in_either_order("account_delete").await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_and_a_purge_of_the_recipient_commit_in_either_order() {
     a_teardown_and_a_removal_of_the_recipient_commit_in_either_order("account_purge").await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_teardown_and_a_revoke_of_the_recipients_grant_at_the_scope_commit_in_either_order() {
     let (pool, keeper, caller, recipient) = setup().await;
     let (scopes, grants) = two_scopes_reaching(&pool, &caller, &recipient).await;
@@ -759,7 +756,7 @@ async fn a_scoped_write_and_a_removal_of_its_recipient_commit_in_either_order(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_scoped_assign_and_a_delete_of_its_recipient_commit_in_either_order() {
     a_scoped_write_and_a_removal_of_its_recipient_commit_in_either_order(
         "role_grant_assign",
@@ -769,7 +766,7 @@ async fn a_scoped_assign_and_a_delete_of_its_recipient_commit_in_either_order() 
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_scoped_assign_and_a_purge_of_its_recipient_commit_in_either_order() {
     a_scoped_write_and_a_removal_of_its_recipient_commit_in_either_order(
         "role_grant_assign",
@@ -779,7 +776,7 @@ async fn a_scoped_assign_and_a_purge_of_its_recipient_commit_in_either_order() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_scoped_offer_create_and_a_delete_of_its_recipient_commit_in_either_order() {
     a_scoped_write_and_a_removal_of_its_recipient_commit_in_either_order(
         "role_grant_offer_create",
@@ -789,7 +786,7 @@ async fn a_scoped_offer_create_and_a_delete_of_its_recipient_commit_in_either_or
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_scoped_offer_create_and_a_purge_of_its_recipient_commit_in_either_order() {
     a_scoped_write_and_a_removal_of_its_recipient_commit_in_either_order(
         "role_grant_offer_create",
@@ -801,9 +798,9 @@ async fn a_scoped_offer_create_and_a_purge_of_its_recipient_commit_in_either_ord
 // -- the key --------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn the_scope_lock_lands_in_pg_locks_as_the_two_int4_form_the_folded_key() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let scope_id: Uuid = "019a8f2e-4b3c-7d10-9e2f-3a4b5c6d7e8f".parse().unwrap();
     let mut client = pool.get().await.unwrap();
     let tx = client.transaction().await.unwrap();

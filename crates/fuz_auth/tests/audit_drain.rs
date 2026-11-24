@@ -6,12 +6,6 @@
 //! Needs Postgres because a listener only hears a row the emit wrote. The
 //! aborted-before-it-ran case needs no row and is a unit test beside the
 //! emitter.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test audit_drain -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::expect_used,
@@ -27,10 +21,9 @@ use std::time::Duration;
 use fuz_auth::{AuditEmitter, AuditEventType, AuditListenerFn, AuditLogInput};
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_panicking_listener_still_settles_the_drain() {
-    let pool = common::fresh_db_pool().await;
-    let emitter = Arc::new(AuditEmitter::new(pool, Arc::default()));
+    let pool = common::fresh_db().await;
+    let emitter = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let heard = Arc::new(AtomicBool::new(false));
     let listener: AuditListenerFn = {
         let heard = Arc::clone(&heard);
@@ -63,8 +56,8 @@ async fn a_panicking_listener_still_settles_the_drain() {
 /// the request bound, made short. Opening and recycling the client keep a
 /// generous bound: a cold Postgres connect can take longer than 50 ms, and
 /// the bound under test is the wait for a held client.
-fn one_client_pool() -> fuz_db::Pool {
-    let config: tokio_postgres::Config = common::test_url().parse().expect("test URL parses");
+fn one_client_pool(url: &str) -> fuz_db::Pool {
+    let config: tokio_postgres::Config = url.parse().expect("test URL parses");
     fuz_db::Pool::builder(deadpool_postgres::Manager::new(
         config,
         tokio_postgres::NoTls,
@@ -98,10 +91,9 @@ async fn rows_of(pool: &fuz_db::Pool, event_type: &str) -> i64 {
 /// a 5 s audit bound lands once the client comes back, and one under a 50 ms
 /// audit bound is dropped.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_pool_write_waits_for_the_audit_checkout_bound() {
-    let db = common::fresh_db_pool().await;
-    let pool = one_client_pool();
+    let db = common::fresh_db().await;
+    let pool = one_client_pool(db.url());
 
     // the long bound: the write outlasts the held client
     let emitter = Arc::new(

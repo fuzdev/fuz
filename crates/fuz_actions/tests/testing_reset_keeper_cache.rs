@@ -15,15 +15,7 @@
 //! is forced after the keeper is seeded by an `extra_accounts` entry that
 //! reuses the keeper's username (a unique violation).
 //!
-//! Lives in `fuz_actions` rather than `fuz_testing` for the real dispatcher and
-//! the suite database it already has (`FUZ_ACTIONS_TEST_URL`, default
-//! `fuz_actions_test`), which it shares with `perform_action_dispatch`.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_actions_test
-//! cargo test -p fuz_actions --test testing_reset_keeper_cache -- --ignored --test-threads=1
-//! ```
+//! Lives in `fuz_actions` rather than `fuz_testing` for the real dispatcher.
 
 #![expect(
     clippy::unwrap_used,
@@ -50,8 +42,8 @@ use fuz_testing::testing_reset::{
     BoxFutureResetResult, ResetStateFn, TestingResetOptions, create_testing_reset_action_spec,
 };
 use fuz_testing::{
-    TESTING_DAEMON_TOKEN, TestingArgon2idHasher, TestingDbOptions, daemon_token_state,
-    fresh_test_db_pool, seed_account_actor, testing_keyring,
+    TESTING_DAEMON_TOKEN, TestDb, TestEngine, TestingArgon2idHasher, TestingDbOptions,
+    daemon_token_state, fresh_test_db, seed_account_actor, testing_keyring,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -60,18 +52,18 @@ use uuid::Uuid;
 /// table whose `actor_id` FK restricts deletes (no `ON DELETE` action), like a
 /// consumer's `created_by REFERENCES actor(id)`.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_ACTIONS_TEST_URL",
-    default_db: "fuz_actions_test",
+    suite: "fuz_actions",
     migrations: &[AUTH_MIGRATIONS],
     setup_sql: Some(
         "CREATE TABLE domain_row (id SERIAL PRIMARY KEY, \
          actor_id UUID NOT NULL REFERENCES actor(id))",
     ),
+    engine: TestEngine::Any,
 };
 
 struct Harness {
     options: PerformActionOptions,
-    pool: Pool,
+    pool: TestDb,
     daemon_token_state: SharedDaemonTokenState,
     /// Makes the reset's `reset_state` hook fail.
     fail_reset_state: Arc<AtomicBool>,
@@ -80,7 +72,7 @@ struct Harness {
 /// A fresh database holding one keeper the daemon token resolves to, as a
 /// booted test binary has, and a registry carrying `_testing_reset` alone.
 async fn setup() -> Harness {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let (boot_keeper_id, _) = seed_account_actor(&pool, "boot_keeper").await;
     let daemon_token_state = daemon_token_state(TESTING_DAEMON_TOKEN, Some(boot_keeper_id));
     let fail_reset_state = Arc::new(AtomicBool::new(false));
@@ -202,7 +194,6 @@ async fn account_exists(pool: &Pool, id: Uuid) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn failed_reset_leaves_keeper_cache_and_next_reset_succeeds() {
     let h = setup().await;
 
@@ -256,7 +247,6 @@ async fn failed_reset_leaves_keeper_cache_and_next_reset_succeeds() {
 /// succeeding. Run after the wipe, the `actor` delete hits the FK and every
 /// later reset fails.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
 async fn domain_reset_runs_before_the_auth_wipe() {
     let h = setup().await;
     let Ok(output) = reset(&h).await else {

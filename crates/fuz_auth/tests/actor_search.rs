@@ -79,9 +79,8 @@ async fn search(
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn unbounded_search_admits_an_admin_and_refuses_a_tombstoned_one() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let (auth, actor_id) = seed_admin_account(&pool, "search_admin").await;
     common::seed_account_actor(&pool, "search_target").await;
     let params = json!({"query": "search"});
@@ -116,12 +115,11 @@ async fn unbounded_search_admits_an_admin_and_refuses_a_tombstoned_one() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_scoped_search_needs_no_admin_grant_at_all() {
     // The other side of the gate: `scope_ids` present means the admin check
     // never runs, so the tombstone has nothing to do with it. Without this the
     // case above could pass on a backend that refused every search.
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let (auth, actor_id) = seed_admin_account(&pool, "scoped_searcher").await;
     let client = pool.get().await.expect("pool.get");
     query_actor_soft_delete(&client, &actor_id, None)
@@ -146,9 +144,8 @@ async fn a_scoped_search_needs_no_admin_grant_at_all() {
 /// and scoped paths) and `query_actors_by_ids` drop a soft-deleted actor and
 /// every actor of a soft-deleted account, beside a live control.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn search_and_lookup_exclude_soft_deleted_actors_and_accounts() {
-    let pool = common::fresh_db_pool().await;
+    let pool = common::fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let scope = uuid::Uuid::new_v4();
     let mut actors = Vec::new();

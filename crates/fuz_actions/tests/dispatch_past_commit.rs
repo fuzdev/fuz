@@ -10,15 +10,8 @@
 //! `COMMIT`, so a case can drop the request while the commit's round trip is
 //! in flight — it waits for that `COMMIT` to show in `pg_stat_activity`.
 //!
-//! Shares `FUZ_ACTIONS_TEST_URL` (default `fuz_actions_test`) with the
-//! crate's other suites — cargo runs a crate's test binaries one after
-//! another.
-//!
-//! `#[ignore]`-gated — run:
-//! ```text
-//! createdb fuz_actions_test
-//! cargo test -p fuz_actions --test dispatch_past_commit -- --ignored --test-threads=1
-//! ```
+//! The slow commit is a deferred plpgsql trigger, so the suite runs on
+//! PostgreSQL alone.
 
 #![expect(
     clippy::unwrap_used,
@@ -40,7 +33,8 @@ use fuz_db::{ActionDb, Pool};
 use fuz_http::{BackgroundWrites, CancellationToken, InputShape, ServeShutdown};
 use fuz_realtime::ConnectionRegistry;
 use fuz_testing::{
-    TestingDbOptions, fresh_test_db_pool, mint_session_cookie, seed_account_actor, testing_keyring,
+    TestEngine, TestingDbOptions, fresh_test_db, mint_session_cookie, seed_account_actor,
+    testing_keyring,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -69,10 +63,10 @@ CREATE CONSTRAINT TRIGGER audit_log_slow_commit
 ";
 
 const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "FUZ_ACTIONS_TEST_URL",
-    default_db: "fuz_actions_test",
+    suite: "fuz_actions",
     migrations: &[AUTH_MIGRATIONS],
     setup_sql: Some(SLOW_COMMIT_SQL),
+    engine: TestEngine::Postgres,
 };
 
 /// Bound on every wait a broken case could otherwise turn into a hang.
@@ -362,9 +356,9 @@ async fn send_rpc_request(addr: SocketAddr, method: &str) -> TcpStream {
 /// the loop ends and lets go of its in-flight dispatches, and the one past
 /// its commit finishes on the tracker — its effects run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_ws_dispatch_dropped_mid_commit_still_runs_its_effects() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let mut stream = ws_socket(&pool, &probe, &writes).await;
@@ -380,9 +374,9 @@ async fn a_ws_dispatch_dropped_mid_commit_still_runs_its_effects() {
 /// A WebSocket closed by its client while a dispatch is still in its
 /// handler: the dispatch is dropped with the loop and rolls back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_ws_dispatch_dropped_in_its_handler_rolls_back() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let mut stream = ws_socket(&pool, &probe, &writes).await;
@@ -399,9 +393,9 @@ async fn a_ws_dispatch_dropped_in_its_handler_rolls_back() {
 /// in flight: the dispatch finishes on the tracker, and the shutdown's write
 /// drain waits for it — nothing given up.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn the_shutdown_waits_for_a_ws_dispatch_past_its_commit() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -443,9 +437,9 @@ async fn the_shutdown_waits_for_a_ws_dispatch_past_its_commit() {
 /// request is dropped with its connection, and the dispatch past its commit
 /// finishes on the router's tracker — its effects run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn an_rpc_dispatch_dropped_mid_commit_still_runs_its_effects() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -471,9 +465,9 @@ async fn an_rpc_dispatch_dropped_mid_commit_still_runs_its_effects() {
 /// An HTTP client gone while its RPC dispatch is still in its handler: the
 /// request is dropped and rolls back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn an_rpc_dispatch_dropped_in_its_handler_rolls_back() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -512,9 +506,9 @@ async fn drain_after(
 /// write and returns at once, or it would wait on itself and the tracker
 /// would never empty.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_drain_inside_a_handed_off_request_does_not_wait_on_itself() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -568,9 +562,9 @@ impl ConnectionCloser for RecordingCloser {
 /// request finishes on the tracker, so the ended session's connections are
 /// still closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires PostgreSQL with fuz_actions_test database"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_logout_dropped_mid_commit_still_closes_the_session() {
-    let pool = fresh_test_db_pool(DB).await;
+    let pool = fresh_test_db(DB).await;
     let writes = Arc::new(BackgroundWrites::default());
     let closer = Arc::new(RecordingCloser::default());
     let connection_closer: Arc<dyn ConnectionCloser> = Arc::<RecordingCloser>::clone(&closer);

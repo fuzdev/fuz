@@ -1,5 +1,5 @@
 //! Who hears `role_grant_offer_supersede` when a cascade ends a pending offer,
-//! against a real `PostgreSQL`: each handler runs, its post-commit effects are
+//! against a live database: each handler runs, its post-commit effects are
 //! drained as the dispatcher drains them after its commit, and a recording
 //! sender reads what was sent, in order.
 //!
@@ -20,12 +20,6 @@
 //!
 //! Twin of `fuz_app`'s `role_grant_offer_actions.notifications*.db.test.ts`
 //! and the self-service case in `self_service_role_actions.db.test.ts`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test supersede_notifications -- --ignored --test-threads=1
-//! ```
 
 #![expect(
     clippy::expect_used,
@@ -47,8 +41,8 @@ use serde_json::{Value, json};
 
 mod common;
 use common::{
-    RecordingNotificationSender, build_audit, closer, ctx_observed, fresh_db_pool,
-    seed_account_actor, seed_actor_context, seed_role_grant_direct,
+    RecordingNotificationSender, build_audit, closer, ctx_observed, fresh_db, seed_account_actor,
+    seed_actor_context, seed_role_grant_direct,
 };
 
 const SUPERSEDE: &str = "role_grant_offer_supersede";
@@ -162,9 +156,8 @@ impl Observed {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_sibling_accept_tells_each_siblings_grantor() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let (_, grantor_a) = seed_account_actor(&pool, "grantor_a").await;
     let (grantor_b_account, grantor_b) = seed_account_actor(&pool, "grantor_b").await;
@@ -208,9 +201,8 @@ async fn a_sibling_accept_tells_each_siblings_grantor() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_revoke_tells_both_parties_of_each_offer_it_ends() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     // the revoking admin: a second active admin, so the last-admin guard admits
     let admin = seed_actor_context(&pool, "revoking_admin").await;
@@ -261,7 +253,7 @@ async fn a_revoke_tells_both_parties_of_each_offer_it_ends() {
 /// An account removal run as `actor` (the removed account's own context on a
 /// self-delete) over `removed`, which made one offer and received one.
 async fn assert_removal_tells_each_other_party(method: &str, self_remove: bool) {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let admin = seed_actor_context(&pool, "admin").await;
     let admin_grant = seed_role_grant_direct(&pool, admin.actor.id, ROLE_ADMIN, None).await;
@@ -314,27 +306,23 @@ async fn assert_removal_tells_each_other_party(method: &str, self_remove: bool) 
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn an_admin_delete_tells_each_offers_other_party() {
     assert_removal_tells_each_other_party("account_delete", false).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_self_delete_tells_each_offers_other_party() {
     assert_removal_tells_each_other_party("account_delete", true).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_purge_tells_each_offers_other_party() {
     assert_removal_tells_each_other_party("account_purge", false).await;
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn a_self_service_disable_tells_both_parties_of_each_offer_it_ends() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let caller = seed_actor_context(&pool, "caller").await;
     let grant = seed_role_grant_direct(&pool, caller.actor.id, "teacher", None).await;

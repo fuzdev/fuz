@@ -1,17 +1,5 @@
 //! Integration tests for the `invite_create` / `invite_list` /
-//! `invite_delete` admin RPC actions against a real `PostgreSQL`.
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test invite_admin -- --ignored --test-threads=1
-//! ```
-//!
-//! `--test-threads=1` is required because every test drops + recreates
-//! the shared schema (same shape as `tests/signup.rs`); parallel runs
-//! race on the `schema_version` table.
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
+//! `invite_delete` admin RPC actions against a live database.
 
 use fuz_auth::admin_action_specs::{
     ERROR_INVITE_ACCOUNT_EXISTS_EMAIL, ERROR_INVITE_ACCOUNT_EXISTS_USERNAME,
@@ -21,12 +9,11 @@ use fuz_http::JsonrpcErrorCode;
 use serde_json::{Value, json};
 
 mod common;
-use common::{build_audit, closer, ctx, fresh_db_pool, seed_account, seed_admin};
+use common::{build_audit, closer, ctx, fresh_db, seed_account, seed_admin};
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_create_success() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -48,9 +35,8 @@ async fn invite_create_success() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_create_requires_email_or_username() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -64,9 +50,8 @@ async fn invite_create_requires_email_or_username() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_create_rejects_username_collision() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -93,9 +78,8 @@ async fn invite_create_rejects_username_collision() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_create_rejects_email_collision() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -122,9 +106,8 @@ async fn invite_create_rejects_email_collision() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_create_rejects_duplicate_unclaimed_invite() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -159,9 +142,8 @@ async fn invite_create_rejects_duplicate_unclaimed_invite() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_list_returns_rows_with_usernames() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -205,9 +187,8 @@ async fn invite_list_returns_rows_with_usernames() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_delete_removes_unclaimed() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -241,9 +222,8 @@ async fn invite_delete_removes_unclaimed() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_delete_rejects_missing_invite() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -269,9 +249,8 @@ async fn invite_delete_rejects_missing_invite() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn invite_delete_rejects_claimed_invite() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let auth = seed_admin(&pool).await;
     let audit = build_audit(pool.clone());
     let closer = closer();
@@ -313,12 +292,11 @@ async fn invite_delete_rejects_claimed_invite() {
 /// unclaimed invite for one username as `Duplicate`. Twin of `fuz_app`'s
 /// `invite_queries.db.test.ts` `issuer` and unique-index cases.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
 async fn query_create_invite_refuses_an_inactive_issuer_and_a_duplicate() {
     use fuz_auth::actor_queries::query_actor_soft_delete;
     use fuz_auth::{InviteCreateError, query_create_invite};
 
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let client = pool.get().await.expect("pool.get");
     let invites = async || -> i64 {
         client

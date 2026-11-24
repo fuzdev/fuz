@@ -1,4 +1,4 @@
-//! Integration tests for `fuz_auth::auth_cleanup` against a real `PostgreSQL`
+//! Integration tests for `fuz_auth::auth_cleanup` against a live database
 //! — the offer-expiry sweep's audit-once claim and the session sweep.
 //!
 //! The session sweep closes what it sweeps: a pass closes the connections of
@@ -26,14 +26,6 @@
 //! ends it — twin of `src/test/auth/cleanup.schedule.test.ts`. The loop's own
 //! timing rules are `fuz_sys::periodic`'s tests (twin:
 //! `src/test/periodic.test.ts`).
-//!
-//! Gated behind `#[ignore]` — run with:
-//! ```text
-//! createdb fuz_auth_test
-//! cargo test -p fuz_auth --test auth_cleanup -- --ignored --test-threads=1
-//! ```
-//!
-//! Override the DB URL with `FUZ_AUTH_TEST_URL=postgres://...`.
 
 #![expect(
     clippy::unwrap_used,
@@ -56,7 +48,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod common;
-use common::{fresh_db_pool, seed_account_actor, seed_extra_actor, seed_role_grant_direct};
+use common::{
+    fresh_db, fresh_postgres_db, seed_account_actor, seed_extra_actor, seed_role_grant_direct,
+};
 
 const HOUR: Duration = Duration::from_hours(1);
 
@@ -266,9 +260,8 @@ async fn backdate_expiry(pool: &Pool, offer_id: Uuid) {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn sweep_audits_each_expired_offer_and_stamps_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     let expired_1 = offer(
         &pool,
@@ -345,9 +338,8 @@ async fn sweep_audits_each_expired_offer_and_stamps_it() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn a_second_pass_audits_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     offer(
         &pool,
@@ -382,9 +374,8 @@ async fn a_second_pass_audits_nothing() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn no_expired_offers_is_a_no_op() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     offer(
         &pool,
@@ -407,9 +398,8 @@ async fn no_expired_offers_is_a_no_op() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn terminal_offers_past_their_expiry_are_never_stamped() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     let mut ids = Vec::new();
     for role in ["teacher", "moderator", "admin", "editor"] {
@@ -470,9 +460,8 @@ async fn terminal_offers_past_their_expiry_are_never_stamped() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn an_actor_targeted_offer_audits_its_target_actor() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     // a second actor on the recipient account, so the target is not the
     // account's only actor
@@ -515,9 +504,8 @@ async fn an_actor_targeted_offer_audits_its_target_actor() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn run_auth_cleanup_deletes_only_expired_sessions_and_sweeps_offers() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(
         &pool,
@@ -575,9 +563,8 @@ async fn run_auth_cleanup_deletes_only_expired_sessions_and_sweeps_offers() {
 /// every connection its other sessions opened. Expired sessions on two
 /// accounts go in the one pass.
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn the_session_sweep_closes_exactly_the_sessions_it_deletes() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(
         &pool,
@@ -612,9 +599,8 @@ async fn the_session_sweep_closes_exactly_the_sessions_it_deletes() {
 /// (`RETURNING`), so after a pass that committed, a session is closed for by
 /// that pass and by no later one.
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn a_second_session_sweep_closes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(
         &pool,
@@ -639,9 +625,8 @@ async fn a_second_session_sweep_closes_nothing() {
 
 /// A pass with nothing expired deletes nothing and closes nothing.
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn no_expired_sessions_closes_nothing() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(&pool, &[("sweep-live", a.recipient_account_id, false)]).await;
 
@@ -662,9 +647,9 @@ async fn no_expired_sessions_closes_nothing() {
 /// serves a commit whose answer never arrives (the row gone, the ids already
 /// read), which no test here can stage without a seam in the query path.
 #[tokio::test]
-#[ignore = "needs Postgres"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_session_sweep_whose_commit_fails_still_closes_and_the_next_pass_retries() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(
         &pool,
@@ -779,9 +764,8 @@ impl ConnectionCloser for CommitProbingCloser {
 /// — without resting on the re-read's clock. The probe reads on its own
 /// pooled connection, so it sees the row unless the delete is durable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs Postgres"]
 async fn the_session_sweep_closes_only_after_the_delete_commits() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(
         &pool,
@@ -817,9 +801,8 @@ async fn the_session_sweep_closes_only_after_the_delete_commits() {
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn a_re_offer_clears_the_stamp_so_the_refreshed_expiry_is_audited_again() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     let (options, _) = options_recording(&pool);
 
@@ -875,9 +858,9 @@ async fn a_re_offer_clears_the_stamp_so_the_refreshed_expiry_is_audited_again() 
 }
 
 #[tokio::test]
-#[ignore = "needs Postgres"]
+#[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_failed_audit_insert_rolls_the_stamps_back() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let a = seed_accounts(&pool).await;
     offer(
         &pool,
@@ -932,9 +915,9 @@ async fn a_failed_audit_insert_rolls_the_stamps_back() {
 /// transaction has claimed (stamped, uncommitted) blocks on its row lock, and
 /// once that commits, the re-checked `expire_audited_at IS NULL` skips it.
 #[tokio::test]
-#[ignore = "needs Postgres"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_pass_waits_on_a_claimed_row_then_skips_it() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let a = seed_accounts(&pool).await;
     let held = offer(
         &pool,
@@ -1005,9 +988,8 @@ async fn a_pass_waits_on_a_claimed_row_then_skips_it() {
 /// connection sees its own audit row and the offer's stamp. Drained before
 /// the commit, it would see neither (both still uncommitted).
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn listeners_fire_only_after_the_commit() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     let expired = offer(
         &pool,
@@ -1090,9 +1072,8 @@ fn event_offer_id(event: &AuditLogEvent) -> String {
 /// picks up what expired since, and cancelling the token ends the task.
 /// Driven by the audit fan-out, so nothing here sleeps.
 #[tokio::test]
-#[ignore = "needs Postgres"]
 async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelled() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let a = seed_accounts(&pool).await;
     seed_sessions(
         &pool,
@@ -1190,9 +1171,9 @@ async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelle
 /// holds the highest and deadlocks. Twin of the TS
 /// `auth/session_sweep.order.db.test.ts`.
 #[tokio::test]
-#[ignore = "requires PostgreSQL with fuz_auth_test database"]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn the_session_sweep_takes_its_rows_in_id_order() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let (account_id, _) = seed_account_actor(&pool, "sweep_order").await;
     let low = "0".repeat(64);
     let high = "f".repeat(64);
