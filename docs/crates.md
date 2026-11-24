@@ -691,21 +691,17 @@ The rules a change must keep:
   sweep), and writes only rows it holds.
 - **A scope lock comes before every row.**
   `query_role_grant_revoke_for_scope` takes the scope's advisory lock
-  exclusive as its first statement (`scope_advisory_lock_key`:
-  `SCOPE_ADVISORY_LOCK_CLASS`, `fuzs`, then the scope UUID's four 32-bit
-  words folded by XOR — the two-`int4` form, a key space apart from the
-  migration lock's `bigint` and a class apart from the purge lock's `fuz_`).
-  A scoped `role_grant_offer_create` and `role_grant_assign` take it shared
-  before the `OfferCreateAuthorize` runs, `query_role_grant_offer_create`
-  and `query_create_role_grant` take it shared first thing, and
-  `query_accept_offer` after its unlocked head read, before any row, so a
-  write whose predicate reads the scope after a teardown committed is
-  refused (`role_grant_offer_not_authorized`), and a teardown after a write
-  waits for it and then ends what it wrote. Every spine path takes it
-  before any row (a later re-take in the same transaction is free); a
-  direct caller of these queries must too, unless its transaction already
-  holds the scope lock. A consumer path
-  that reads its scope row and then brings something into the scope takes
+  (`scope_advisory_lock_key`) exclusive as its first statement. A scoped
+  `role_grant_offer_create` and `role_grant_assign` take it shared before
+  the `OfferCreateAuthorize` runs, `query_role_grant_offer_create` and
+  `query_create_role_grant` first thing, and `query_accept_offer` after its
+  unlocked head read, before any row. A write whose predicate reads the
+  scope after a teardown committed is refused
+  (`role_grant_offer_not_authorized`), and a teardown after a write waits
+  for it and then ends what it wrote. A re-take in the same transaction is
+  free; a direct caller of these queries takes the lock before any row too,
+  unless its transaction already holds it. A consumer path that reads its
+  scope row and then brings something into the scope takes
   `query_scope_lock_shared` first; a consumer teardown calls the cascade
   before it touches its scope row, or takes `query_scope_lock_exclusive`
   first.

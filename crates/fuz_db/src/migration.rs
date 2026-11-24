@@ -158,9 +158,9 @@ pub async fn run_migrations(
     // `CREATE TABLE IF NOT EXISTS` is not transactionally race-free
     // against itself in `PostgreSQL` — concurrent boots can both pass
     // the existence check and then collide on the `pg_type` catalog's
-    // `(typname, typnamespace)` unique index. Silently swallow the
-    // duplicate (23505) and unique-violation (42P07 / 42710) outcomes;
-    // any other error propagates.
+    // `(typname, typnamespace)` unique index. Tolerate the unique
+    // violation (23505) and the duplicate table or object (42P07 /
+    // 42710), logged at debug; any other error propagates.
     if let Err(err) = client.batch_execute(SCHEMA_VERSION_DDL).await {
         let code = err.code().map(tokio_postgres::error::SqlState::code);
         match code {
