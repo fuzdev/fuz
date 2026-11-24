@@ -1,7 +1,9 @@
 //! fuz distribution domain: content-addressed artifacts + tool installs.
 //!
 //! The crate root is the artifact model for fuz self-distribution:
-//! - Input-derived hashing (git commit + diff + rustc + target + rustflags)
+//! - Two hashes: the content hash of the output binaries is the identity; the
+//!   input hash (git commit + diff + rustc + target + rustflags) is the cache
+//!   lookup
 //! - Artifact storage (`~/.fuz/artifacts/v1-<hash>/`)
 //! - Metadata management (meta.json)
 //! - Symlink switching (`current` → artifact)
@@ -10,7 +12,6 @@
 //!   to a release target ([`platform`])
 //! - Store-entry policy: a slot that must hold a real directory never is read
 //!   through a link (`store`'s `reclaim_store_entry` / `inspect_store_entry`)
-//!
 //! - Release builds through cargo, each binary's path taken from cargo's own
 //!   JSON messages ([`cargo_build_release`])
 //!

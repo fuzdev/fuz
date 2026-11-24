@@ -1,18 +1,18 @@
 //! `fuz_fact` — the content-addressed byte store for the fuz spine.
 //!
 //! The storage half of the fact layer: the `fuz_facts` migration namespace
-//! (`fact` / `fact_ref` / `memo` / `fact_holder`), the [`FactStore`] trait + the PG-backed
-//! [`PgFactStore`], the mechanical `fact_queries`, and the `<shard>/<rest>`
-//! disk CAS. Twin of the canonical TS `db/fact_store.ts` + `db/fact_queries.ts`
-//! (bounded-memory [`PgFactStore::put_stream`] included), plus a streaming
-//! read, [`FactStore::open`], the TS store doesn't have.
+//! (`fact` / `fact_ref` / `memo` / `fact_holder`), the [`FactStore`] trait +
+//! the PG-backed [`PgFactStore`], the mechanical `fact_queries`, and the
+//! `<shard>/<rest>` disk CAS. Twin of the canonical TS `db/fact_store.ts` +
+//! `db/fact_queries.ts` (bounded-memory [`PgFactStore::put_stream`] included),
+//! plus a streaming read, [`FactStore::open`], the TS store doesn't have.
 //!
 //! ## Layering — a pure content-addressed primitive
 //!
 //! `fuz_fact` is **un-authz'd storage with zero HTTP, zero cell knowledge**
-//! (a fact store is not an access-control system). It depends
-//! only on `fuz_db` / `fuz_crypto` / `fuz_sys` / serde — it **must not** depend
-//! on `{axum, fuz_http, fuz_cell, fuz_auth, fuz_actions}`, so it *cannot* build
+//! (a fact store is not an access-control system). Its only workspace-member
+//! normal deps are `fuz_db` / `fuz_crypto` / `fuz_sys` — it **must not** depend on
+//! `{axum, fuz_http, fuz_cell, fuz_auth, fuz_actions}`, so it *cannot* build
 //! an HTTP response: bytes reach a client only through `fuz_fact_serving`, the
 //! sole authz'd reader-facade. That barrier is a gated fact — the per-crate
 //! layering rule in `fuz_audit`, enforced by `cargo xtask check-release`. (The

@@ -180,12 +180,11 @@ isn't refused.
 ## Workloads
 
 A workload lives while clients want it. A subscription takes a reference on a
-workload that other clients may share; when
-the last subscriber leaves, the workload idles for its grace period
-(`OBSERVER_IDLE_GRACE`, `WATCHER_IDLE_GRACE` in `fuzd_server::workload`) so a
-quick resubscribe reuses it, then stops. A shutdown stops every workload at
-once. `fuz workload observe <domain>` prints one snapshot, or streams with
-`--follow`.
+workload that other clients may share; when the last subscriber leaves, the
+workload idles for its grace period (`OBSERVER_IDLE_GRACE`, `WATCHER_IDLE_GRACE`
+in `fuzd_server::workload`) so a quick resubscribe reuses it, then stops. A
+shutdown stops every workload at once. `fuz workload observe <domain>` prints
+one snapshot, or streams with `--follow`.
 
 ## Status for scripts
 

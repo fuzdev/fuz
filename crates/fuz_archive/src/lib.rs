@@ -35,9 +35,9 @@
 //!
 //! The total alone would still let one extraction's metadata grow as large as
 //! the whole budget, and `tar` holds an extension body in memory, so the same
-//! reader also enforces a far tighter **header window**. Between yields, `tar`'s
-//! entry iterator reads the unread rest of the previous entry's body and its
-//! padding, then every header block up to the next real entry: the PAX
+//! reader also enforces a far tighter **header window**. Between yields,
+//! `tar`'s entry iterator reads the unread rest of the previous entry's body
+//! and its padding, then every header block up to the next real entry: the PAX
 //! extension (`x`), GNU long-name (`L`) and long-link (`K`) bodies it buffers,
 //! and any GNU sparse extension blocks. Before each step of that iterator,
 //! [`safe_extract`] arms the reader with a limit: the stream offset where the
@@ -45,8 +45,9 @@
 //! size, so a skipped or directory body drains freely) plus
 //! [`ExtractLimits::max_header_size`]. Reads are clamped to it, and a read at
 //! it fails with [`ArchiveError::HeaderTooLarge`], so `tar` stops at the cap —
-//! before a hostile body is buffered. The window is disarmed while `safe_extract` reads
-//! a file's data, which only the per-file and total ceilings bound.
+//! before a hostile body is buffered. The window is disarmed while
+//! `safe_extract` reads a file's data, which only the per-file and total
+//! ceilings bound.
 //!
 //! A PAX global header (`g`) is not consumed by the iterator — `tar` yields it
 //! as an entry, which the entry-type guard refuses.

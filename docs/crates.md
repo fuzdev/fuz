@@ -43,10 +43,11 @@ the off-by-default `sidecar` feature.
 
 Dev + publisher automation, absent from the `fuz`/`fuzd` graph and
 `dev_only`-exempt from `check-release`: `install`, `clean`, `check-release`
-(adding this workspace's forbids: `fuz_sign` in production binaries, `fuz`/`fuzd`
-reaching `fuzi`/`fuzi_core`), `key …`, `publish {self,tool}` (the bootstrap
-signer; `--log-repo` records the release), `release-log {backfill,revoke}`, and
-`prune` — the last two dry-run unless `--wetrun`.
+(adding this workspace's forbids: `fuz_sign` in production binaries,
+`fuz`/`fuzd` reaching `fuzi`/`fuzi_core`), `key …`, `publish {self,tool}` (the
+bootstrap signer; `--log-repo` records the release),
+`release-log {backfill,revoke}`, and `prune` — the last two dry-run unless
+`--wetrun`.
 
 ### `fuzi`
 
@@ -67,13 +68,12 @@ at publish and at manifest read). A domain-free spine server — the auth /
 account / admin / audit / role-grant-offer surface, the cell verbs, the room
 verbs (an exclusive registry, `TestRoomAuthorize` deciding by the room id's
 prefix, cleared by `_testing_reset`), and cell-gated fact serving — its own
-`run_app` over the `fuz_actions::server`
-toolkit, with `fuz_testing`'s hasher, every
-`_testing_*` spec, and an env-gated startup DB reset. Default port 1177; its
-command line is the harness's `--port <port>` alone. Driven by fuz_app's
-cross-backend suites (./testing.md § Cross-backend suite); like its TS twin it
-schedules no auth cleanup (`AuthCleanupSchedule::Off`) and starts with its
-limiters off.
+`run_app` over the `fuz_actions::server` toolkit, with `fuz_testing`'s hasher,
+every `_testing_*` spec, and an env-gated startup DB reset. Default port 1177;
+its command line is the harness's `--port <port>`, no arguments, or `--help` /
+`-h`. Driven by fuz_app's cross-backend suites (./testing.md § Cross-backend
+suite); like its TS twin it schedules no auth cleanup
+(`AuthCleanupSchedule::Off`) and starts with its limiters off.
 
 ### `testing_fake_fgro`
 
@@ -91,20 +91,26 @@ can depend on it without inheriting `~/.fuz` (`fuz_sys` ⊥ `{axum, fuz_http}`
 upkeep task runs on), `capture`, `argh` (`cli::parse_env_args`), and `tls`
 (outbound rustls clients only, keeping `aws-lc-sys` out).
 
-The one home for values crates must agree on: the size ceilings in `limits`;
-the escaping of text the program didn't write (`text::escape_untrusted`,
-`quoted`, `truncate`, `escape_message`; § Error rendering); `home_dir`, the one
-`$HOME` lookup; and the no-follow vocabulary the stores classify entries with
-(`fs::probe_real_dir`, `secure_file::open_nofollow_regular`, …). `secure_file::burn_secure_file` is the burn
-of a one-shot secret: unlink the entry, never following or recursing, a missing one counted as burned
-(`BurnOutcome`), then fsync the parent so the unlink survives a crash. `secure_file::load_secure_file_with` is the secure read under `SecureReadOptions`: `require_single_link` refuses a file with more than one hard link (`SecureFileError::MultipleLinks`), which a burn would leave readable under its other name; `load_secure_file` reads with the defaults and refuses no link count. `fs::sweep_stale_staging_dirs` is the
-age-gated sweep of crash-leaked staging dirs.
+The one home for values crates must agree on: the size ceilings in `limits`; the
+escaping of text the program didn't write (`text::escape_untrusted`, `quoted`,
+`truncate`, `escape_message`; § Error rendering); `home_dir`, the one `$HOME`
+lookup; and the no-follow vocabulary the stores classify entries with
+(`fs::probe_real_dir`, `secure_file::open_nofollow_regular`, …).
+`secure_file::burn_secure_file` is the burn of a one-shot secret: unlink the
+entry, never following or recursing, a missing one counted as burned
+(`BurnOutcome`), then fsync the parent so the unlink survives a crash.
+`secure_file::load_secure_file_with` is the secure read under
+`SecureReadOptions`: `require_single_link` refuses a file with more than one
+hard link (`SecureFileError::MultipleLinks`), which a burn would leave readable
+under its other name; `load_secure_file` reads with the defaults and refuses no
+link count. `fs::sweep_stale_staging_dirs` is the age-gated sweep of
+crash-leaked staging dirs.
 
 ### `fuz_home`
 
 The `~/.fuz` layer over `fuz_sys` (`fuz_home` ⊥ `{axum, fuz_db, fuz_http}`
-**(audited)**): directory and socket paths, the CLI-owned `daemon.json`, logs and
-rotation, `verify_pid_is_fuzd`, and the lifecycle timing constants.
+**(audited)**): directory and socket paths, the CLI-owned `daemon.json`, logs
+and rotation, `verify_pid_is_fuzd`, and the lifecycle timing constants.
 ./fuz_home.md.
 
 ### `fuz_crypto`
@@ -166,32 +172,15 @@ copy drifts:
   the lint for itself).
 
 `cargo metadata` has no lint tables, so the manifests are read by a
-line-based reader (comments and strings skipped quote-aware, multi-line
-strings included). It understands a lint as `"level"`, as an inline
-`{ level, priority, check-cfg }` table on one line (its `check-cfg` array may
-span lines), or as a `[lints.<tool>.<lint>]` sub-table of those keys; values
-compare by level and priority only, so `check-cfg` lists are read past. It
-fails the audit as a tooling error, never a pass, on any other shape under a
-lint header:
-
-- an inline table spanning lines outside its `check-cfg` array;
-- a dotted key (`rust.unsafe_code = …` under `[lints]`, `a.b = …`), or a lint
-  table set outside a `[lints.<tool>]` header (`lints.rust.x = …`,
-  `lints = { … }`);
-- any key in a lint's table but `level`, `priority`, and `check-cfg`;
-- a value that is neither a level string nor such a table (an array, a
-  multi-line string), or a level Cargo doesn't accept;
-- a table nested below a lint's (`[lints.rust.x.y]`), a repeated table or
-  lint, `workspace = ` anything but `true`, or both forms in one manifest;
-- a multi-line string still open at the end of the file, or an unclosed
-  string anywhere in a manifest (every member manifest is scanned whole for
-  its section headers).
+line-based reader that fails the audit as a tooling error, never a pass, on a
+lint-table shape it doesn't understand; the shapes it reads and refuses are
+`fuz_audit::lint_tables`'s module doc and `read_lints`'s.
 
 The root manifest is read only once a member re-declares, so a workspace where
 every member inherits never depends on the reader understanding its
-`[workspace.lints]`. A workspace with no
-`[workspace.lints]` doesn't check its re-declaring members (the output names
-them), and a member with no `[lints]` at all is named in a note.
+`[workspace.lints]`. A workspace with no `[workspace.lints]` doesn't check its
+re-declaring members (the output names them), and a member with no `[lints]`
+at all is named in a note.
 
 Exit codes: `0` clean, `65` a policy violation, `69` `cargo metadata`
 unavailable, `70` its output unusable, a manifest or crate root it names
@@ -343,15 +332,16 @@ sidecar / workload DTOs; `PROTOCOL_VERSION`'s doc is the version history, and
 any shape change bumps it. `fuz_client` is its async client (`check_health`,
 `daemon_status`, `shutdown`, the subscribe streams); a subscription ended
 before its first snapshot is an error, never an empty success. Outside this
-workspace, one app server takes both (and `fuzd_server` as a dev-dep for
-an isolated-fuzd test), so a wire or `fuzd_server` API change reaches it.
+workspace, one app server takes both (and `fuzd_server` + `fuz_sidecar` as
+dev-deps for an isolated-fuzd test), so a wire, `fuzd_server`, or
+`fuz_sidecar` API change reaches it.
 
 ### `fuz_sidecar`, `fuz_deno`, `fuz_python`
 
 The dormant sidecar workload: the controller framework and the runtime
 definitions (`fuz_deno`, `fuz_python`) behind fuzd's `sidecar` feature. No
-runtime consumer.
-./sidecars.md.
+runtime consumer; outside, one app server's isolated-fuzd test takes
+`fuz_sidecar` as a dev-dep (§ `fuz_wire` / `fuz_client`). ./sidecars.md.
 
 ## Libraries for other workspaces
 
@@ -377,7 +367,7 @@ the integration suites; the real-fgro suites are `#[ignore]` and take
 
 ### `fuz_pty`
 
-A safe PTY API over libc. **Linux-only** (kernel ≥ 4.13; `execvpe` is a GNU
+A PTY API over libc. **Linux-only** (kernel ≥ 4.13; `execvpe` is a GNU
 extension). The one crate allowed `unsafe`: `unsafe_code = "deny"` in its
 re-declared lint tables (otherwise the workspace's, plus
 `clippy::undocumented_unsafe_blocks`), each item that needs it lifting the lint
@@ -393,8 +383,8 @@ consumer `zzz_server`.
 
 The Rust twin of fuz_app's `db/`, `auth/`, `http/`, `realtime/`, `actions/`,
 `server/`, cell and fact layers. Wire literals, close codes, DDL, and error
-bodies match the TS twin; read it before settling a shape (../CLAUDE.md § Values and
-policy).
+bodies match the TS twin; read it before settling a shape (../CLAUDE.md § Values
+and policy).
 
 ### `fuz_db`
 
@@ -462,14 +452,8 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   `GET`. Both spines are held to `request_target_conformance.json`, a
   byte-identical copy of fuz_app's. A consumer's own handler reads through
   these too; axum's `Query` and `Path` decode leniently. In this workspace
-  clippy holds it: the workspace `clippy.toml` disallows axum's `Path`,
-  `RawPathParams`, `Query` and `Form`, `form_urlencoded::parse` and
-  `Url::query_pairs` (`RouteParams` carries the one production `#[expect]`), and
-  the request-reads census (`fuz_testing::request_reads_census`, run by
-  `fuz_testing/tests/request_reads_census.rs`, which holds the positive
-  controls) pins those entries in every `clippy.toml` and lists every
-  in-source suppression. A consumer workspace that adopts it runs the same
-  census from its own test crate, with its own controls and suppression list.
+  clippy and the request-reads census hold it (../CLAUDE.md § Build
+  configuration; § `fuz_testing` below).
 - A request panic answers a generic `500` only under a `panic = "unwind"`
   release profile in the server's workspace.
 - **`serve_with_shutdown`** — its own hyper accept loop, with write-progress
@@ -482,7 +466,8 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   bound. A spine server composes over `AppBackend::stack_options`, which sets
   the backend's auth cleanup (`fuz_auth::AuthCleanup`, unless its
   `AuthCleanupSchedule` is `Off`), closer and `BackgroundWrites`, so a router
-  is always served with the duties it was composed with. The hole the types
+  is always served with the duties it was composed with, and the stack's
+  origin check and the auth gate's read one allowlist. The hole the types
   leave: a live router composed over a bare `StackOptions::without_backend`
   carries none and is served with no cleanup, no close and no drain.
 - **The auth cleanup's schedule has no default.** `SpineBackendOptions` (and
@@ -492,8 +477,6 @@ decoding that doesn't fingerprint the backend, and `/ready`.
 - **A shutdown that gives up fails the process.** `serve_until_shutdown`
   returns `StartupError::ShutdownGivenUp` with the `ServeShutdown` counts
   (exit `1`, and no `shutdown complete` line) when the drain bound ran out.
-- A spine server builds its options with `AppBackend::stack_options`, so the
-  stack's origin check and the auth gate's read one allowlist.
 - **The stack clears an invalid session cookie.** `StackOptions::cookie_clear`
   is an opaque `CookieClearHook` — request path and headers in, an optional
   clearing `Set-Cookie` out — since `fuz_http` can't name a keyring;
@@ -502,7 +485,8 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   origin gate carries no clear. It leaves a `101` alone and puts the clear
   ahead of any `Set-Cookie` the handler wrote, so a login carrying a stale
   cookie keeps its new session. A group carved out of the origin check has no
-  clear layer, and neither does a stack built from a bare `StackOptions::without_backend`.
+  clear layer, and neither does a stack built from a bare
+  `StackOptions::without_backend`.
 - **Action params** — `params` holds:
   - the hand-decode helpers a handler reads `params` with (field parsers,
     `reject_unknown_keys` / `reject_null_keys`, `serialize_result`);
@@ -524,31 +508,29 @@ decoding that doesn't fingerprint the backend, and `/ready`.
   `db_unavailable_with_source`, and their flat-REST twins
   `internal_error_response_with_source` / `db_unavailable_response_with_source`,
   log at `error` the error's `format_error_chain` (plus a `sqlstate` field,
-  `fuz_db::sqlstate_in_chain`, when a driver error carries one) and answer
-  the opaque body. A
-  `tokio_postgres::Error` or `fuz_db::DbError` prints only its kind, so a
-  direct log of one uses `error = ?e`.
+  `fuz_db::sqlstate_in_chain`, when a driver error carries one) and answer the
+  opaque body. A `tokio_postgres::Error` or `fuz_db::DbError` prints only its
+  kind, so a direct log of one uses `error = ?e`.
 - **`BaseServerEnv`** — the env every spine server reads the same way, twin of
-  fuz_app's `BaseServerEnv`; the vars and their rules are `fuz_http::server_env`'s
-  rustdoc.
+  fuz_app's `BaseServerEnv`; the vars and their rules are
+  `fuz_http::server_env`'s rustdoc.
 - **Wildcard origins are opt-in** — the boot, the boot-only branch included,
   refuses a wildcard allowlist entry (`:*`, a `*` label) before any database
-  work unless
-  `FUZ_ALLOW_ORIGIN_WILDCARDS=true`, and an admitted one warns on every boot;
-  `fuz_http::origin_wildcard` owns the rules.
+  work unless `FUZ_ALLOW_ORIGIN_WILDCARDS=true`, and an admitted one warns on
+  every boot; `fuz_http::origin_wildcard` owns the rules.
 
 fuz_app's `RouteSpec` / `AppSurface` have no Rust twin (`axum::Router` covers
 both).
 
 ### `fuz_auth`
 
-The auth surface (twin of fuz_app's `auth/`): ingress validation (the TS
-schema grammar twins for usernames, emails, token ids, role names, and fact hashes),
-`AuthGate` (origin check, then credential resolution: daemon token → cookie
-→ bearer), token scopes, global roles, capped sessions and tokens, Argon2id
+The auth surface (twin of fuz_app's `auth/`): ingress validation (the TS schema
+grammar twins for usernames, emails, token ids, role names, and fact hashes),
+`AuthGate` (origin check, then credential resolution: daemon token → cookie →
+bearer), token scopes, global roles, capped sessions and tokens, Argon2id
 passwords, rate limiting, the REST routes (`/status`, `/login`, `/logout`,
-`/password`, `/bootstrap`, `/signup`), auth cleanup, and the audit registry.
-The rules a change must keep:
+`/password`, `/bootstrap`, `/signup`), auth cleanup, and the audit registry. The
+rules a change must keep:
 
 - The non-cookie credential legs (daemon token, bearer) discard their
   credential on a browser-context request (any `Origin` or `Referer` line,
@@ -586,33 +568,31 @@ The rules a change must keep:
   builtin-role check read the **global** grant. REST `?acting=` goes through
   `route_helpers::require_acting_actor`.
 - On the REST routes a failed pool checkout answers `fuz_http`'s flat 503
-  `service_unavailable` and any other internal failure its flat 500 — a
-  refused success audit row included, since it is written in the request's
-  transaction. A failure row is spawned on the pool, never holding the answer,
-  and so is the bearer leg's `api_token` use (`spawn_api_token_touch`) and
-  the bootstrap's burn-and-commit — all on the one tracker of detached
-  writes, `fuz_http::BackgroundWrites`, that `AppBackend` owns, its audit emitter is
-  built over, and its `AuthGate` holds. An action's post-commit effects run
-  on it too (`PostCommitEffects`, built over the emitter's tracker), so a
-  socket closed at shutdown, dropping its in-flight dispatches, leaves their
-  committed effects counted and awaited. The spine's shutdown
-  (`serve_until_shutdown`) and `_testing_drain_effects` wait for those still
-  running. The shutdown waits for them after every request it was serving has
-  answered and the upkeep has stopped, so it sees the writes those spawned,
-  all within one drain timeout from when the serve sees the signal, logging
-  the requests, connections, closes, upkeep tasks and writes it gives up on.
-  An in-flight WS dispatch still before its first commit is dropped with its
-  socket at shutdown and rolls back; the TS twin waits for an in-flight WS
-  handler and refuses its reply. One whose commit has started finishes on the
-  tracker, its later work included — as does any request or dispatch dropped
-  past its first commit (below).
+  `service_unavailable` and any other internal failure its flat 500 — a refused
+  success audit row included, since it is written in the request's transaction.
+  A failure row is spawned on the pool, never holding the answer, and so is the
+  bearer leg's `api_token` use (`spawn_api_token_touch`) and the bootstrap's
+  burn-and-commit — all on the one tracker of detached writes,
+  `fuz_http::BackgroundWrites`, that `AppBackend` owns, its audit emitter is
+  built over, and its `AuthGate` holds. An action's post-commit effects run on
+  it too (`PostCommitEffects`, built over the emitter's tracker), so a socket
+  closed at shutdown, dropping its in-flight dispatches, leaves their committed
+  effects counted and awaited. The spine's shutdown (`serve_until_shutdown`) and
+  `_testing_drain_effects` wait for those still running. The shutdown waits for
+  them after every request it was serving has answered and the upkeep has
+  stopped, so it sees the writes those spawned, all within one drain timeout
+  from when the serve sees the signal, logging the requests, connections,
+  closes, upkeep tasks and writes it gives up on. An in-flight WS dispatch still
+  before its first commit is dropped with its socket at shutdown and rolls back;
+  the TS twin waits for an in-flight WS handler and refuses its reply. One whose
+  commit has started finishes on the tracker, its later work included — as does
+  any request or dispatch dropped past its first commit (below).
   `testing_spine_stub` also settles them before each HTTP answer
   (`await_background_writes_layer`), as the TS test binary does with
-  `await_pending_effects`.
-  A failed credential read ends the walk with
-  `CredentialReadFault`'s answer — the 503 for a failed checkout, the
-  plain-text 500 (the TS twin's Hono default) for a failed query — never a
-  lower credential or anonymous.
+  `await_pending_effects`. A failed credential read ends the walk with
+  `CredentialReadFault`'s answer — the 503 for a failed checkout, the plain-text
+  500 (the TS twin's Hono default) for a failed query — never a lower credential
+  or anonymous.
 - `create_capped_session` is the only production session minter
   (`fuz_testing`'s fixtures insert uncapped rows directly).
 - **A credential is minted under the account's row lock.** Login and
@@ -756,7 +736,9 @@ Bootstrap, the same on both spines:
   with the attempt charged and audited and the window left open; a commit
   that fails after the burn logs that the token is gone. No session or cookie
   exists for a bootstrap that didn't commit.
-- **The write runs on a task of its own**, which the handler awaits, so a client that disconnects can't split the burn from the commit (the process exiting between the two still can, as on the twin).
+- **The write runs on a task of its own**, which the handler awaits, so a client
+  that disconnects can't split the burn from the commit (the process exiting
+  between the two still can, as on the twin).
 - **A per-IP limiter** (`BootstrapOptions::bootstrap_ip_rate_limiter`, on
   under `Enforced`, off under `DisabledForTesting`): a refusal is charged, a
   success and the lock race loser are not, and an exhausted budget answers
@@ -787,20 +769,19 @@ callback `fuz_actions` supplies.
 - `RealtimeCloser` fans each close to both registries; it's the closer every
   consumer mounting the audit stream binds, and the closer it passes
   `serve_with_shutdown`.
-- `RoomRegistry` (`room_registry`) — rooms over one `ConnectionRegistry`:
-  seats with random member ids (a connection id never reaches the wire),
-  relayed payloads, member state, and watches, all in memory; seats are
-  keyed by connection and actor, so under `acting` each actor's seat
-  operations touch only its own. What a change
-  must keep: one lock over rooms and indexes, every event queued under it
-  with a per-room `seq` (lock order: rooms, then connections, which never
-  calls back); the two-phase join (reserve before the consumer's
-  authorizer, admit after), so an eviction reaches a join in flight;
-  eviction covering seats, watches, and joins in flight; one disconnect
-  waiter per connection on its socket token, which the registry reads
-  crate-privately; on an exclusive registry, one seat per actor with the
-  newest admitted winning, and the rejoin tombstone that keeps a dead seat
-  from taking back its actor's newer one. The verbs are `fuz_actions`'.
+- `RoomRegistry` (`room_registry`) — rooms over one `ConnectionRegistry`: seats
+  with random member ids (a connection id never reaches the wire), relayed
+  payloads, member state, and watches, all in memory; seats are keyed by
+  connection and actor, so under `acting` each actor's seat operations touch
+  only its own. What a change must keep: one lock over rooms and indexes, every
+  event queued under it with a per-room `seq` (lock order: rooms, then
+  connections, which never calls back); the two-phase join (reserve before the
+  consumer's authorizer, admit after), so an eviction reaches a join in flight;
+  eviction covering seats, watches, and joins in flight; one disconnect waiter
+  per connection on its socket token, which the registry reads crate-privately;
+  on an exclusive registry, one seat per actor with the newest admitted winning,
+  and the rejoin tombstone that keeps a dead seat from taking back its actor's
+  newer one. The verbs are `fuz_actions`'.
 
 ### `fuz_actions`
 
@@ -962,25 +943,24 @@ not a `fuz_auth` feature, so unification can't route it into production.
   including `TestingTableLock` for driving races deterministically, and
   `assert_expected_schema_fixture`, a server's `/ready` fixture drift guard.
 - A `testing_*` server's toolkit wiring: `testing_backend_options` (the test
-  hasher, limiters off, `startup_reset_hook`),
-  `require_daemon_token_from_env`, `testing_reset_specs` (`_testing_reset`,
-  `_testing_drain_effects` and `_testing_db_invariants`, over the runtime's
-  daemon-token state) over
+  hasher, limiters off, `startup_reset_hook`), `require_daemon_token_from_env`,
+  `testing_reset_specs` (`_testing_reset`, `_testing_drain_effects` and
+  `_testing_db_invariants`, over the runtime's daemon-token state) over
   `truncate_reset_state` — the spine's `fuz_cell::CELL_DROP_TABLES` /
   `fuz_fact::FACT_DROP_TABLES` joined with the server's own tables — and
   `inert_app_backend` for router tests without a database. Each spine table
-  const, `fuz_auth::AUTH_INTEGRATION_TRUNCATE_TABLES` (the auth tables the
-  reset deletes from) among them, is held to its chain's DDL by
+  const, `fuz_auth::AUTH_INTEGRATION_TRUNCATE_TABLES` (the auth tables the reset
+  deletes from) among them, is held to its chain's DDL by
   `migration_created_tables`.
 - The request-reads census (`request_reads_census`): the checks that hold a
   workspace's lenient-reader disallows in place — every `clippy.toml` carries
   each canonical entry, every in-source suppression is listed, no `[lints]`
   table allows them — run by the spine and the consumer workspaces that adopt
-  it, each over its own root, beside the positive controls that must compile under its own
-  clippy config.
-- A dev-dependency of the spine crates and consumer servers, and a normal
-  dependency of `testing_spine_stub` (`fuz_audit` walks runtime edges only, so
-  the dev cycles are allowed).
+  it, each over its own root, beside the positive controls that must compile
+  under its own clippy config.
+- A dev-dependency of the spine crates other than `fuz_db` and `fuz_http` and
+  of consumer servers, and a normal dependency of `testing_spine_stub`
+  (`fuz_audit` walks runtime edges only, so the dev cycles are allowed).
 
 ## npm bridge
 
@@ -1096,7 +1076,8 @@ account are active, so an actor soft-deleted mid-upgrade is refused). Any
 method but `GET` / `HEAD` on the path is the stack's 405 ahead of all of
 these; a query holding an escape that doesn't decode is 400
 `invalid_query_params` after the scope gate; a `GET` the gates admit that
-asks for no upgrade is the unrouted 404 (`route_not_found`). Then:
+asks for no upgrade is the path's unrouted 404
+(`fuz_actions::server::unmatched_route_response`). Then:
 
 1. register pending;
 2. re-read the credential and roles;
@@ -1112,7 +1093,7 @@ or token, so admission is where a revoked credential is caught.
 ### Non-RPC gate pipeline
 
 The audit stream, `fuz_db_admin`, and `fuz_fact_serving`'s bare route run one
-pipeline: params (`RouteParams`) → query (strict, `read_query_pairs`) → origin
+pipeline: origin → params (`RouteParams`) → query (strict, `read_query_pairs`)
 → credential (session-only by default) → `?acting=` through
 `require_acting_actor` → role. The audit stream reads the role from the
 **resolved actor's** grants; `fuz_db_admin` at account grain.
@@ -1130,28 +1111,28 @@ How errors reach the user:
   a whole message on one bounded line uses `escape_message`, which leaves
   existing escapes alone. `fuz_crypto` (no workspace deps) renders its
   canonical-JSON error's string as bounded ASCII.
-- **Source chains** — `fuz`, `fuzd`, `fuzf`, `xtask`, and the spine servers print the
-  chain on their `error:` line via `format_error_chain` (`xtask` and a server's `main`
-through `report_failure`, a server with `StartupError`'s hint and exit code): each
-  cause `: `-joined, skipping one the text so far already ends with, each cut
-  to a bounded length and escaped. A
-  cause that must not be printed — a URL that can carry a credential, text its
-  own message shows bounded — stays out of `source()`.
-- **Hints** — `.hint()` exists only where some binary renders it (`fuz`,
-  `fuzf`, `fuzd`, the `cargo xtask` commands, the spine servers'
-  `StartupError`). It returns `Option<&'static str>` on a leaf whose hints
-  are constants and `Option<Cow<'static, str>>` once one interpolates; the
-  first aggregator lifts a leaf's with `.map(Cow::Borrowed)`, and the print
-  site passes `e.hint().as_deref()`. `fuzi_core`'s
-  `FetchError::is_permanent` drives retry classification.
+- **Source chains** — `fuz`, `fuzd`, `fuzf`, `xtask`, and the spine servers
+  print the chain on their `error:` line via `format_error_chain` (`xtask` and a
+  server's `main` through `report_failure`, a server with `StartupError`'s hint
+  and exit code): each cause `: `-joined, skipping one the text so far already
+  ends with, each cut to a bounded length and escaped. A cause that must not be
+  printed — a URL that can carry a credential, text its own message shows
+  bounded — stays out of `source()`.
+- **Hints** — `.hint()` exists only where some binary renders it (`fuz`, `fuzf`,
+  `fuzd`, the `cargo xtask` commands, the spine servers' `StartupError`). It
+  returns `Option<&'static str>` on a leaf whose hints are constants
+  (`&'static str` where every variant has one) and `Option<Cow<'static, str>>`
+  once one interpolates; the first aggregator lifts a leaf's with
+  `.map(Cow::Borrowed)`, and the print site passes `e.hint().as_deref()`.
+  `fuzi_core`'s `FetchError::is_permanent` drives retry classification.
 - **Classification** — `is_security_violation` (`ArchiveError` →
   `TarballError` → `ReleaseError`, plus the release log and co-signature
   errors) stays complete at every wrapper level, even an uncalled one, so a
   future caller never inherits an incomplete fail-closed classification.
-  `is_unconfirmed` (`ReleaseLogError` → `ReleaseError`) forwards the release log
-  check's soft failure the same way; `fuz` maps it to exit 75.
+  `is_unconfirmed` (`ReleaseLogError` → `ReleaseError`) forwards the release
+  log check's soft failure the same way; `fuz` maps it to exit 75.
   `is_unusable_home` (`FuzHomeError` → `ArtifactError`, `ClientError`,
   `DaemonError`, `KeyFileError`, `ReleaseError`) marks a fuz home that cannot
   be used as configured; `fuz`, `fuzd`, and `xtask` map it to exit 2 on every
   path, checked before `is_security_violation` (a world-writable home is
-  both).
+  both). Each of the three stays complete at every wrapper level.

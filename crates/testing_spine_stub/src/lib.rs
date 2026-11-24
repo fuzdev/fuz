@@ -6,15 +6,14 @@
 //! carrying the protocol (`heartbeat` WS-only, `peer/ping` on both) +
 //! account + admin + role-grant-offer action families, the WS-only room
 //! verbs (over an exclusive registry, gated by [`TestRoomAuthorize`]), plus
-//! the opt-in
-//! `actor_lookup` + `actor_search` specs, audit emission with
-//! the revocation guard, and every `fuz_testing` `_testing_*` spec — plus
-//! `fuz_cell`'s full surface (CRUD + clone + grant ACL + field / item
+//! the opt-in `actor_lookup` + `actor_search` specs, audit emission with the
+//! revocation guard, and every `fuz_testing` `_testing_*` spec — plus the
+//! `fuz_cell_actions` cell verbs (CRUD + clone + grant ACL + field / item
 //! relations + per-cell audit timeline; the cross-backend domain primitive
-//! under test). It also mounts
-//! the cell-gated fact-serving routes and the public `/ready` deploy gate
-//! (column-presence schema-drift probe, off the declared surface — fed the
-//! committed `expected_schema.json` the TS spine shares, via an env path).
+//! under test). It also mounts the cell-gated fact-serving routes and the
+//! public `/ready` deploy gate (column-presence schema-drift probe, off the
+//! declared surface — fed the committed `expected_schema.json` the TS spine
+//! shares, via an env path).
 //!
 //! Unlike the spine's other cross-backend consumers it has no production
 //! sibling, so this single crate both assembles the spine ([`run_app`]) and
@@ -41,9 +40,8 @@ use fuz_actions::server::{
 use fuz_auth::actor_queries::query_active_actor_holds_any_global_role;
 use fuz_http::{BaseServerEnv, ServerEnvOptions};
 
-/// Default loopback bind address (port 1177, slots beside zzz's test
-/// binaries on 1175/1176). `HOST` overrides the host; `--port`, then
-/// `FUZ_RUST_SPINE_STUB_PORT`, then `PORT` the port.
+/// Default loopback bind address (port 1177). `HOST` overrides the host;
+/// `--port`, then `FUZ_RUST_SPINE_STUB_PORT`, then `PORT` the port.
 pub const DEFAULT_ADDR: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 1177);
 

@@ -165,8 +165,9 @@ cargo xtask key list-trusted                           # the embedded PUBLIC_KEY
 ```
 
 Releases are signed by the publish flow; there is no `key sign` / `key verify`.
-Exit codes: `0` success, `1` any error (with a `hint:` where one applies), `2`
-an unparseable command line.
+Exit codes: `0` success, `1` any other error (with a `hint:` where one
+applies), `2` an unparseable command line or a fuz home that can't be used as
+configured.
 
 ## Key Rotation
 

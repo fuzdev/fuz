@@ -1,8 +1,8 @@
 # Release Log
 
 Writing the release log: recording a release as it is published, creating a log
-from releases already in storage, revoking a release, recovering a failed
-write, and co-signing. The reader side is ./release_log_check.md; the file formats are
+from releases already in storage, revoking a release, recovering a failed write,
+and co-signing. The reader side is ./release_log_check.md; the file formats are
 ./release_format.md § Release Log Files; the publish this hooks into is
 ./release_workflow.md.
 
@@ -70,8 +70,8 @@ the upload. The checks run again when the release is recorded.
 **Ordering.** The release is recorded after its tarball and manifest are
 uploaded and confirmed present (an existence check), and before anything
 advertises them. If recording fails at any step, the push included, publish
-fails with the latest pointer and `fuz-latest-<target>` unmoved; the versioned files
-stay in storage.
+fails with the latest pointer and `fuz-latest-<target>` unmoved; the versioned
+files stay in storage.
 
 **A first head is complete.** A reader treats a release the head doesn't list as
 a failure, so a log must list every release from its first head on. A publish
@@ -209,14 +209,14 @@ What it does:
 4. Commits as `log: revoke <name> <version> seq <seq>`, pushes, and reads back:
    the row revoked, moved pointers as written, removed ones absent.
 
-**Storage is untouched.** `latest-<target>.json` and `fuz-latest-<target>` keep naming
-the revoked version. A client with the log check refuses it, and `install.sh`
-with `FUZ_RELEASE_LOG_URL` follows the moved pointer (or refuses a removed one);
-without the variable, neither sees the revocation. Publishing a fixed release
-moves both. Revoke can't see storage, so it can't tell whether the release a
-pointer moves to still has its flat binary (`cargo xtask prune` removes it):
-check the dry run's before → after lines against storage first, or publish a
-fixed release instead.
+**Storage is untouched.** `latest-<target>.json` and `fuz-latest-<target>` keep
+naming the revoked version. A client with the log check refuses it, and
+`install.sh` with `FUZ_RELEASE_LOG_URL` follows the moved pointer (or refuses a
+removed one); without the variable, neither sees the revocation. Publishing a
+fixed release moves both. Revoke can't see storage, so it can't tell whether the
+release a pointer moves to still has its flat binary (`cargo xtask prune`
+removes it): check the dry run's before → after lines against storage first, or
+publish a fixed release instead.
 
 **Rerunning is safe.** An already-revoked release signs no new head; the run
 still repairs a pointer naming it
@@ -232,10 +232,10 @@ ready for the same command again.
 - **Commit fails** (no usable signing key for git, a refusing hook) — rolled
   back to the last commit; fix the cause and rerun.
 - **Push fails** — the commit stays unpushed. Rerunning a publish or revoke
-  signs nothing, pushes it, and reads back (a publish then moves its latest pointer);
-  the push runs every time, so a remote with several push URLs gets completed.
-  A backfill can't rerun (the log now has a head): `git push` by hand, or let
-  the next `publish … --log-repo` push it.
+  signs nothing, pushes it, and reads back (a publish then moves its latest
+  pointer); the push runs every time, so a remote with several push URLs gets
+  completed. A backfill can't rerun (the log now has a head): `git push` by
+  hand, or let the next `publish … --log-repo` push it.
 - **Remote moved** — the next run reports the clone diverged:
   `git reset --hard @{upstream}` and rerun.
 - **Dirty clone** (an interrupted run, or a rollback that couldn't finish) —
@@ -251,14 +251,15 @@ ready for the same command again.
   change is unknown; rerun (a backfill then reports a log with a head; the next
   `publish … --log-repo` verifies it).
 - **Read-back found something else** after a successful push — a hook rewrote a
-  file, or the index was told to assume one unchanged; for a publish,
-  the latest pointer hasn't moved. The commit is public: remove the cause and discard
+  file, or the index was told to assume one unchanged; for a publish, the latest
+  pointer hasn't moved. The commit is public: remove the cause and discard
   uncommitted changes. If the pushed `head.json` doesn't verify (and always
   after a backfill), restore it with `git revert --no-edit HEAD` — never rewrite
   pushed history — push, and rerun.
 - **"No head.json in its work tree"** — a local unpushed commit removed it
   (`git reset --hard @{upstream}`), or it's only missing from the work tree
-  (clear any assume-unchanged / skip-worktree flag, `git checkout -- head.json`).
+  (clear any assume-unchanged / skip-worktree flag,
+  `git checkout -- head.json`).
 - **"Not a latest pointer" / "not a plain file"** (revoke) — only the revoked
   release's own pointers, reported before anything is written. Restore the file
   to a pointer line or remove it, commit, push, and rerun.
@@ -268,8 +269,8 @@ ready for the same command again.
 A **co-signer** fetches the release log head on a schedule and publishes, in a
 fork of the log it serves as one more origin, which head it saw, signed with its
 own ed25519 SSH key used for nothing else
-(`ssh-keygen -Y sign -n fuz_release_log`). What `fuz`
-checks: ./release_log_check.md § Co-signatures; the `witness` file format:
+(`ssh-keygen -Y sign -n fuz_release_log`). What `fuz` checks:
+./release_log_check.md § Co-signatures; the `witness` file format:
 ./release_format.md § Release Log Files. Its origin must:
 
 - serve `witness` and the `head.json` it names from one commit;

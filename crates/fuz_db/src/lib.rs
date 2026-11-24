@@ -18,18 +18,8 @@
 //!
 //! ## Bring-up
 //!
-//! Integration tests require a local `PostgreSQL` with a `fuz_db_test`
-//! database:
-//!
-//! ```text
-//! createdb fuz_db_test
-//! cargo test -p fuz_db -- --ignored --test-threads=1
-//! ```
-//!
-//! One test creates and drops a scratch database beside `fuz_db_test`, so the
-//! test role needs `CREATEDB`.
-//!
-//! Override with `FUZ_DB_TEST_URL=postgres://...`.
+//! The integration tests need a local `PostgreSQL`; the recipe is the crate's
+//! `README.md` § Testing.
 
 pub mod action_db;
 pub mod column_projections;

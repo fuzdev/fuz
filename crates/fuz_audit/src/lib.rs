@@ -37,19 +37,19 @@
 //! - **Lint tables** (the `lint_tables` module). A workspace member that
 //!   re-declares its own `[lints.<tool>]` tables instead of
 //!   `[lints] workspace = true` (a crate that needs `unsafe`, since Cargo
-//!   replaces a crate's `[lints]` whole) must keep the workspace's: the same set
-//!   of tool tables as `[workspace.lints.*]`, and every workspace lint at the
-//!   same level and priority, except `rust.unsafe_code` ([`UNSAFE_CODE`]), which
-//!   it declares at `deny` or `forbid` at the workspace's priority. When its
-//!   `unsafe_code` isn't `forbid`, no lib or bin crate root may lift it with a
-//!   top-of-file `#![allow(unsafe_code)]` / `#![expect(unsafe_code, …)]` (or a
-//!   `cfg_attr` of one). Lints it adds pass and are listed. `cargo metadata`
-//!   carries no lint tables, so this pass reads the manifests with a line-based
-//!   reader that refuses, as a tooling failure, any lint-table shape it doesn't
-//!   understand; the root manifest is read only once a member re-declares. A
-//!   workspace without `[workspace.lints]` doesn't check its re-declaring
-//!   members (the output names them), and a member with no `[lints]` at all is
-//!   named in a note.
+//!   replaces a crate's `[lints]` whole) must keep the workspace's: the same
+//!   set of tool tables as `[workspace.lints.*]`, and every workspace lint at
+//!   the same level and priority, except `rust.unsafe_code` ([`UNSAFE_CODE`]),
+//!   which it declares at `deny` or `forbid` at the workspace's priority. When
+//!   its `unsafe_code` isn't `forbid`, no lib or bin crate root may lift it
+//!   with a top-of-file `#![allow(unsafe_code)]` / `#![expect(unsafe_code, …)]`
+//!   / `#![warn(unsafe_code)]` (or a `cfg_attr` of one). Lints it adds pass and
+//!   are listed. `cargo metadata` carries no lint tables, so this pass reads
+//!   the manifests with a line-based reader that refuses, as a tooling failure,
+//!   any lint-table shape it doesn't understand; the root manifest is read only
+//!   once a member re-declares. A workspace without `[workspace.lints]` doesn't
+//!   check its re-declaring members (the output names them), and a member with
+//!   no `[lints]` at all is named in a note.
 //!
 //! What it cannot see: a local package outside this workspace that no edge in
 //! the resolved graph reaches (one behind a path dependency's optional edge

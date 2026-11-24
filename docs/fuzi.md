@@ -46,8 +46,9 @@ fuzi clean [--dry-run] [--json]   # sweep crash-leaked staging trees
 
 ## Cache and swap
 
-- Tarballs are cached by integrity at `~/.fuz/cache/npm/sha512-<hex>/package.tgz`
-  (./fuz_home.md); `--offline` uses only the cache.
+- Tarballs are cached by integrity at
+  `~/.fuz/cache/npm/sha512-<hex>/package.tgz` (./fuz_home.md); `--offline` uses
+  only the cache.
 - The tree is built in a `.fuzi-installing-*` staging directory, then renamed
   over `node_modules`, keeping the previous tree as `.fuzi-old-*` until the
   swap completes. `node_modules` must be renameable in place: a symlink, a

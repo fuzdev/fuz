@@ -43,7 +43,7 @@
 //!
 //! ## Current scope
 //!
-//! The verbs span five families: the core verbs (`cell_create` / `cell_get` /
+//! The verbs span these families: the core verbs (`cell_create` / `cell_get` /
 //! `cell_update` / `cell_delete` / `cell_list` / `cell_clone` /
 //! `cell_moderate` / `cell_policy_set`), the `cell_grant_*` ACL verbs
 //! (`create` / `revoke` / `list`), the `cell_field_*` named-relation verbs

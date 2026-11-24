@@ -1,12 +1,12 @@
-//! fuzd UDS wire protocol and the daemon/sidecar RPC payload types.
+//! fuzd UDS wire protocol and the daemon/sidecar/workload RPC payload types.
 //!
 //! The postcard-framed two-stage envelope (frame layout
 //! `total_len (u32) | request_id (u32) | action_id (u16) | flags (u8) | payload`,
 //! big-endian; see [`Header`] and [`FrameFlags`]) plus the
-//! daemon/sidecar status DTOs (`DaemonStatusResponse`, `SidecarStatusInfo`,
+//! daemon/sidecar/workload DTOs (`DaemonStatusResponse`, `SidecarStatusInfo`,
 //! `ToolInfo`, …) that ride it. Shared by the daemon (`fuzd_server`,
-//! `fuz_sidecar`) and the client (`fuz_client`); kept separate from `fuz_sys` so
-//! the rest of the workspace doesn't transitively compile postcard + tokio.
+//! `fuz_sidecar`) and the client (`fuz_client`); kept separate from `fuz_sys`
+//! so the rest of the workspace doesn't transitively compile postcard + tokio.
 
 mod actions;
 mod codec;

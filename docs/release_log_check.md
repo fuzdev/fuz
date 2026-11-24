@@ -82,9 +82,9 @@ installing commands refuse a world-writable fuz home before any request.
   working directory; a leading `~` needs a usable `HOME`. An entry that isn't
   an origin is reported by position and never echoed (a URL can carry a
   credential).
-- `FUZ_RELEASE_LOG=off` — the per-user opt-out: skips the check with a notice on
-  stderr (`--quiet` too), and the cached head isn't read. The only value — `OFF`,
-  `0`, `false` are configuration errors.
+- `FUZ_RELEASE_LOG=off` — the per-user opt-out: skips the check with a notice
+  on stderr (`--quiet` too), and the cached head isn't read. `off` is the only
+  value (empty reads as unset); `OFF`, `0`, `false` are configuration errors.
 
 Each network witness has 20 s to serve its head, one after another, and a keyed
 witness 20 s more for its co-signature. A local directory is plain file IO,
@@ -130,7 +130,8 @@ own sidecar, which catches a corrupted download and nothing else.
 - With origins configured it needs `curl` (refused before any request without
   it); an `http://` origin, or an `https://` URL outside its character set, is a
   configuration error. The full unreachable-vs-refusal rules and the pinned
-  cases are `scripts/install.sh`'s comments and ../scripts/install-test/README.md.
+  cases are `scripts/install.sh`'s comments and
+  ../scripts/install-test/README.md.
 
 ## Co-signatures
 

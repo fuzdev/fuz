@@ -15,7 +15,8 @@
 //! (`TestingArgon2idHasher`, `TestingDbOptions`, `TestingResetOptions`), the
 //! `_testing_*` action specs come from `create_testing_*_action_spec`
 //! factories, and the rest — the seeding and credential helpers, the
-//! daemon-token producer, the reset callback aliases — mostly take ordinary names.
+//! daemon-token producer, the reset callback aliases — mostly take ordinary
+//! names.
 
 use fuz_auth::{AuthSpec, CredentialGate, CredentialType};
 

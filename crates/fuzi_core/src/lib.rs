@@ -12,19 +12,20 @@
 //!
 //! # Pipeline and extension points
 //!
-//! The engine is three pure stages: `read_lockfile` (lenient serde + the
-//! `lockfileVersion` gate) → `classify` (per-entry disposition, accumulating
+//! `read_lockfile` reads the lockfile (a bounded read, then `parse_lockfile`:
+//! lenient serde + the `lockfileVersion` gate); the engine is then three pure
+//! stages: `parse_lockfile` → `classify` (per-entry disposition, accumulating
 //! refusals rather than failing fast) → `build_plan` (assemble the
 //! dedup-by-`Integrity` `fetch_set`, the depth-sorted `placements`, and the
 //! sibling `links`). Then the effects: `check_link_targets` (every sibling
 //! `link: true` target name-checked through a bounded no-follow `package.json`
 //! read) and `check_node_modules_target` (no symlinked, non-directory, or
 //! mounted `node_modules`), both before any network and under `--dry-run` too
-//! → the fetch phase →
-//! `materialize` (extract every placement, *then* place the links as relative
-//! symlinks, link the bins, check the link targets once more, check the tree is
-//! complete, swap). A link target is local source fuzi never writes to — no
-//! extraction through it, no chmod of its bins. The `link` module's docs carry the link threat notes.
+//! → the fetch phase → `materialize` (extract every placement, *then* place
+//! the links as relative symlinks, link the bins, check the link targets once
+//! more, check the tree is complete, swap). A link target is local source fuzi
+//! never writes to — no extraction through it, no chmod of its bins. The
+//! `link` module's docs carry the link threat notes.
 //!
 //! Lockfile and sibling text is untrusted in two ways the `text` module owns:
 //! a name fuzi would create is refused when it holds the wrong characters (a
@@ -33,12 +34,13 @@
 //! every human rendering of a payload string goes through
 //! [`fuz_sys::text::escape_untrusted`].
 //!
-//! `InstallPlan` is the stable, format-agnostic seam. The second lockfile
-//! format, `fuzi.lock`, plugs in as another *producer* of `InstallPlan`, not
-//! behind a reader trait; the fetch / extract / `node_modules` materialization work attaches
-//! *downstream* by consuming `fetch_set`, `placements`, and `links`. The heterogeneous
-//! lockfile entry is modeled by `EntryDisposition` alone — there is
-//! deliberately no parallel "kind of entry" enum to keep in sync.
+//! `InstallPlan` is the stable, format-agnostic seam. The planned second
+//! lockfile format, `fuzi.lock`, would plug in as another *producer* of
+//! `InstallPlan`, not behind a reader trait; the fetch / extract /
+//! `node_modules` materialization work attaches *downstream* by consuming
+//! `fetch_set`, `placements`, and `links`. The heterogeneous lockfile entry is
+//! modeled by `EntryDisposition` alone — there is deliberately no parallel
+//! "kind of entry" enum to keep in sync.
 
 mod cache;
 mod classify;

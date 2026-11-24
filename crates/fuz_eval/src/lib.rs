@@ -39,38 +39,39 @@
 //!    stdout as one envelope (§ The envelope).
 //!
 //! **The trust root.** The canonical config's directory must not be writable by
-//! every user ([`TrustRootProblem::WorldWritableConfigDir`]), nor the config file
-//! itself ([`TrustRootProblem::WorldWritableConfigFile`]) — the canonical file's
-//! mode, since that is the file that runs and a link's own mode is always `0777`;
-//! who owns either is not checked. From the directory, walk up through the
-//! directories an owner holds and no other user can write (no `o+w` bit),
-//! stopping before the first that fails, and reading nothing in it. The owner is
-//! the process's effective uid; under euid 0 with `SUDO_UID` set to a decimal
-//! uid — `sudo zap …` — that uid too, so a user's project passes the walk under
-//! `sudo`, where root alone would stop at the user's first directory. The root is
-//! the first directory in that walk, outside every `node_modules` segment, whose
-//! `package.json` holds more than a type marker (keys all within `"type"` and
-//! `"sideEffects"`, such as a `{"type": "module"}` in a subdirectory). fgro
-//! finds its project root by the same `package.json` rule, but its walk stops
-//! only at a world-writable directory, not at another user's. So a walk that
-//! finds no such `package.json` refuses the eval before the pin or the spawn:
-//! one that stopped below a directory refuses naming it and why
-//! ([`TrustRootProblem::WalkStopped`]) — fgro would look past another user's, and could
-//! take a project, and run its packages' code, from a directory this process
-//! doesn't trust — and one that reached the filesystem root refuses as having
-//! no project ([`TrustRootProblem::NoProject`]), which fgro refuses too.
+//! every user ([`TrustRootProblem::WorldWritableConfigDir`]), nor the config
+//! file itself ([`TrustRootProblem::WorldWritableConfigFile`]) — the canonical
+//! file's mode, since that is the file that runs and a link's own mode is
+//! always `0777`; who owns either is not checked. From the directory, walk up
+//! through the directories an owner holds and no other user can write (no `o+w`
+//! bit), stopping before the first that fails, and reading nothing in it. The
+//! owner is the process's effective uid; under euid 0 with `SUDO_UID` set to a
+//! decimal uid — `sudo zap …` — that uid too, so a user's project passes the
+//! walk under `sudo`, where root alone would stop at the user's first
+//! directory. The root is the first directory in that walk, outside every
+//! `node_modules` segment, whose `package.json` holds more than a type marker
+//! (keys all within `"type"` and `"sideEffects"`, such as a
+//! `{"type": "module"}` in a subdirectory). fgro finds its project root by the
+//! same `package.json` rule, but its walk stops only at a world-writable
+//! directory, not at another user's. So a walk that finds no such
+//! `package.json` refuses the eval before the pin or the spawn: one that
+//! stopped below a directory refuses naming it and why
+//! ([`TrustRootProblem::WalkStopped`]) — fgro would look past another user's,
+//! and could take a project, and run its packages' code, from a directory this
+//! process doesn't trust — and one that reached the filesystem root refuses as
+//! having no project ([`TrustRootProblem::NoProject`]), which fgro refuses too.
 //! The envelope's project must then be this root (§ The envelope), which
-//! catches a disk that changed between the two walks.
-//! Every `package.json` the walk passes is read, and one
-//! it can't read or that isn't valid — not a JSON object, a `"name"` or `"type"`
-//! that isn't a string — refuses the eval, named
+//! catches a disk that changed between the two walks. Every `package.json` the
+//! walk passes is read, and one it can't read or that isn't valid — not a JSON
+//! object, a `"name"` or `"type"` that isn't a string — refuses the eval, named
 //! ([`TrustRootProblem::InvalidPackageJson`]). So does one that is a FIFO,
-//! socket or device, found by a stat before any open, and a link to nothing or a
-//! path through a non-directory, which gro's resolver treats as no `package.json`
-//! at all: here they fail closed. The walk is read before fgro runs, and fgro
-//! reads the disk again; the envelope's project check catches a root that moved
-//! in between. The ownership bound does not inspect ACLs, and `SUDO_UID` is read
-//! from the environment as given, which for a root process is root's to set.
+//! socket or device, found by a stat before any open, and a link to nothing or
+//! a path through a non-directory, which gro's resolver treats as no
+//! `package.json` at all: here they fail closed. The walk is read before fgro
+//! runs, and fgro reads the disk again; the envelope's project check catches a
+//! root that moved in between. The ownership bound does not inspect ACLs, and
+//! `SUDO_UID` is read from the environment as given, which for a root process
+//! is root's to set.
 //!
 //! **Who it runs as.** `fgro` never runs as root, and a root eval drops only to
 //! the user who owns the trust root:
@@ -157,16 +158,17 @@
 //! closed, while stdout and stderr are read; all three run concurrently, so a
 //! child that doesn't read its stdin, or fills stderr, can't stall the others.
 //! Both captures are byte-capped: stdout at [`MAX_STDOUT_SIZE`], just above
-//! fgro's own envelope cap so an envelope fgro writes always fits, and stderr at
-//! `fuz_sys::limits::MAX_CAPTURE_STDERR_SIZE`. Past the stdout cap the group is
-//! killed and the eval fails with [`EvalError::OutputTooLarge`]; stderr past its
-//! cap is drained and dropped. fgro's own `--timeout` is [`EvalRequest::timeout`], which ends
-//! a run as an `eval` failure of kind [`EvalErrorKind::Timeout`]; this crate's
-//! wall clock runs [`TIMEOUT_GRACE`] longer, as a backstop for a process that
-//! doesn't stop ([`EvalError::Timeout`]). On the backstop, on the stdout cap,
-//! and when the caller drops the future mid-eval, the whole process group is
-//! sent `SIGKILL` before the child is reaped (so its id can't have been reused
-//! by then), and the reap waits at most a few seconds.
+//! fgro's own envelope cap so an envelope fgro writes always fits, and stderr
+//! at `fuz_sys::limits::MAX_CAPTURE_STDERR_SIZE`. Past the stdout cap the group
+//! is killed and the eval fails with [`EvalError::OutputTooLarge`]; stderr past
+//! its cap is drained and dropped. fgro's own `--timeout` is
+//! [`EvalRequest::timeout`], which ends a run as an `eval` failure of kind
+//! [`EvalErrorKind::Timeout`]; this crate's wall clock runs [`TIMEOUT_GRACE`]
+//! longer, as a backstop for a process that doesn't stop
+//! ([`EvalError::Timeout`]). On the backstop, on the stdout cap, and when the
+//! caller drops the future mid-eval, the whole process group is sent `SIGKILL`
+//! before the child is reaped (so its id can't have been reused by then), and
+//! the reap waits at most a few seconds.
 //!
 //! **The envelope.** fgro writes one JSON object on stdout; the reader fails
 //! closed on anything it doesn't know, and each refusal is an
@@ -188,11 +190,11 @@
 //!   `blake3` and `format` set;
 //! - `graph.local.project` is the trust root.
 //!
-//! Stdout that isn't UTF-8 is [`EvalError::NotUtf8`]. An `ok: false` envelope is an
-//! [`EvalError::Eval`] carrying fgro's [`EvalErrorKind`], its message, and where
-//! it gave them the location, the import, and a hint. An `ok: true` one is an
-//! [`EvalOutput`]: the value, parsed and written again with its object keys
-//! sorted, so its text depends only on the value, and the typed
+//! Stdout that isn't UTF-8 is [`EvalError::NotUtf8`]. An `ok: false` envelope
+//! is an [`EvalError::Eval`] carrying fgro's [`EvalErrorKind`], its message,
+//! and where it gave them the location, the import, and a hint. An `ok: true`
+//! one is an [`EvalOutput`]: the value, parsed and written again with its
+//! object keys sorted, so its text depends only on the value, and the typed
 //! [`GraphDump`].
 //!
 //! **What it leaves.** `SUDO_UID` and `SUDO_GID` are believed as given, which

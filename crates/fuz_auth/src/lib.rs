@@ -23,8 +23,8 @@
 //!
 //! ## Named projections
 //!
-//! Every auth table has a `pub const *_COLUMNS: [&str; N]` in its query
-//! module — [`ACCOUNT_COLUMNS`](account_queries::ACCOUNT_COLUMNS),
+//! Every auth table has a `pub const *_COLUMNS: [&str; N]` in its query module
+//! — [`ACCOUNT_COLUMNS`](account_queries::ACCOUNT_COLUMNS),
 //! [`ACTOR_COLUMNS`](actor_queries::ACTOR_COLUMNS),
 //! [`ROLE_GRANT_COLUMNS`](actor_queries::ROLE_GRANT_COLUMNS),
 //! [`ROLE_GRANT_OFFER_COLUMNS`](role_grant_offer_queries::ROLE_GRANT_OFFER_COLUMNS),
@@ -32,24 +32,23 @@
 //! [`INVITE_COLUMNS`](invite_queries::INVITE_COLUMNS),
 //! [`API_TOKEN_COLUMNS`](api_token_queries::API_TOKEN_COLUMNS),
 //! [`AUDIT_LOG_COLUMNS`](audit_log_queries::AUDIT_LOG_COLUMNS),
-//! [`APP_SETTINGS_COLUMNS`](app_settings_queries::APP_SETTINGS_COLUMNS) —
-//! the twins of `fuz_app`'s consts, same names and order. A read that
-//! hydrates the table's wire row projects the const through
-//! `fuz_db::qualify_columns` (or an `omit_columns` narrowing of it, like the
-//! `token_hash`-less token listing) and decodes positionally through one
-//! decoder per shape; CTE / JOIN reads append their extra expressions
-//! after the const's columns and index them from `*_COLUMNS.len()`. The narrower purpose rows this crate deliberately
-//! reads (`AccountRow`'s identity pair, `RoleGrantRow` for ACL checks, the
-//! delete snapshots) have their own private per-shape column list and
-//! decoder, unit-checked as a subset of the table const. No read spells a
-//! column list of its own, so a column is added in one place and a
-//! reordered projection can't silently transpose two same-typed columns
-//! at a single site. Decoders resolve their indices **by column name at
-//! compile time** (`fuz_db::col!` over the const), so a const can be
-//! extended or reordered freely — every decode index follows, a name the
-//! const doesn't carry is a compile error, and the appended CTE / JOIN
-//! expressions keep indexing from `*_COLUMNS.len()`. A projection that
-//! narrows a table const (the `token_hash`-less listing, the admin
+//! [`APP_SETTINGS_COLUMNS`](app_settings_queries::APP_SETTINGS_COLUMNS) — the
+//! twins of `fuz_app`'s consts, same names and order. A read that hydrates the
+//! table's wire row projects the const through `fuz_db::qualify_columns` (or an
+//! `omit_columns` narrowing of it, like the `token_hash`-less token listing)
+//! and decodes positionally through one decoder per shape; CTE / JOIN reads
+//! append their extra expressions after the const's columns and index them from
+//! `*_COLUMNS.len()`. The narrower purpose rows this crate deliberately reads
+//! (`AccountRow`'s identity pair, `RoleGrantRow` for ACL checks, the delete
+//! snapshots) have their own private per-shape column list and decoder,
+//! unit-checked as a subset of the table const. No read spells a column list of
+//! its own, so a column is added in one place and a reordered projection can't
+//! silently transpose two same-typed columns at a single site. Decoders resolve
+//! their indices **by column name at compile time** (`fuz_db::col!` over the
+//! const), so a const can be extended or reordered freely — every decode index
+//! follows, a name the const doesn't carry is a compile error, and the appended
+//! CTE / JOIN expressions keep indexing from `*_COLUMNS.len()`. A projection
+//! that narrows a table const (the `token_hash`-less listing, the admin
 //! summaries) is a *literal* const the decoder indexes into, pinned to its
 //! `omit_columns` derivation by a unit test. A newly added column is simply
 //! unread until its struct field lands; the registry guard compares column

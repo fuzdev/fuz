@@ -13,12 +13,13 @@
 //!    `publish = false` and has no production sibling, so nothing in the
 //!    shippable tree reaches it.
 //! 3. `TestingArgon2idHasher::new` logs `WARN: test-mode argon2 hasher
-//!    active` at construction — a sentinel for log-scraping audits.
+//!    active` once per process, on first construction (a `Once`) — a sentinel
+//!    for log-scraping audits.
 //!
 //! Unlike `testing_zzz_server` and other consumers' test binaries, there is no
 //! production sibling library: [`testing_spine_stub::run_app`] assembles
 //! the spine directly because the stub mounts only the spine surface with
-//! no domain on top. Default port 1177 (slots beside zzz's 1175/1176).
+//! no domain on top. Default port 1177.
 //!
 //! The command line is strict: no arguments, or `--port <port>` (the
 //! harness's form), serves; `--help` / `-h` prints usage. Anything else exits

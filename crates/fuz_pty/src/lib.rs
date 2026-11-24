@@ -1,4 +1,5 @@
-//! A safe PTY API (the [`Pty`] struct) over the libc PTY calls.
+//! A PTY API (the [`Pty`] struct) over the libc PTY calls — not sound as
+//! written (see [`Pty`]'s Soundness section).
 //!
 //! Linux-only, kernel ≥ 4.13 (`TIOCGPTPEER`, `execvpe`, `pipe2`). The one
 //! workspace crate allowed `unsafe`: its manifest sets `unsafe_code` to

@@ -1,6 +1,7 @@
 //! Storage backends for Fuz
 //!
-//! This crate provides the `Storage` trait and implementations for different backends:
+//! This crate provides the `Storage` trait and implementations for different
+//! backends:
 //! - `FileStorage` - Local filesystem (no credentials needed)
 //! - `ForgeStorage` - a running `fuz_forge` over HTTP (`/api/fuz_forge/files`)
 //! - `SshStorage` - a remote host over SSH (`scp`/`ssh`)
@@ -32,23 +33,12 @@
 //! returns regular files only there: a symlink to a file is not listed.
 //!
 //! All backends share one on-store layout, owned by
-//! `fuz_release::ReleaseLayout` — flat at the
+//! `fuz_release::ReleaseLayout` (its module doc has the keys) — flat at the
 //! root for the fuz self artifact, one `tools/<name>/` prefix per tool. The
-//! version lives in the filename, never as a directory level, so a tool's
-//! whole stream is one list-prefix:
-//! ```text
-//! releases/
-//! ├── latest-x86_64-unknown-linux-gnu.json
-//! ├── fuz-0.3.0-x86_64-unknown-linux-gnu.tar.gz
-//! ├── fuz-0.3.0-x86_64-unknown-linux-gnu.manifest.json
-//! └── tools/
-//!     └── fuzd/
-//!         ├── latest-x86_64-unknown-linux-gnu.json
-//!         ├── fuzd-0.3.0-x86_64-unknown-linux-gnu.tar.gz
-//!         └── fuzd-0.3.0-x86_64-unknown-linux-gnu.manifest.json
-//! ```
-//! Keys therefore contain `/`, which is why every backend validates them
-//! traversal-safe rather than assuming a single flat segment.
+//! version lives in the filename, never as a directory level, so a tool's whole
+//! stream is one list-prefix. Keys therefore contain `/`, which is why every
+//! backend validates them traversal-safe rather than assuming a single flat
+//! segment.
 
 #![expect(
     clippy::missing_errors_doc,

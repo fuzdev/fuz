@@ -12,8 +12,9 @@
 //! open, delivering frames on that request id to the caller's callback.
 //! With `follow == false` they return after the first snapshot; with
 //! `follow == true` they stream until the daemon closes the connection.
-//! Subscription frames carry no `FINAL` flag, so the stream is unbounded and
-//! ends only with the connection. A stream that ends before its first
+//! A subscription normally ends only with the connection; a `FINAL` frame also
+//! ends it, and the one the daemon sends is a watch refusal
+//! ([`ClientError::WatchRefused`]). A stream that ends before its first
 //! snapshot is an error ([`ClientError::StreamEndedBeforeSnapshot`]), never an
 //! empty success.
 

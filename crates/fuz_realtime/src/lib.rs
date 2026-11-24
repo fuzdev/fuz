@@ -73,11 +73,10 @@
 //! ## Postcard note
 //!
 //! WS messages are JSON-shaped (via `fuz_http::JsonrpcRequest` /
-//! `JsonrpcResponse` / `JsonrpcNotification`). The postcard
-//! constraint (`#[serde(skip_serializing_if)]` breaks postcard
-//! roundtripping) does not apply to wire types in this crate. Future
-//! consumers routing realtime types over postcard transports must keep
-//! the `Option` fields plain.
+//! `JsonrpcResponse` / `JsonrpcNotification`). The postcard constraint
+//! (`#[serde(skip_serializing_if)]` breaks postcard roundtripping) does not
+//! apply to wire types in this crate. A consumer routing these types over
+//! postcard must keep the `Option` fields plain.
 
 // === WebSocket connection registry ===
 pub mod connection;

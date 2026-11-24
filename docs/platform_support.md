@@ -28,11 +28,11 @@ other platforms.
 **Unsafe code**: `unsafe_code = "forbid"` workspace-wide, except `fuz_pty`,
 which sets it to `deny` for its libc PTY calls, lifting it per item with
 `#[expect]` and documenting every block with `// SAFETY:`, and otherwise
-re-declares the workspace lints (held to them by `cargo xtask
-check-release`). Unsafe is justified only when the alternative has a material security
-gap (attacker capabilities change, not a slightly wider timing window) that
-can't be mitigated otherwise, and the unsafe code is minimal and auditable.
-Performance alone doesn't justify it.
+re-declares the workspace lints (held to them by `cargo xtask check-release`).
+Unsafe is justified only when the alternative has a material security gap
+(attacker capabilities change, not a slightly wider timing window) that can't be
+mitigated otherwise, and the unsafe code is minimal and auditable. Performance
+alone doesn't justify it.
 
 ## Platform-Specific Code
 
@@ -53,9 +53,9 @@ and Linux `/proc` reads. Regenerate the file list with
   (socket `0600`, dir `0700`), `fuz_release` fetch, `fuz` bootstrap, `fuz_sign`
   scratch dirs, `fuz_storage` file backend, `fuzi_core` (cache, staging,
   extraction), `fuz_eval`, `fuz_testing`.
-- **No-follow opens** (`O_NOFOLLOW`, `fchmod` on the fd) — `fuz_sys::secure_file`
-  and `fuz_sys::fs`, through which the artifact and tool stores read `meta.json`
-  and binaries; `fuz_auth`'s bootstrap token store.
+- **No-follow opens** (`O_NOFOLLOW`, `fchmod` on the fd) —
+  `fuz_sys::secure_file` and `fuz_sys::fs`, through which the artifact and tool
+  stores read `meta.json` and binaries; `fuz_auth`'s bootstrap token store.
 - **Symlinks** — `fuz_sys::fs::replace_symlink_atomic` (`current`, `bin/`);
   `fuzi_core` (`node_modules` links, `.bin`).
 - **Locks and free space** — `fuz_sys::file_lock` (`flock(2)`), `fuz_sys::fs`
@@ -66,14 +66,14 @@ and Linux `/proc` reads. Regenerate the file list with
   unreadable, so SIGHUP keeps its default disposition).
 - **Processes** — `fuz_sys::pid` (`is_pid_alive`: `/proc/<pid>` on Linux, nix
   `kill(pid, None)` on other Unix; `send_signal` for the SIGTERM / SIGKILL
-  `fuz_daemon` sends),
-  `fuz_home::pid` (`/proc/<pid>/comm` for `verify_pid_is_fuzd`; fails closed, so
-  without `/proc` every pid reads as not-fuzd), and `fuz_eval` (exec of the
-  pinned `fgro` through `/proc/self/fd`, its own process group, `killpg`, and
-  under root the uid drop, with its passwd lookup).
+  `fuz_daemon` sends), `fuz_home::pid` (`/proc/<pid>/comm` for
+  `verify_pid_is_fuzd`; fails closed, so without `/proc` every pid reads as
+  not-fuzd), and `fuz_eval` (exec of the pinned `fgro` through `/proc/self/fd`,
+  its own process group, `killpg`, and under root the uid drop, with its passwd
+  lookup).
 - **Linux `/proc` self-uid** — `fuzd_server` (the accept gate's baseline),
-  `fuz_eval`'s trust root and pin cache, and `fuzi/src/signal.rs`'s inherited-ignore read
-  (all `/proc/self/status`).
+  `fuz_eval`'s trust root and pin cache, and `fuzi/src/signal.rs`'s
+  inherited-ignore read (all `/proc/self/status`).
 - **Observer sources** — `fuzd_server/src/workload/`: `/proc` and `/proc/net`
   for the process and network domains, `systemctl --user` for services. The
   `fuz_wire` observer DTOs carry `/proc` semantics too (the `stat` start-time
@@ -84,9 +84,9 @@ and Linux `/proc` reads. Regenerate the file list with
   any host: a 64-bit little-endian ELF's architecture and loader (glibc, musl,
   or static), or a 64-bit Mach-O's architecture (universal binaries are
   refused), held to a release target from the closed supported set
-  (`{x86_64,aarch64}-unknown-linux-{gnu,musl}`, `{x86_64,aarch64}-apple-darwin`).
-  A built artifact, every published binary, and every installed one are
-  checked (./release_format.md § Binary platform).
+  (`{x86_64,aarch64}-unknown-linux-{gnu,musl}`,
+  `{x86_64,aarch64}-apple-darwin`). A built artifact, every published binary,
+  and every installed one are checked (./release_format.md § Binary platform).
 - **libc detection** — `fuzi_core::platform` (`/usr/bin/ldd` contents, else
   the loader files; for npm's libc-specific packages; Linux only — elsewhere
   no libc is reported).

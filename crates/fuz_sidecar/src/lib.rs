@@ -6,7 +6,8 @@
 //!
 //! # Architecture
 //!
-//! - `SidecarController` + `SidecarControllerFactory`: Generic controller implementation for stdio-based sidecars
+//! - `SidecarController` + `SidecarControllerFactory`: Generic controller
+//!   implementation for stdio-based sidecars
 //! - `SpawnConfig`: Runtime-specific configuration (command, script, tools)
 //! - `SidecarPool`: Routes requests to appropriate sidecar, manages lifecycle
 //!

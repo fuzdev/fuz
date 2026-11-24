@@ -9,10 +9,11 @@
 //! Every transport (HTTP + WS) enforces the same order so consumers can rely
 //! on identical responses regardless of how the request arrived:
 //! `method_not_found` → 401 → authorization phase → 403 → 429 → 400 → handler
-//! → post-commit drain. The 400 (the dispatcher's own `acting` grammar; the
-//! handlers validate the rest) sits *after* the authority gates and the rate
-//! limit on purpose — coarse authority facts before fine input ones, so a
-//! refused caller learns nothing about the method's shape, and a malformed
+//! → post-commit drain. The 400 (the dispatcher's own checks — the params
+//! shape, the `__proto__` / NUL walk, the `acting` grammar, and the void rule;
+//! the handlers validate the rest) sits *after* the authority gates and the
+//! rate limit on purpose — coarse authority facts before fine input ones, so
+//! a refused caller learns nothing about the method's shape, and a malformed
 //! flood burns the budget it should. The full step list and each ordering's
 //! rationale live on [`mod@perform_action`]; the order mirrors `fuz_app`'s
 //! `perform_action.ts`.

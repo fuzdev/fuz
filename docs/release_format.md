@@ -135,12 +135,12 @@ of the script served at `https://www.fuz.dev/install.sh`, in the same sidecar
 format and hash as the binaries' (`<128 lowercase hex>  install.sh`). It is
 not a `ReleaseLayout` key and no publish command writes it yet.
 
-Every key is per target, the version pointer included:
-`latest-<target>.json` (`ReleaseLayout::latest_key`). A publish moves only its
-own target's pointer, so publishing one target never moves another's, and a
-client resolves the latest release *for its own target* — with none, it
-reports that no release is published for its target (`NoReleaseForTarget`). A prune protects the
-version every per-target pointer names.
+Every key is per target, the version pointer included: `latest-<target>.json`
+(`ReleaseLayout::latest_key`). A publish moves only its own target's pointer, so
+publishing one target never moves another's, and a client resolves the latest
+release *for its own target* — with none, it reports that no release is
+published for its target (`NoReleaseForTarget`). A prune protects the version
+every per-target pointer names.
 
 The pointer is **unsigned**: it selects a release, and `check_key` keeps it
 from relabeling one (why that suffices: ./security-model.md § Rollback).
@@ -260,11 +260,11 @@ A per-tool tarball holds that tool's declared binaries. Extraction targets
 `~/.fuz/artifacts/<content_hash>/` (self) or
 `~/.fuz/tools/<name>/<content_hash>/` (tool, with its own `current` and `bin/`
 links), via a `.downloading-<random>/` or `.installing-<random>/` temp dir
-renamed into place, cleaned on any failure; one a crash leaves is swept by a later
-fetch (self) or install of that tool once nothing in it, the streaming tarball
-included, has been written for an hour. `meta.json` is then written from the
-manifest (`source: "remote"`, no `inputs`, `created_at` the download time) — the
-self artifact's `ArtifactMeta` or a tool's `ToolMeta`.
+renamed into place, cleaned on any failure; one a crash leaves is swept by a
+later fetch (self) or install of that tool once nothing in it, the streaming
+tarball included, has been written for an hour. `meta.json` is then written
+from the manifest, `created_at` the download time — the self artifact's
+`ArtifactMeta` (`source: "remote"`, no `inputs`) or a tool's `ToolMeta`.
 
 **Extraction security** is `fuz_archive::safe_extract` (its rustdoc has the
 guard set; the limits fuz applies are `fuz_release`'s `MAX_*` constants):

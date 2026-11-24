@@ -80,18 +80,18 @@ for db in fuz_db_test fuz_auth_test fuz_cell_test fuz_fact_test fuz_fact_serving
 cargo test -p fuz_db -p fuz_http -p fuz_auth -p fuz_cell -p fuz_fact -p fuz_fact_serving -p fuz_actions -p fuz_db_admin -p fuz_realtime -p fuz_cell_actions -- --ignored --test-threads=1
 ```
 
-**A crate that gains an `#[ignore]` Postgres suite** joins both the recipe
-above and the `db-tests` job in `check.yml` — env var, database, and `-p`
-entry in each. `xtask`'s `tests/db_suite_lists.rs`, in the `check` job's
+**A crate that gains an `#[ignore]` Postgres suite** joins both the recipe above
+and the `db-tests` job in `check.yml` — env var, database, and `-p` entry in
+each. `xtask`'s `tests/db_suite_lists.rs`, in the `check` job's
 `cargo test --workspace`, holds both lists to the tree in both directions: a
-crate whose code names a `*_TEST_URL` literal must be in each `-p` list with
-its variable set and its database created, and nothing else may be listed;
-each `cargo test` takes only `--locked` and `-p` before `--` and exactly
-`--ignored --test-threads=1` after it, with no shell comment or operator, as
-its step's whole `run:`, and the job and its test step take no `if:`,
-`continue-on-error:`, or `shell:`. Its doc has
-the detection rule; a suite that shares another crate's database, as `fuz_http`'s does, is
-named in its `SHARED_DATABASES`.
+crate whose code names a `*_TEST_URL` literal must be in each `-p` list with its
+variable set and its database created, and nothing else may be listed; each
+`cargo test` takes only `--locked` and `-p` before `--` and exactly
+`--ignored --test-threads=1` after it, with no shell comment or operator, as its
+step's whole `run:`, and the job and its test step take no `if:`,
+`continue-on-error:`, or `shell:`. Its doc has the detection rule; a suite that
+shares another crate's database, as `fuz_http`'s does, is named in its
+`SHARED_DATABASES`.
 
 Each suite's purpose is in its file's `//!` doc. Schema handling:
 
@@ -118,11 +118,12 @@ lock, a locking read or a `RETURNING` order runs them.
 
 **A change to a spine crate that `testing_spine_stub` links also runs fuz_app's
 cross-backend suite** — `npm run test:cross:rust-spine-stub` in a `fuz_app`
-checkout. Its setup runs `cargo build -p testing_spine_stub --profile cross-test`
-(the root `Cargo.toml`'s non-LTO test profile) in the
-workspace `FUZ_RUST_SPINE_STUB_WORKSPACE_DIR` names (set it when this checkout
-is not at the suite's default path), runs `createdb` against a local Postgres,
-then spawns the binary and drives it over HTTP, WebSocket, and SSE.
+checkout. Its setup runs
+`cargo build -p testing_spine_stub --profile cross-test` (the root
+`Cargo.toml`'s non-LTO test profile) in the workspace
+`FUZ_RUST_SPINE_STUB_WORKSPACE_DIR` names (set it when this checkout is not at
+the suite's default path), runs `createdb` against a local Postgres, then spawns
+the binary and drives it over HTTP, WebSocket, and SSE.
 
 It is the broad behavioral coverage of the cell verbs: `fuz_cell_actions`'s own
 Postgres suite pins the authz gates (`tests/cell_authz.rs`'s `//!` lists them),
@@ -130,12 +131,13 @@ and its unit tests are pure — so `cargo test --workspace` and the Postgres
 recipe can both be green with a cell handler broken.
 
 `fuz_http`'s `request_header_conformance.json` and
-`request_target_conformance.json`, like `fuz_testing`'s
-`credential_conformance.json`, are byte-identical copies of fuz_app's tables,
-run here by each module's unit test. `fuz_testing`'s `db_invariants.sql` is a
-byte-identical copy too, generated in fuz_app and never edited here. fuz_app's
-`conformance_table_copies` cross test, in the parity project, fails when a
-copy differs, so a table row is edited in both repos; the nightly
+`request_target_conformance.json`, `fuz_testing`'s
+`credential_conformance.json`, and `fuz_fact_serving`'s
+`tests/fixtures/x_accel_corpus.json` are byte-identical copies of fuz_app's
+tables, run here by each module's unit test. `fuz_testing`'s `db_invariants.sql`
+is a byte-identical copy too, generated in fuz_app and never edited here.
+fuz_app's `conformance_table_copies` cross test, in the parity project, fails
+when a copy differs, so a table row is edited in both repos; the nightly
 `cross-contract` workflow runs it.
 
 ## Known flakes

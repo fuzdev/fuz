@@ -136,16 +136,17 @@ daemon); read the rest as needed.
 
 ## Dependency injection
 
-The [fuz-stack skill](https://docs.fuz.dev/skills/fuz-stack)'s Rust DI escalation ladder applies: import-and-call for
-pure helpers; a concrete `*Options` struct with `Arc<T>` fields by default (no
-`*Deps` suffix in Rust; route-group state is `*RouteState`); capability traits
-(pure nouns: `PasswordHasher`, `Storage`, `ConnectionCloser`) only when
-polymorphism is real; `Arc<T>` on hot paths, `Arc<dyn Trait>` on cold ones;
-RPITIT for generic use and a manual `BoxFuture` (not `#[async_trait]`) for
-`dyn`, pairing an RPITIT trait with an object-safe `*Dyn` companion when both
-are needed. Every deps-surface trait states `**Object-safe**` or
-`**Not object-safe**` in its doc. tokio, tracing, `std::fs`, `std::env`, and
-`std::time` stay concrete; the clock seam is tokio's `start_paused`.
+The [fuz-stack skill](https://docs.fuz.dev/skills/fuz-stack)'s Rust DI
+escalation ladder applies: import-and-call for pure helpers; a concrete
+`*Options` struct with `Arc<T>` fields by default (no `*Deps` suffix in Rust;
+route-group state is `*RouteState`); capability traits (pure nouns:
+`PasswordHasher`, `Storage`, `ConnectionCloser`) only when polymorphism is real;
+`Arc<T>` on hot paths, `Arc<dyn Trait>` on cold ones; RPITIT for generic use and
+a manual `BoxFuture` (not `#[async_trait]`) for `dyn`, pairing an RPITIT trait
+with an object-safe `*Dyn` companion when both are needed. Every deps-surface
+trait states `**Object-safe**` or `**Not object-safe**` in its doc. tokio,
+tracing, `std::fs`, `std::env`, and `std::time` stay concrete; the clock seam is
+tokio's `start_paused`.
 
 **Test injection** is concrete impls in the `fuz_testing` crate, never
 `cfg(test)` shadows. The one sanctioned exception — a seam in the production
@@ -283,13 +284,8 @@ not here.
   fuz_cell, fuz_auth, fuz_actions}`; `fuz_cell` ⊥ `fuz_actions`; `fuz_sys` ⊥
   `{axum, fuz_http}`; `fuz_home` ⊥ `{axum, fuz_db, fuz_http}`.
 - ★ A member that re-declares its own `[lints.<tool>]` tables keeps the
-  workspace's: the same tool tables as `[workspace.lints.*]`, and every
-  workspace lint at the same level and priority except `rust.unsafe_code`,
-  which, where the workspace sets it, it declares at `deny` or `forbid` at the
-  workspace's priority (`allow` / `warn` fail; no opt-out). Additions are listed in the output. When
-  `unsafe_code` isn't `forbid`, no lib or bin crate root lifts it with a
-  top-of-file `#![allow(unsafe_code)]` / `#![expect(unsafe_code, …)]` (a
-  submodule's own lift isn't checked).
+  workspace's, `unsafe_code` at `deny` or `forbid` (./docs/crates.md §
+  `fuz_audit`).
 - `testing_`-prefixed binaries never ship (packaging filter +
   `check_no_test_binaries`).
 - The spine crates are **twins of fuz_app** — wire literals, close codes, DDL,
@@ -375,11 +371,11 @@ ranges are in `fuz_wire` (`actions.rs`); the frame layout and stream flags are
 the header of `crates/fuz_wire/src/codec.rs`; the version history is
 `fuz_wire::PROTOCOL_VERSION`'s doc — **bump it with any wire-shape change**.
 Hello is the liveness probe (`fuz_client::check_health`). Observer and watcher
-subscriptions stream frames on their `request_id` until the connection closes;
-other streams end on a header `FINAL` flag. The `WORKLOAD_*` pairs are
-wire-only (the `fuz workload list/status/stop` verbs are planned), and the
-`SIDECAR_*` pairs are dormant (dispatched, never sent, answered from the empty
-pool).
+subscriptions stream frames on their `request_id` until the connection closes (a
+watch refusal is a `FINAL` frame); other streams end on a header `FINAL` flag.
+The `WORKLOAD_*` pairs are wire-only (the `fuz workload list/status/stop` verbs
+are planned), and the `SIDECAR_*` pairs are dormant (dispatched, never sent,
+answered from the empty pool).
 
 ## Environment variables
 
@@ -400,12 +396,12 @@ stub's own test knobs are its rustdoc's.
 - `FUZ_FORGE_TOKEN` — bearer token for `forge://`; falls back to `api_token` in
   `FUZ_FORGE_HOME` (default `~/.fuz_forge`, shared with `fuzf`).
   `FUZ_FORGE_BASE_URL` (blank = unset) serves a host-less `forge://` and is
-  `fuzf`'s server URL. Rules:
-  ./docs/storage_backends.md.
+  `fuzf`'s server URL. Rules: ./docs/storage_backends.md.
 - `FUZ_RELEASE_LOG_URL` — the release log witnesses (comma-separated origins).
   **Unset or empty, no check runs**; no public release log exists.
-  `FUZ_RELEASE_LOG=off` is the per-user opt-out (any other value is exit 2).
-  Both are honored by `scripts/install.sh` too. ./docs/release_log_check.md.
+  `FUZ_RELEASE_LOG=off` is the per-user opt-out (empty reads as unset; any other
+  value is exit 2). Both are honored by `scripts/install.sh` too.
+  ./docs/release_log_check.md.
 - `FUZ_INSTALL_BASE_URL` — `install.sh` only: the release host (default
   `https://releases.fuz.dev`, not yet live).
 - `RUST_LOG` — the `tracing` filter; `fuzd` defaults to `info`.
@@ -424,10 +420,10 @@ published):
 - Other app servers on the spine mount `fuz_actions`, `fuz_auth`, `fuz_db`,
   `fuz_http`, `fuz_sys` (most also `fuz_realtime`; for cells and facts,
   `fuz_cell`, `fuz_cell_actions`, `fuz_crypto`, `fuz_fact`, `fuz_fact_serving`).
-  One of them also takes the fuzd client surface (`fuz_client` +
-  `fuz_wire`, plus `fuzd_server` as a dev-dep for an isolated-fuzd test), so a
-  wire change reaches it. Everywhere, `fuz_testing` is confined to `testing_*`
-  binaries and dev-deps and `fuz_audit` to xtasks.
+  One of them also takes the fuzd client surface (`fuz_client` + `fuz_wire`,
+  plus `fuzd_server` and `fuz_sidecar` as dev-deps for an isolated-fuzd test),
+  so a wire change reaches it. Everywhere, `fuz_testing` is confined to
+  `testing_*` binaries and dev-deps and `fuz_audit` to xtasks.
 - `zzz` — `zzz_server` mounts the spine and is the **sole consumer of
   `fuz_pty`**.
 - `zap` — the **sole consumer of `fuz_eval`** (plus `fuz_audit` for its
@@ -437,42 +433,39 @@ A breaking change sweeps every consumer.
 
 ## Build configuration
 
-Edition 2024; `rust-toolchain.toml` pins the toolchain for local builds and
-CI. Lints: `unsafe_code = "forbid"`; clippy `all` + `pedantic` + `nursery` +
-`cargo` at warn, plus `clone_on_ref_ptr` / `dbg_macro` / `expect_used` /
-`panic` / `todo` / `unwrap_used` (test carve-outs in `clippy.toml`) and extra
-rustc lints.
+Edition 2024; `rust-toolchain.toml` pins the toolchain for local builds and CI.
+Lints: `unsafe_code = "forbid"`; clippy `all` + `pedantic` + `nursery` + `cargo`
+at warn, plus `clone_on_ref_ptr` / `dbg_macro` / `expect_used` / `panic` /
+`todo` / `unwrap_used` (test carve-outs in `clippy.toml`) and extra rustc lints.
 `clippy.toml` disallows `std::env::home_dir` — every `$HOME` read goes through
 `fuz_sys::home_dir` — and the lenient request readers (axum's `Path`,
 `RawPathParams`, `Query` and `Form`, `form_urlencoded::parse`,
 `Url::query_pairs`): a handler reads through `fuz_http::RouteParams`, which
-carries the one production `#[expect]`, and `fuz_http::read_query_pairs`.
-The request-reads census (`fuz_testing::request_reads_census`, shared with
-the consumer workspaces) pins those entries in every `clippy.toml` and lists
-every in-source suppression; `fuz_testing/tests/request_reads_census.rs` runs
-it here and holds the positive controls. `fuzi`, `fuzi_core` and
-`fuz_archive` carry their own `clippy.toml` (the exec-free disallows), which
-replaces the root one rather than merging; `fuzi_core/tests/exec_free.rs` checks they carry its settings
-and stay byte-identical.
-`fuz_pty` re-declares the workspace lint tables (Cargo replaces a crate's
-`[lints]` whole), differing only in `unsafe_code = "deny"` and an added
-`clippy::undocumented_unsafe_blocks = "warn"`; `check-release` holds the copy
-to the workspace's.
-Release profile: `lto`, `codegen-units = 1`, `panic = "abort"`
-(`catch_unwind` is dead), `strip` —
-abort fits this workspace's binaries (CLIs, the local daemon, test stubs);
-the consumer workspaces that build spine servers set `panic = "unwind"` so
-`compose_stack`'s catch-panic layer can answer a request panic `500`.
-Dependencies: smallest crate that does the job, shared through the workspace;
-tokio + postcard for fuzd's IPC, reqwest as the outbound HTTP client, blake3,
-ed25519, thiserror.
+carries the one production `#[expect]`, and `fuz_http::read_query_pairs`. The
+request-reads census (`fuz_testing::request_reads_census`, shared with the
+consumer workspaces) pins those entries in every `clippy.toml` and lists every
+in-source suppression; `fuz_testing/tests/request_reads_census.rs` runs it here
+and holds the positive controls. `fuzi`, `fuzi_core` and `fuz_archive` carry
+their own `clippy.toml` (the exec-free disallows), which replaces the root one
+rather than merging; `fuzi_core/tests/exec_free.rs` checks they carry its
+settings and stay byte-identical. `fuz_pty` re-declares the workspace lint
+tables (Cargo replaces a crate's `[lints]` whole), differing only in
+`unsafe_code = "deny"` and an added
+`clippy::undocumented_unsafe_blocks = "warn"`; `check-release` holds the copy to
+the workspace's. Release profile: `lto`, `codegen-units = 1`, `panic = "abort"`
+(`catch_unwind` is dead), `strip` — abort fits this workspace's binaries (CLIs,
+the local daemon, test stubs); the consumer workspaces that build spine servers
+set `panic = "unwind"` so `compose_stack`'s catch-panic layer can answer a
+request panic `500`. Dependencies: smallest crate that does the job, shared
+through the workspace; tokio + postcard for fuzd's IPC, reqwest as the outbound
+HTTP client, blake3, ed25519, thiserror.
 
-Moving one crate in `Cargo.lock` (version moves are the maintainer's call): `cargo
-update -p <crate> --precise <version> --dry-run` and read every `Updating` /
-`Downgrading` / `Adding` / `Removing` line, then run it without `--dry-run`,
-then check that `git diff Cargo.lock` moves only that crate plus what its new
-version requires — revert any other movement. Prefer a networked run:
-`--offline` resolves from the locally cached index and can pick different
+Moving one crate in `Cargo.lock` (version moves are the maintainer's call):
+`cargo update -p <crate> --precise <version> --dry-run` and read every
+`Updating` / `Downgrading` / `Adding` / `Removing` line, then run it without
+`--dry-run`, then check that `git diff Cargo.lock` moves only that crate plus
+what its new version requires — revert any other movement. Prefer a networked
+run: `--offline` resolves from the locally cached index and can pick different
 versions.
 
 ## Error handling
@@ -480,8 +473,8 @@ versions.
 Typed `thiserror` errors throughout; binaries render them with hints and exit
 codes (hand-written `Display` only in `fuz_pty`, `fuz_crypto::witness`, and
 `fuz_testing`'s `DbResetError`). Untrusted text is escaped in the `Display` of
-the type that holds it; `fuz`, `fuzd`, `fuzf`, `xtask`, and the spine servers print the
-whole source chain; `is_security_violation` / `is_unconfirmed` /
+the type that holds it; `fuz`, `fuzd`, `fuzf`, `xtask`, and the spine servers
+print the whole source chain; `is_security_violation` / `is_unconfirmed` /
 `is_unusable_home` stay complete at every wrapper level. The rules:
 ./docs/crates.md § Error rendering.
 

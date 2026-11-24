@@ -5,11 +5,11 @@
 //! verification, the CORS simple-request gate, trusted-proxy + XFF
 //! resolution, body-size limits, the raw-query helpers in `query`, the
 //! JSON-body decoder in `json_body`, readiness + lifecycle, request
-//! tracing); the twins converge on the better shape and match observably
-//! (this side canonicalizes IPv6). The origin allowlist grammar is shared
-//! with the TS twin entry for entry. `host` (the DNS-rebinding gate) is the
-//! twin of `fuz_app`'s `http/host.ts`; `request_headers` and `request_target`
-//! are the twins of its strict readers of the same names.
+//! tracing); the twins converge on the better shape and match observably.
+//! The origin allowlist grammar is shared with the TS twin entry for entry.
+//! `host` (the DNS-rebinding gate) is the twin of `fuz_app`'s `http/host.ts`;
+//! `request_headers` and `request_target` are the twins of its strict readers
+//! of the same names.
 //!
 //! An input-validation refusal ([`invalid_input_params`]) answers the generic
 //! `invalid params` and logs what was refused at `debug`
@@ -26,40 +26,19 @@
 //!
 //! ## Mount ordering
 //!
-//! [`compose_stack`] applies the layers in one fixed order, outermost first —
-//! the order a request meets them:
-//!
-//! ```text
-//! request_tracing_layer → catch_panic → `Allow` kept only on a 405
-//!   → per group: body cap → host_layer → origin_layer → cookie_clear_layer
-//!     → simple_request_layer → client_ip_middleware → handler
-//! ```
-//!
-//! Tracing is outermost so a refusal from any layer below is logged like any
-//! other response. The body cap comes ahead of the origin check in every
-//! route group, as on the TS spine: a declared `Content-Length` over the
-//! group's cap answers `413` whatever the request's origin or credentials (a
-//! body with no declared length is still refused, but which refusal wins is
-//! implementation-defined — see [`body_limit`]). Host and origin reject
-//! requests from foreign pages before any per-request work; the origin check
-//! covers every group, the fallback included, unless a group is carved out by
-//! name with a reason (the fallback group never can be). `host_layer` is
-//! on by default and off through [`StackOptions::host_gate`] (see [`host`]'s
-//! module doc), tracing is on by default and off through
-//! [`StackOptions::request_tracing`], and `simple_request_layer` is a
-//! per-group opt-in ([`RouteGroup::refuse_simple_requests`]) that fits only
-//! groups with no form or multipart uploads — the spine's own JSON handlers
-//! check their content type themselves.
-//! `client_ip_middleware` populates the `ClientIp` extension every handler
-//! downstream relies on (rate limiter keys, audit rows); no layer above it
-//! reads it. The detail is [`stack`]'s module doc.
+//! [`compose_stack`] applies the layers in one fixed order, outermost first:
+//! tracing and the panic catch around the whole router, then per group the
+//! body cap ahead of the host and origin gates (so a declared `Content-Length`
+//! over the group's cap answers `413` whatever its origin, as on the TS
+//! spine), with `client_ip_middleware` innermost. The order, the defaults,
+//! and the opt-outs are [`stack`]'s module doc.
 //!
 //! ## `RouteSpec` / `AppSurface` intentionally absent
 //!
 //! `fuz_app`'s data-driven `RouteSpec` doesn't port to Rust. `axum`'s
 //! `Router` + typed extractors achieve the declarative shape natively.
-//! `AppSurface` (runtime route-walker) is deferred — no Rust consumer
-//! needs runtime surface introspection today; revisit when one does.
+//! `AppSurface` (runtime route-walker) has no Rust twin; no Rust consumer
+//! needs runtime surface introspection.
 
 // === trusted proxy + IP ===
 pub mod ip_canonical;

@@ -94,15 +94,16 @@ untracked file will do), build, then remove the file.
 ## Build and verification
 
 `create_artifact`'s rustdoc lists the steps: validate and hash the source
-binaries before copying (opened `O_NOFOLLOW`, a regular file, 1 KB–100 MB, and
-a header `fuz_artifact::platform::inspect_binary` places on the build's target,
-the `rustc -vV` host triple — ./release_format.md § Binary platform); adopt a valid artifact already at the hash; otherwise copy
-into a `0700` temp dir (`.building-<random>` or `.bootstrapping-<random>`),
-re-hash the copies, write `meta.json`, rename to `v1-<content_hash>/`, chmod
-`0755`, and fsync the parent. Any failure cleans the temp dir — no partial
-artifact is left. Crash-leaked temp dirs are swept by `cleanup_incomplete()`
-**under the artifact lock** (an unlocked sweep would delete a concurrent build's
-live dir) at the start of `fuz artifact build` and `fuz self bootstrap`.
+binaries before copying (opened `O_NOFOLLOW`, a regular file, 1 KB–100 MB, and a
+header `fuz_artifact::platform::inspect_binary` places on the build's target,
+the `rustc -vV` host triple — ./release_format.md § Binary platform); adopt a
+valid artifact already at the hash; otherwise copy into a `0700` temp dir
+(`.building-<random>` or `.bootstrapping-<random>`), re-hash the copies, write
+`meta.json`, rename to `v1-<content_hash>/`, chmod `0755`, and fsync the parent.
+Any failure cleans the temp dir — no partial artifact is left. Crash-leaked temp
+dirs are swept by `cleanup_incomplete()` **under the artifact lock** (an
+unlocked sweep would delete a concurrent build's live dir) at the start of
+`fuz artifact build` and `fuz self bootstrap`.
 
 When the target already exists: a symlink or file there is never adopted (the
 entry is unlinked, never its target); a valid artifact with the matching hash is
@@ -118,20 +119,19 @@ never guess where cargo put a binary: they run `cargo build --release
 `build.target-dir`, and a build target move nothing out from under them. A
 build for another target (`CARGO_BUILD_TARGET`, or a `build.target` in any
 cargo config) is refused after it builds, before anything is stored or
-installed: each binary's header is held to the host's target
-(`fuz_artifact::check_built_for`, with the target not named, so a static
-binary on a glibc host is refused as the musl build it most likely is — a
-static glibc build, `+crt-static` in `RUSTFLAGS`, is refused with it). Each
-cargo run builds one package: cargo unifies features across the packages of a
-run, so `-p fuz -p fuzd` would link a `fuz` no `-p fuz` build reproduces. A
-cache hit skips the build and the check; the input hash does not cover the
-cargo build target, so a set `CARGO_BUILD_TARGET` with a hit installs the
-cached host build.
+installed: each binary's header is held to the host's target, unnamed
+(`fuz_artifact::check_built_for`; ./release_format.md § Binary platform), so a
+static binary — a musl build, or a static glibc build (`+crt-static` in
+`RUSTFLAGS`) — is refused. Each cargo run builds one package: cargo unifies
+features across the packages of a run, so `-p fuz -p fuzd` would link a `fuz`
+no `-p fuz` build reproduces. A cache hit skips the build and the check; the
+input hash does not cover the cargo build target, so a set
+`CARGO_BUILD_TARGET` with a hit installs the cached host build.
 
 **Verification** re-hashes the binaries against `outputs` before every switch —
 `fuz artifact build` / `use`, `fuz self upgrade`, and `cargo xtask install`, all
-through `fuz_artifact::switch_to_artifact`. (`fuz self bootstrap` activates bytes
-`create_artifact` just re-hashed.) `fuz artifact verify [hash]` runs it
+through `fuz_artifact::switch_to_artifact`. (`fuz self bootstrap` activates
+bytes `create_artifact` just re-hashed.) `fuz artifact verify [hash]` runs it
 explicitly. It detects disk corruption, accidental modification, and tampering
 by anything other than a same-user attacker.
 
@@ -150,7 +150,8 @@ recursive) are `fuz_sys::file_lock`'s rustdoc.
 
 - The outer command acquires once and passes the guard down as a witness
   (`switch_to_artifact(opts, &lock)`).
-- `prune --wetrun` takes the lock before listing the store; the dry run takes none.
+- `prune --wetrun` takes the lock before listing the store; the dry run takes
+  none.
 - `fuz self upgrade` downloads before it takes the lock, so a prune in that
   window that drops the just-extracted artifact makes the switch fail (exit 1,
   nothing activated; a retry downloads again).
@@ -210,10 +211,9 @@ The stores are `0700`, so this is same-user hygiene, not a privilege boundary.
 **An unreadable current install** (`current` outside its store, a link or file
 at the install it names, a corrupt `meta.json`):
 
-- `fuz self upgrade` and `fuz tool install` / `upgrade` refuse it ("current
-  install is unreadable", exit 1, a hint naming `--force`) before any download.
-  `--force` reclaims the slot and installs fresh, with no rollback target or
-  "from" version recorded.
+- `fuz self upgrade` and `fuz tool install` / `upgrade` refuse it before any
+  download (exit 1; ./release_format.md § Unreadable current install);
+  `--force` installs fresh, recording no rollback target or "from" version.
 - Every other reader fails and changes nothing (exit 65 for
   `StoreEntryNotDir` / `CurrentNotStoreLink`); `fuz tool list` leaves the tool
   out.

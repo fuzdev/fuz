@@ -65,8 +65,8 @@ reinstall-from-scratch.
 
 `signed_at` sits outside the signed bytes and signatures never expire; staleness
 is handled by no-downgrade and log revocation. Making a timestamp trustworthy
-means moving it into the signed bytes, which breaks every signature. **Revisit when** a concrete time-boxed-validity use case
-appears.
+means moving it into the signed bytes, which breaks every signature. **Revisit
+when** a concrete time-boxed-validity use case appears.
 
 ### Multi-source key publication
 
@@ -105,26 +105,26 @@ authenticity.
 
 ### fuzi no-exec enforcement (seccomp)
 
-fuzi runs no package code by construction (no lifecycle scripts, no
-compilation; the static guards are clippy `disallowed_types` /
-`disallowed_methods` in the fuzi crates' `clippy.toml` and the text scan in
-`crates/fuzi_core/tests/exec_free.rs`). A
-seccomp filter would make that hold even through a bug: a regression adding a
-spawn, a compromised dependency, or a crafted tarball exploiting the parse path
-— sha512 proves bytes match the lock, not that they're safe to parse. Design:
-`KillProcess` on `execve`/`execveat`/`ptrace`/`fork`/`vfork`, with
-`clone`/`clone3` allowed (glibc threads use `clone3`; a fork-shaped child
-inherits the filter), installed at the top of `main()`; a full syscall
-allowlist later. Linux-only; needs `seccompiler`. **First in line** once fuzi
-installs lockfiles the user didn't write.
+fuzi runs no package code by construction (no lifecycle scripts, no compilation;
+the static guards are clippy `disallowed_types` / `disallowed_methods` in the
+fuzi crates' `clippy.toml` and the text scan in
+`crates/fuzi_core/tests/exec_free.rs`). A seccomp filter would make that hold
+even through a bug: a regression adding a spawn, a compromised dependency, or a
+crafted tarball exploiting the parse path — sha512 proves bytes match the lock,
+not that they're safe to parse. Design: `KillProcess` on
+`execve`/`execveat`/`ptrace`/`fork`/`vfork`, with `clone`/`clone3` allowed
+(glibc threads use `clone3`; a fork-shaped child inherits the filter), installed
+at the top of `main()`; a full syscall allowlist later. Linux-only; needs
+`seccompiler`. **First in line** once fuzi installs lockfiles the user didn't
+write.
 
 ### fuzi tarball entry-count cap
 
 `safe_extract` caps bytes but not entries, and an empty entry costs one 512 B
-header, so about two million empty files fit under fuzi's 1 GiB total cap — an inode-exhaustion DoS
-that cleans up on failure, not on success. Exploiting it needs a lockfile whose
-`integrity` matches the crafted tarball. Fix: `ExtractLimits::max_entries`.
-**Lands with** the seccomp filter.
+header, so about two million empty files fit under fuzi's 1 GiB total cap — an
+inode-exhaustion DoS that cleans up on failure, not on success. Exploiting it
+needs a lockfile whose `integrity` matches the crafted tarball. Fix:
+`ExtractLimits::max_entries`. **Lands with** the seccomp filter.
 
 ### Daemon sandboxing
 
@@ -156,9 +156,9 @@ credential-deadline closes — are ./crates.md (§ Spine cross-crate rules and t
 - **Rate limiting failed-auth upgrades** — a refused upgrade costs a credential
   lookup and counts against no limiter.
 - **TCP keepalive** — none on accepted sockets, so a quiet SSE stream whose peer
-  vanished without a FIN is held until a write waits or the cap supersedes it
-  (a WebSocket closes on its
-  receive timeout; an idle HTTP connection at `HEADER_READ_TIMEOUT`).
+  vanished without a FIN is held until a write waits or the cap supersedes it (a
+  WebSocket closes on its receive timeout; an idle HTTP connection at
+  `HEADER_READ_TIMEOUT`).
 - **Throughput floors** — the HTTP write-progress deadline restarts on any byte,
   and the WebSocket write deadline is per frame, so a client trickling just
   inside them holds its response or loop indefinitely.
@@ -173,8 +173,8 @@ credential-deadline closes — are ./crates.md (§ Spine cross-crate rules and t
 - **A bound on pending registrations** — a connection awaiting admission is
   outside the cap for one credential re-read.
 - **A role that ends without a revocation row** — a grant reaching `expires_at`,
-  or a `role_grant` / `actor` row deleted outside the grant verbs, writes no row,
-  so a socket admitted on it keeps receiving the endpoint's broadcasts.
+  or a `role_grant` / `actor` row deleted outside the grant verbs, writes no
+  row, so a socket admitted on it keeps receiving the endpoint's broadcasts.
 - **An exact re-check for an any-of role gate** — losing any listed role closes
   the account's sockets there, even if it holds another.
 - **Telling an evicted SSE stream why** — it ends with no frame, so a browser
@@ -187,13 +187,13 @@ credential-deadline closes — are ./crates.md (§ Spine cross-crate rules and t
 
 - **A request-body deadline** — once the head is in, nothing times the body, so
   a client declaring a body and never sending it holds a connection and handler,
-  unauthenticated on `/login`, `/signup`, `/bootstrap`. The fix belongs where the
-  body is buffered, not on the socket.
+  unauthenticated on `/login`, `/signup`, `/bootstrap`. The fix belongs where
+  the body is buffered, not on the socket.
 - **A lingering close after an early response** — a response sent before the
   body was read (a 413) closes with the rest unread, which the kernel turns into
   a reset the client may see instead of the status (nginx's `lingering_close`).
-- **A global or per-IP connection cap**, and **a request-rate or lifetime bound**
-  on keep-alive connections.
+- **A global or per-IP connection cap**, and **a request-rate or lifetime
+  bound** on keep-alive connections.
 
 **Revisit when** a spine server is exposed without a reverse proxy; behind nginx
 the proxy's own timeouts and limits face the client.
@@ -219,8 +219,8 @@ network, or `audit_log` needs pruning.
 - **A `__Host-` cookie prefix** — the default `fuz_session` name has none, so a
   sibling subdomain can plant one; the name is the consumer's to pass, and the
   default is a wire value both twins share.
-- **The `Host` gate and simple-request layer are opt-in** per consumer.
+- **The simple-request layer is opt-in** per route group, and the `Host` gate
+  can be turned off (`StackOptions::host_gate`).
 
-**Revisit when** concurrent logins per account matter, a consumer serves sibling
-subdomains it doesn't control, or a spine server is exposed beyond a trusted
-network.
+**Revisit when** a consumer serves sibling subdomains it doesn't control, or a
+spine server is exposed beyond a trusted network.

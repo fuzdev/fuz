@@ -51,8 +51,7 @@ cargo xtask publish tool fuzd target/release/fuzd --version 0.3.0 --storage /pat
 Add `--log-repo <clone>` to either to record the release in the release log
 (./release_log.md), and `--target <triple>` to label it with a supported target
 other than the publisher's own (./release_format.md § Release Manifest). **Other
-tools** (zap, zzz, tsv, fuzfd, …) publish with the
-forge client in steady state:
+tools** (zap, zzz, tsv, fuzfd, …) publish with the forge client in steady state:
 
 ```bash
 fuzf tool publish zap path/to/zap --version 0.1.0 [--minimum-version 0.1.0] [--target <triple>]
@@ -87,8 +86,8 @@ target), so a self release for another target needs that target's `fuz`
 installed as `current` first.
 
 No credentials file: `forge://` takes the forge bearer token, `ssh://` the
-ambient ssh agent or key (./storage_backends.md). A read-only `https://` store
-is refused before the key is loaded.
+ambient ssh agent or key, and a read-only `https://` store is refused before
+the key is loaded (./storage_backends.md).
 
 What every publish (`fuz_sign::publish_*`) does, in order:
 
@@ -118,9 +117,9 @@ A landed self release is `fuz-<version>-<target>.tar.gz` and `.manifest.json`,
 
 `cargo xtask prune --storage <uri> [--tool <name>] [--keep N]` removes a
 stream's releases past the newest `N` versions (default 5), always keeping the
-version each `latest-<target>.json` names. It is a dry run unless `--wetrun`, and the dry run
-lists every key it would delete. It deletes only keys it derives from a
-release: the manifest the listing found, the tarball
+version each `latest-<target>.json` names. It is a dry run unless `--wetrun`,
+and the dry run lists every key it would delete. It deletes only keys it derives
+from a release: the manifest the listing found, the tarball
 `<name>-<version>-<target>.tar.gz`, and for a self release the flat binary
 `fuz-<version>-<target>` and its `.sha512` sidecar. The moving
 `fuz-latest-<target>` copy is never deleted.
@@ -133,11 +132,11 @@ the rest of its release, if the release is to go), and run the prune again.
 After an interrupted wet run, run it again with the same `--keep`: each
 release's manifest is deleted last, so the re-run finishes what it started.
 
-Prune reads no release log. After a revoke has moved the log's `latest/`
-pointer to an older release, publish the fixed release first (it moves
-the latest pointer and the log's `latest/` together), or raise `--keep` until the
-dry run no longer lists the version the log's `latest/` names: `install.sh`
-with `FUZ_RELEASE_LOG_URL` set downloads the flat binary that pointer names.
+Prune reads no release log. After a revoke has moved the log's `latest/` pointer
+to an older release, publish the fixed release first (it moves the latest
+pointer and the log's `latest/` together), or raise `--keep` until the dry run
+no longer lists the version the log's `latest/` names: `install.sh` with
+`FUZ_RELEASE_LOG_URL` set downloads the flat binary that pointer names.
 
 ## Security Releases
 

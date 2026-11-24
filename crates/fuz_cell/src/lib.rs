@@ -34,10 +34,10 @@
 //! ## Current scope
 //!
 //! Storage + authz for the cell primitive: a single `cell` table (+ the
-//! `cell_grant` / `cell_field` / `cell_item` siblings), CRUD +
-//! relation + audit queries, the `can_view` /
-//! `can_edit` / `can_manage` predicates (admin ‖ owner ‖ grant-admit
-//! [scope-matched] + public reads for view), the view predicate's SQL form
+//! `cell_grant` / `cell_field` / `cell_item` siblings), CRUD + relation +
+//! audit queries, the `can_view` / `can_edit` predicates (admin ‖ owner ‖
+//! grant-admit [scope-matched], + public reads for view) and `can_manage`
+//! (admin ‖ owner), the view predicate's SQL form
 //! ([`cell_view_sql`], which the relation lists and `cell_list` apply before
 //! their limit), and [`filter_visible_targets`] (the strict relation-read
 //! filter the `cell_get` bundle and the clone walk compose). The RPC verbs

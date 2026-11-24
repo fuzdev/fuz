@@ -17,10 +17,10 @@ Two trust models for two kinds of user:
   embedded public key, install. Trusting the first binary means trusting every
   future release signed by its embedded key.
 
-**Unsigned text.** A `latest-<target>.json` pointer, a manifest before verification, forge
-bodies, `ssh` stderr, and a head that doesn't verify are attacker-controlled;
-every error escapes and bounds what it repeats (./crates.md § Error rendering),
-and `scripts/install.sh` prints them as printable ASCII.
+**Unsigned text.** A `latest-<target>.json` pointer, a manifest before
+verification, forge bodies, `ssh` stderr, and a head that doesn't verify are
+attacker-controlled; every error escapes and bounds what it repeats (./crates.md
+§ Error rendering), and `scripts/install.sh` prints them as printable ASCII.
 
 ## First Binary Bootstrap
 
@@ -131,9 +131,9 @@ key; they don't check the signature. To check it by hand, verify the ed25519
 `signature.sig` over `fuz-manifest-v1`, a NUL byte, then the manifest's
 canonical JSON without its `signature` field (./signing.md § Signed Bytes). Or
 let a `fuz` you already trust do it: with the files in one directory,
-`fuz self upgrade --storage . --check` verifies the signed manifest `latest-<target>.json`
-names for this machine and installs nothing — exit 0 or 10 means it verified
-(`--json` reports `verified: true`).
+`fuz self upgrade --storage . --check` verifies the signed manifest
+`latest-<target>.json` names for this machine and installs nothing — exit 0 or
+10 means it verified (`--json` reports `verified: true`).
 
 ## Local `~/.fuz` Integrity
 

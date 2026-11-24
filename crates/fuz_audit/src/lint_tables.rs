@@ -174,8 +174,9 @@ struct OpenSubTable {
 /// Returns a [`LintShapeError`] for any shape under a lint header the reader
 /// doesn't understand (see the module docs), a repeated lint or header, a
 /// level Cargo doesn't accept, a lint key set outside a `[<prefix>.<tool>]`
-/// header, both `[lints] workspace = true` and `[lints.<tool>]` tables, an
-/// unclosed string, or a multi-line string open at the end of the file.
+/// header, `[lints] workspace = ` anything but `true`, both
+/// `[lints] workspace = true` and `[lints.<tool>]` tables, an unclosed string,
+/// or a multi-line string open at the end of the file.
 pub fn read_lints(text: &str, scope: LintScope) -> Result<ManifestLints, LintShapeError> {
     let prefix = scope.prefix();
     let mut tables: Option<LintTables> = None;

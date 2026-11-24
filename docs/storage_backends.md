@@ -46,9 +46,9 @@ URI, anything else a path; a leading `~` expands against `fuz_sys::home_dir`
   held to `validate_list_prefix`. A version with semver build metadata (`+…`)
   can't be part of a key, so a publish refuses it up front.
 - **Errors** — a `StorageError` keeps outside strings as given (a key built from
-  an unsigned latest pointer, a forge body, `ssh`'s stderr) and its message shows
-  each bounded and escaped; a failed transfer's text is shown whole to 2 KiB,
-  past that from both ends.
+  an unsigned latest pointer, a forge body, `ssh`'s stderr) and its message
+  shows each bounded and escaped; a failed transfer's text is shown whole to 2
+  KiB, past that from both ends.
 - **Buffered vs streaming** — `upload` / `download` for small keys (manifests,
   latest pointers, sidecars); `upload_file` / `download_to_file` stream with
   `O(chunk)` memory for tarballs. Both streaming methods and `download_capped`
@@ -172,6 +172,6 @@ self-hosted path is `forge://` (auth-gated).
 ## Concurrency
 
 **Single publisher assumed.** There's no compare-and-swap, so concurrent
-publishes of one target race on its `latest-<target>.json` (last writer wins
-on `FileStorage`; a forge would need a conditional write, SSH a lock). Don't run publishes concurrently;
-CI should serialize releases.
+publishes of one target race on its `latest-<target>.json` (last writer wins on
+`FileStorage`; a forge would need a conditional write, SSH a lock). Don't run
+publishes concurrently; CI should serialize releases.

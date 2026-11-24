@@ -40,8 +40,8 @@ directory design stabilizes.
 **For type-safe routing.** Proc-macro to generate method routing from trait
 definitions.
 
-**Why deferred**: The hand-written dispatch `match` is clear at its current size.
-Proc-macro adds compile-time complexity and makes debugging harder.
+**Why deferred**: The hand-written dispatch `match` is clear at its current
+size. Proc-macro adds compile-time complexity and makes debugging harder.
 
 **Revisit when**: the request kinds reach about 30, or routing errors become
 common.
