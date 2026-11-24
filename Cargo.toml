@@ -80,7 +80,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 parking_lot = "0.12"
 # Bounded LRU backing for the in-memory `RateLimiter` (caps tracked keys under
 # key-enumeration attack). Twin of fuz_app's `LruMap`-backed limiter.
-lru = "0.18.3"
+lru = "0.19.2"
 futures = "0.3"
 tokio-util = { version = "0.7", features = ["codec", "time", "rt"] }
 subtle = "2"
