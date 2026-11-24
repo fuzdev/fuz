@@ -27,9 +27,10 @@ AI disclosure: this codebase is LLM-generated with uneven human review.
 ## Usage
 
 There is no release channel, so building from source is the only way to install.
-It needs Linux, git, and rustup:
+It needs Linux, git, rustup, and a pglet checkout beside fuz (the test harness path-depends on it, and Cargo loads it for any build):
 
 ```bash
+git clone https://github.com/fuzdev/pglet
 git clone https://github.com/fuzdev/fuz && cd fuz
 cargo xtask install              # build fuz + fuzd, install them into ~/.fuz, (re)start the daemon
 cargo build --release -p fuzi    # optional, builds target/release/fuzi
