@@ -7,7 +7,8 @@
 //!    pooled client, keyed by a djb2 hash of the namespace name's UTF-8
 //!    bytes as a `bigint` — the key the TS twin's transaction-scoped
 //!    `pg_advisory_xact_lock` takes, so the two spines serialize against
-//!    each other. A lock that fails fails the run.
+//!    each other. A lock that fails fails the run, naming the namespace
+//!    ([`MigrationError::LockFailed`]).
 //! 3. Read applied rows ordered by `sequence`. **Length-check before
 //!    name-verify** — a binary-older case with a rename in the overlap
 //!    would otherwise fire `name-divergence-at-N` first and the operator
@@ -74,10 +75,11 @@ fn namespace_lock_key(namespace: &str) -> i64 {
 ///
 /// The lock is bound as `i64`: `pg_advisory_lock($1)` resolves to the
 /// `bigint` overload, which an `i32` parameter fails to bind. A failed lock
-/// fails the run, since the lock is what serializes concurrent boots. A
-/// failed unlock detaches the client from the pool, so its connection
-/// closes and the session's lock goes with it rather than staying held on
-/// an idle pooled client; the run's own error wins over the unlock's.
+/// fails the run with [`MigrationError::LockFailed`], since the lock is what
+/// serializes concurrent boots. A failed unlock detaches the client from the
+/// pool, so its connection closes and the session's lock goes with it rather
+/// than staying held on an idle pooled client; the run's own error wins over
+/// the unlock's.
 /// Cancelling the future while the lock is held returns the client to the
 /// pool still holding it; callers run it to completion.
 async fn with_namespace_lock<T>(
@@ -88,7 +90,11 @@ async fn with_namespace_lock<T>(
     let key = namespace_lock_key(namespace);
     client
         .execute("SELECT pg_advisory_lock($1)", &[&key])
-        .await?;
+        .await
+        .map_err(|source| MigrationError::LockFailed {
+            namespace: namespace.to_owned(),
+            source,
+        })?;
     let outcome = locked(&mut client).await;
     match client
         .execute("SELECT pg_advisory_unlock($1)", &[&key])
@@ -141,12 +147,20 @@ pub fn assert_migration_namespaces(namespaces: &[MigrationNamespace]) -> Result<
 ///   than the code knows, [`Divergence::NameMismatch`](crate::Divergence::NameMismatch)
 ///   (`name-divergence-at-N`) when an applied name doesn't match the
 ///   corresponding code-side name.
+/// - [`MigrationError::LockFailed`] (`migration-lock-failed`) when taking a
+///   namespace's advisory lock fails; the driver error is its source.
 /// - [`MigrationError::Failed`] (`migration-failed`) when a DDL body errors
 ///   during the chain transaction.
 ///
 /// Otherwise:
 /// - [`DbError::PoolGet`] / [`DbError::Postgres`] for driver-level
 ///   failures.
+///
+/// A failed advisory unlock after a namespace's chain committed also returns
+/// [`DbError::Postgres`], so the caller sees a failed run although that
+/// namespace's migrations landed (later namespaces did not run). That is
+/// safe: the unlock's connection is closed, releasing the lock, and a re-run
+/// finds that namespace applied and goes on to the rest.
 pub async fn run_migrations(
     pool: &Pool,
     namespaces: &[MigrationNamespace],
@@ -302,8 +316,9 @@ async fn run_one_migration(
 ///   [`run_migrations`].
 /// - [`DbError::Migration`] carrying [`MigrationError::BaselineNameNotInCode`],
 ///   [`MigrationError::BaselineNameOutOfOrder`],
-///   [`MigrationError::BaselineNamespacePopulated`], or
-///   [`MigrationError::BaselineTooManyNames`].
+///   [`MigrationError::BaselineNamespacePopulated`],
+///   [`MigrationError::BaselineTooManyNames`], or
+///   [`MigrationError::LockFailed`] (as in [`run_migrations`]).
 /// - Pool / driver errors as elsewhere.
 pub async fn baseline(
     pool: &Pool,

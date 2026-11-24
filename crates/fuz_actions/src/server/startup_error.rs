@@ -108,10 +108,11 @@ impl StartupError {
     ///
     /// A database error gets the connectivity hint only when reaching the
     /// database is what failed — before a migration or during one: a
-    /// migration whose driver error carries no SQLSTATE lost its connection
-    /// rather than ran a bad body, which the server would have answered with
-    /// a code. A migration refusal's own message carries its remedy (a binary
-    /// older than the database, a name divergence, a failed body), where the
+    /// migration or a namespace lock whose driver error carries no SQLSTATE
+    /// lost its connection rather than ran a bad body or hit a timeout, which
+    /// the server would have answered with a code. A migration refusal's own
+    /// message carries its remedy (a binary older than the database, a name
+    /// divergence, a failed body or lock), where the
     /// connectivity hint would mislead an operator who has rolled back; an
     /// invalid identifier or an aborted transaction is a code defect.
     #[must_use]
@@ -125,10 +126,10 @@ impl StartupError {
                 | fuz_db::DbError::PoolGet(_)
                 | fuz_db::DbError::Postgres(_),
             ) => Some(CONNECTIVITY),
-            Self::Database(fuz_db::DbError::Migration(fuz_db::MigrationError::Failed {
-                source,
-                ..
-            })) if source.code().is_none() => Some(CONNECTIVITY),
+            Self::Database(fuz_db::DbError::Migration(
+                fuz_db::MigrationError::Failed { source, .. }
+                | fuz_db::MigrationError::LockFailed { source, .. },
+            )) if source.code().is_none() => Some(CONNECTIVITY),
             Self::Bind { .. } => {
                 Some("another process may hold the port; set PORT to move the server")
             }
@@ -292,6 +293,24 @@ mod tests {
                 index: 0,
                 source,
             }));
+        assert!(error.hint().is_some_and(|h| h.contains("DATABASE_URL")));
+    }
+
+    #[tokio::test]
+    async fn a_namespace_lock_that_lost_its_connection_gets_the_connectivity_hint() {
+        // as a lost migration: no SQLSTATE means the lock statement never
+        // reached a server that could answer it
+        let source = tokio_postgres::connect("host=127.0.0.1 port=1", tokio_postgres::NoTls)
+            .await
+            .err()
+            .expect("nothing listens on port 1");
+        assert_eq!(source.code(), None);
+        let error = StartupError::Database(fuz_db::DbError::Migration(
+            fuz_db::MigrationError::LockFailed {
+                namespace: "app".to_owned(),
+                source,
+            },
+        ));
         assert!(error.hint().is_some_and(|h| h.contains("DATABASE_URL")));
     }
 

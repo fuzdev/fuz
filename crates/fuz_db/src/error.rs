@@ -43,7 +43,8 @@ pub enum DbError {
     /// The text renders the [`MigrationError`] whole, a driver failure's
     /// message included, so it is not a `source`: an error-chain printer
     /// would print the migration error twice. Match the variant to reach it
-    /// (and through [`MigrationError::Failed`], the driver error).
+    /// (and through [`MigrationError::Failed`] or
+    /// [`MigrationError::LockFailed`], the driver error and its SQLSTATE).
     #[error("migration error: {0}")]
     Migration(MigrationError),
 
@@ -112,6 +113,24 @@ pub enum MigrationError {
         namespace: String,
         name: String,
         index: usize,
+        #[source]
+        source: tokio_postgres::Error,
+    },
+
+    /// Taking `namespace`'s advisory lock failed, so nothing in it ran and
+    /// the run stopped there. The source is the driver error, which keeps its
+    /// SQLSTATE (`57014` for a cancel or a `statement_timeout`, `55P03` for a
+    /// `lock_timeout`).
+    ///
+    /// The text already includes the driver error; reach it by matching this
+    /// variant, not by walking `source()` from a [`DbError`].
+    #[error(
+        "migration-lock-failed: namespace \"{namespace}\" could not take its advisory lock: \
+         {source}. Hint: nothing in this namespace was applied; check the connection and any \
+         `lock_timeout` or `statement_timeout` set for the role or database, then retry."
+    )]
+    LockFailed {
+        namespace: String,
         #[source]
         source: tokio_postgres::Error,
     },
@@ -280,6 +299,32 @@ mod tests {
                  the migration body and retry; the chain is left at the prior committed version."
             )
         );
+    }
+
+    /// `LockFailed` names its namespace around the driver's own message and
+    /// keeps the driver error as its source.
+    #[tokio::test]
+    async fn a_failed_lock_renders_its_namespace_and_driver_text() {
+        let source = tokio_postgres::connect("host=127.0.0.1 port=1", tokio_postgres::NoTls)
+            .await
+            .err()
+            .expect("nothing listens on port 1");
+        let driver = source.to_string();
+        let err = MigrationError::LockFailed {
+            namespace: "app".to_owned(),
+            source,
+        };
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "migration-lock-failed: namespace \"app\" could not take its advisory lock: \
+                 {driver}. Hint: nothing in this namespace was applied; check the connection and \
+                 any `lock_timeout` or `statement_timeout` set for the role or database, then \
+                 retry."
+            )
+        );
+        let source = std::error::Error::source(&err).expect("the driver error is the source");
+        assert!(source.downcast_ref::<tokio_postgres::Error>().is_some());
     }
 
     #[test]

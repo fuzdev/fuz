@@ -711,6 +711,103 @@ async fn migration_waits_on_the_ts_twins_namespace_lock() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL with fuz_db_test database"]
+async fn a_failed_namespace_lock_names_the_namespace_and_keeps_its_sqlstate() {
+    // The runner waits on a lock held here until an observer cancels its
+    // wait, failing the lock statement with `57014`. The run fails naming
+    // the namespace, with the driver error (and its code) as the source.
+    const NAMESPACE: &str = "fuz_db_test_lock_fail";
+    // djb2 of the namespace, sign-extended (`namespace_lock_key`).
+    const KEY: i64 = -1_425_701_535;
+    let pool = build_pool();
+    clean(&pool, &["lock_fail_test"], &[NAMESPACE]).await;
+
+    let mut holder = pool.get().await.expect("holder: pool get");
+    let tx = holder.transaction().await.expect("holder: begin");
+    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&KEY])
+        .await
+        .expect("holder: lock");
+
+    const MIGRATIONS: &[Migration] = &[Migration {
+        name: "create_lock_fail",
+        sql: "CREATE TABLE lock_fail_test (id INT)",
+    }];
+    let runner_pool = pool.clone();
+    let runner = tokio::spawn(async move {
+        run_migrations(
+            &runner_pool,
+            &[MigrationNamespace::new(NAMESPACE, MIGRATIONS)],
+        )
+        .await
+    });
+
+    let observer = pool.get().await.expect("observer: pool get");
+    let mut cancelled = false;
+    for _ in 0..200 {
+        let row = observer
+            .query_one(
+                "SELECT count(pg_cancel_backend(pid)) FROM pg_locks
+                 WHERE locktype = 'advisory' AND NOT granted
+                   AND classid = (($1::bigint >> 32) & 4294967295)::oid
+                   AND objid = ($1::bigint & 4294967295)::oid
+                   AND objsubid = 1",
+                &[&KEY],
+            )
+            .await
+            .expect("observer: cancel the waiter");
+        if row.get::<_, i64>(0) > 0 {
+            cancelled = true;
+            break;
+        }
+        assert!(
+            !runner.is_finished(),
+            "the runner finished while the lock was held"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(cancelled, "the runner never waited on the namespace's lock");
+
+    let err = runner
+        .await
+        .unwrap()
+        .expect_err("a cancelled lock fails the run");
+    let DbError::Migration(migration_err) = err else {
+        panic!("expected a migration error, got {err:?}");
+    };
+    assert_eq!(sqlstate_in_chain(&migration_err), Some("57014"));
+    let MigrationError::LockFailed { namespace, source } = &migration_err else {
+        panic!("expected LockFailed, got {migration_err:?}");
+    };
+    assert_eq!(namespace, NAMESPACE);
+    assert_eq!(
+        source.code(),
+        Some(&tokio_postgres::error::SqlState::QUERY_CANCELED)
+    );
+    assert!(
+        migration_err
+            .to_string()
+            .starts_with("migration-lock-failed: namespace \"fuz_db_test_lock_fail\""),
+        "{migration_err}"
+    );
+
+    tx.commit().await.expect("holder: commit");
+    drop(observer);
+    drop(holder);
+    // nothing ran: the namespace has no rows and the table was never created
+    let client = pool.get().await.expect("check: pool get");
+    let rows = client
+        .query(
+            "SELECT 1 FROM schema_version WHERE namespace = $1",
+            &[&NAMESPACE],
+        )
+        .await
+        .expect("check: tracker rows");
+    assert!(rows.is_empty());
+    drop(client);
+    clean(&pool, &["lock_fail_test"], &[NAMESPACE]).await;
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL with fuz_db_test database"]
 async fn pg_error_classification_unique_violation() {
     let pool = build_pool();
     clean(&pool, &["pg_err_uniq"], &[]).await;

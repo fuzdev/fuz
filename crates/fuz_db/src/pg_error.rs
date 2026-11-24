@@ -67,7 +67,8 @@ pub fn is_pg_unique_violation(error: &tokio_postgres::Error) -> bool {
 ///
 /// The chain is `error` itself, then each `source()`. `None` when no link is
 /// a driver error, or the first one carries no code (a connection, timeout,
-/// or decode failure).
+/// or decode failure). A [`crate::DbError::Migration`] is not a link: its
+/// driver error is reached by matching the variant.
 ///
 /// For logs: a `tokio_postgres::Error`'s `Display` and the chain's rendered
 /// text omit the code, and a wrapper (`DbError`, a pool error, a store error)
