@@ -215,10 +215,10 @@ pub struct OfferCreateAuthorizeInput {
 /// `scope_id`'s lock shared
 /// ([`crate::role_grant_offer_queries::query_scope_lock_shared`]) before
 /// calling it, so a scope-existence read sees every teardown that committed
-/// first — under READ COMMITTED, where each statement takes a fresh snapshot;
-/// under REPEATABLE READ the snapshot predates the lock's wait and the read
-/// would miss it — and a teardown still to come waits for the request to
-/// commit. That holds only for a consumer teardown that goes through
+/// first (READ COMMITTED's per-statement snapshot, which the server's boot
+/// guard, `ensure_read_committed`, holds the database to) and a teardown
+/// still to come waits for the request to commit. That holds only for a
+/// consumer teardown that goes through
 /// [`crate::role_grant_offer_queries::query_role_grant_revoke_for_scope`]
 /// before it removes the scope row, or takes
 /// [`crate::role_grant_offer_queries::query_scope_lock_exclusive`] first; one

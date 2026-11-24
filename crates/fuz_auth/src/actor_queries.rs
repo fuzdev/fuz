@@ -615,8 +615,9 @@ pub async fn query_account_has_active_global_role(
 /// the next account's. [`crate::account_queries::query_account_lock_live_many`]
 /// and [`crate::account_queries::query_account_lock_for_offer_accept`] take
 /// account rows in the same order, so an offer, an assign or an accept between
-/// two admins and an admin's removal never wait on each other's rows in opposite orders. Ids
-/// never change, so no concurrent update can move a row the sort has placed.
+/// two admins and an admin's removal never wait on each other's rows in
+/// opposite orders. Ids never change, so no concurrent update can move a row
+/// the sort has placed.
 ///
 /// `exclude_role_grant_id` leaves one grant out of the count, so a revoke asks
 /// whether any active admin account would remain without that grant — an
@@ -776,10 +777,10 @@ pub(crate) async fn revoke_expired_role_grant_slot(
 /// ([`crate::role_grant_offer_queries::query_role_grant_revoke_for_scope`]) in
 /// flight is waited for, and one that starts after it waits for this
 /// transaction and then revokes the grant. Run it inside the caller's
-/// transaction, holding no row (a scope it created itself and has not committed aside)
-/// unless the transaction already holds this scope's lock (the lock's rule; a
-/// re-take is free); a caller that judged the scope live takes the lock before
-/// that read.
+/// transaction, holding no row (a scope it created itself and has not
+/// committed aside) unless the transaction already holds this scope's lock
+/// (the lock's rule; a re-take is free); a caller that judged the scope live
+/// takes the lock before that read.
 ///
 /// # Errors
 ///

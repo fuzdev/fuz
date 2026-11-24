@@ -27,8 +27,8 @@
 //! applied. The `(namespace, name)` PK on `schema_version` only keeps a
 //! migration from recording twice; without the lock, two chains running
 //! at once collide on their own DDL and the loser's boot fails. The
-//! `schema_version` DDL runs before the lock, so its race is tolerated
-//! where it runs.
+//! `schema_version` DDL runs before the lock and tolerates a concurrent
+//! boot creating the table (`23505`, `42P07`, `42710`).
 //!
 //! **Atomicity**: any failure rolls back every migration that ran in
 //! that invocation. Namespaces are independent: a later namespace's

@@ -617,8 +617,8 @@ The rules a change must keep:
   (`fuz_testing`'s fixtures insert uncapped rows directly).
 - **A credential is minted under the account's row lock.** Login and
   `account_token_create` run first, in their mint transaction, a
-  `FOR NO KEY UPDATE` re-check of the account (`query_account_lock_verified`: live and still the
-  hash that was verified; `query_account_lock_live`, then
+  `FOR NO KEY UPDATE` re-check of the account (`query_account_lock_verified`:
+  live and still the hash that was verified; `query_account_lock_live`, then
   `query_session_is_live` for the session that authorized the token). A
   password change and a delete write the account row before they revoke, so
   a mint in flight across either waits and is refused — the login exactly as
@@ -636,18 +636,18 @@ The rules a change must keep:
 - **Every writer of an account takes its row first.** A mint and a password
   change do it through their first lock or write, `self_service_role_set`
   through `query_account_lock_live` (a toggle on a removed account is the
-  dead credential's 401); a delete after its
-  last-admin guard (`query_account_lock_live`, then the guards again — never
-  before the guard, which an admin target's row is locked within in id
-  order); a revoke
-  takes its revokee's (`query_account_lock_for_revoke`); a purge first takes
+  dead credential's 401); a delete after its last-admin guard
+  (`query_account_lock_live`, then the guards again — never before the guard,
+  which an admin target's row is locked within in id order); a revoke takes
+  its revokee's (`query_account_lock_for_revoke`); a purge first takes
   the advisory lock only purges take (`query_account_purge_advisory_lock`,
   holding no row, so two purges take turns), then — for an admin target — its
   last-admin guard, then `query_account_lock_for_purge` (`FOR UPDATE`,
   tombstoned or not), then the guards again (whether the target is an admin
   is read unlocked, and an accept making it one can commit in that window),
-  then revokes the account's sessions and tokens before its `DELETE`. Its cascade writes no other account's rows through a
-  provenance stamp: `granted_by`, `revoked_by`, `source_offer_id`,
+  then revokes the account's sessions and tokens before its `DELETE`. Its
+  cascade writes no other account's rows through a provenance stamp:
+  `granted_by`, `revoked_by`, `source_offer_id`,
   `actor.updated_by` / `deleted_by`, `cell.updated_by` and
   `cell_grant.granted_by` carry no foreign key, and keep a purged actor's id.
   Every multi-row delete of `auth_session` or `api_token` rows (revoke-alls,

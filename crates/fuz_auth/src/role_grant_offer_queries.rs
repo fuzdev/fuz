@@ -502,9 +502,9 @@ pub fn scope_advisory_lock_key(scope_id: Uuid) -> (i32, i32) {
 /// from an unlocked read of a column that never changes, as the accept's head
 /// read does. Use it on a consumer path that reads its own scope row and then
 /// brings something into the scope (an invite accept, a join decision): the
-/// lock, then the read. A
-/// transaction never takes two scope locks here; one that must should take them
-/// in key order. Twin of `fuz_app`'s `query_scope_lock_shared`.
+/// lock, then the read. A transaction never takes two scope locks here; one
+/// that must should take them in key order. Twin of `fuz_app`'s
+/// `query_scope_lock_shared`.
 ///
 /// # Errors
 ///
@@ -563,20 +563,21 @@ pub async fn query_scope_lock_exclusive(
 /// Both parties are checked here so every caller — the spine's handler and a
 /// consumer creating offers on its own path — gets the rule. Both account rows
 /// are read under `FOR SHARE` before the insert, in one statement in id order
-/// ([`query_account_lock_live_many`]): an account delete writes its tombstone first,
-/// so a delete committed before the read is waited for and seen (the offer is
-/// refused), and one after it waits for this transaction to commit and then
-/// supersedes the offer with the party's others. Run it inside the caller's
-/// transaction, which the lock spans. The self-target check comes first, so an
-/// offer to one's own account is refused as that whatever else it names.
+/// ([`query_account_lock_live_many`]): an account delete writes its
+/// tombstone first, so a delete committed before the read is waited for and
+/// seen (the offer is refused), and one after it waits for this transaction
+/// to commit and then supersedes the offer with the party's others. Run it
+/// inside the caller's transaction, which the lock spans. The self-target
+/// check comes first, so an offer to one's own account is refused as that
+/// whatever else it names.
 ///
 /// A scoped offer takes the scope lock shared before anything else
 /// ([`query_scope_lock_shared`]), so a teardown of the scope
 /// ([`query_role_grant_revoke_for_scope`]) in flight is waited for, and one
 /// that starts after it waits for this transaction and then supersedes the
 /// offer. A caller that judged the scope live takes the lock before that read,
-/// holding no row (a scope it created itself and has not committed aside); the spine's
-/// handler does.
+/// holding no row (a scope it created itself and has not committed aside); the
+/// spine's handler does.
 ///
 /// On the pending unique-index conflict, refreshes `to_actor_id`,
 /// `message`, and `expires_at` (matches TS upsert semantics — a second
@@ -759,12 +760,13 @@ async fn grantor_holds_global_admin(
 /// never meet at the offers or the actor; two accepts by one recipient take
 /// turns. The offers in id order, as every transaction that writes several
 /// offer rows locks them all first in one id-ordered statement (a delete, a
-/// purge, a revoke, the expiry sweep). The grantor's authority is read unlocked after the grantor's account lock —
-/// the invariant it rests on: every write that ends a grantor's global
-/// `admin` takes the grantor's account row first (a revoke of the grant
-/// through [`crate::account_queries::query_account_lock_for_revoke`], whether
-/// or not its last-admin guard ran; a delete through its write of the row; a
-/// purge through its last-admin guard and
+/// purge, a revoke, the expiry sweep). The grantor's authority is read
+/// unlocked after the grantor's account lock — the invariant it rests on:
+/// every write that ends a grantor's global `admin` takes the grantor's
+/// account row first (a revoke of the grant through
+/// [`crate::account_queries::query_account_lock_for_revoke`], whether or not
+/// its last-admin guard ran; a delete through its write of the row; a purge
+/// through its last-admin guard and
 /// [`crate::account_queries::query_account_lock_for_purge`]; the DB
 /// browser's delete, which takes none of them, excepted). The scope lock comes
 /// first because the grant insert writes into the scope: taken there, after

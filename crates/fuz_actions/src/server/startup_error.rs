@@ -8,11 +8,12 @@ use crate::RegistryBuildError;
 /// The one `default_transaction_isolation` a spine server serves under.
 ///
 /// The spine relies on READ COMMITTED: its dispatcher opens transactions
-/// with a plain `BEGIN`, so they run at the database's default, and the
-/// serializing reads a handler makes after a row lock (a consumer's
-/// last-owner rule, say) need the fresh per-statement snapshot only READ
-/// COMMITTED takes. `read uncommitted` is refused too, though Postgres runs
-/// it as READ COMMITTED: it names a level the spine does not run at, a
+/// with a plain `BEGIN`, so they run at the database's default, and a read
+/// made after a lock (a scope read after the scope lock, a last-admin count,
+/// a consumer's last-owner rule) sees what committed during the wait only
+/// under the fresh per-statement snapshot READ COMMITTED takes.
+/// `read uncommitted` is refused too, though Postgres runs it as READ
+/// COMMITTED: it names a level the spine does not run at, a
 /// Postgres-compatible engine might honor it, and dropping it costs nothing.
 pub const REQUIRED_TRANSACTION_ISOLATION: &str = "read committed";
 
