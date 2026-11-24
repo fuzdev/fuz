@@ -49,12 +49,11 @@ jobs:
           --health-retries 5
 
     # The suites default to the workspace at ~/dev/fuz; point them at this
-    # checkout. Parity derives its two databases from the stub database URL, and
-    # setup creates them with `createdb` from PATH (the service user is a
-    # superuser).
+    # checkout. Each Rust backend runs on a `pglet_server` of its own, built
+    # from this workspace; parity runs only on PostgreSQL, so its step names
+    # the service (the user is a superuser, so it can create databases).
     env:
       FUZ_RUST_SPINE_STUB_WORKSPACE_DIR: ${{ github.workspace }}/fuz
-      FUZ_TESTING_RUST_SPINE_STUB_DATABASE_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_app_test_rust_spine_stub
 
     steps:
       # persist-credentials: false keeps the GITHUB_TOKEN out of .git/config (no step here pushes via git).
@@ -126,6 +125,8 @@ jobs:
 
       - name: Parity suite
         working-directory: fuz_app
+        env:
+          FUZ_TEST_POSTGRES_URL: postgres://fuz_test:fuz_test@localhost:5432/fuz_test
         run: npm run test:cross:parity
 
       - name: Security suite

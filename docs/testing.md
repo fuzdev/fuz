@@ -129,8 +129,9 @@ checkout. Its setup runs
 `cargo build -p testing_spine_stub --profile cross-test` (the root
 `Cargo.toml`'s non-LTO test profile) in the workspace
 `FUZ_RUST_SPINE_STUB_WORKSPACE_DIR` names (set it when this checkout is not at
-the suite's default path), runs `createdb` against a local Postgres, then spawns
-the binary and drives it over HTTP, WebSocket, and SSE.
+the suite's default path), starts a `pglet_server` of its own for the binary's
+database (a PostgreSQL database instead under `FUZ_TEST_POSTGRES_URL`), then
+spawns the binary and drives it over HTTP, WebSocket, and SSE.
 
 It is the broad behavioral coverage of the cell verbs: `fuz_cell_actions`'s own
 Postgres suite pins the authz gates (`tests/cell_authz.rs`'s `//!` lists them),
