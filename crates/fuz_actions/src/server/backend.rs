@@ -15,8 +15,6 @@ use fuz_db::{MigrationNamespace, Pool};
 use fuz_http::{BackgroundWrites, BaseServerEnv, ParsedProxy, StackOptions};
 use fuz_realtime::{ConnectionRegistry, RealtimeCloser, SseRegistry};
 
-use crate::PreMigrationHook;
-
 use super::startup_error::{StartupError, check_transaction_isolation};
 
 /// What a consumer's server is, fixed at compile time — one `const` per
@@ -166,9 +164,6 @@ pub struct SpineBackendOptions {
     /// The daemon-token credential state. Production: `None` — the producer
     /// lives in `fuz_testing`, which a production binary cannot link.
     pub daemon_token_state: Option<SharedDaemonTokenState>,
-    /// Fired after the pool exists and before migrations. Production: `None`;
-    /// a test binary's env-gated schema reset.
-    pub pre_migration_hook: Option<PreMigrationHook<StartupError>>,
     /// Whether the router served over the backend runs the auth cleanup
     /// beside it ([`AppBackend::serve_duties`]). No default — every server
     /// writes it out, [`Self::production`] included, so none gets or loses
@@ -179,7 +174,7 @@ pub struct SpineBackendOptions {
 
 impl SpineBackendOptions {
     /// The production options: `password_hasher`, every limiter enforced at
-    /// the spine defaults, no daemon token, no hook, and the auth cleanup on
+    /// the spine defaults, no daemon token, and the auth cleanup on
     /// `auth_cleanup` — a parameter, not a default, so the caller names it.
     #[must_use]
     pub fn production(
@@ -191,7 +186,6 @@ impl SpineBackendOptions {
             rate_limiters: RateLimiterMode::Enforced,
             login_ip_rate_limit: fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT,
             daemon_token_state: None,
-            pre_migration_hook: None,
             auth_cleanup,
         }
     }
@@ -431,14 +425,13 @@ fn check_migration_chain(namespaces: &[MigrationNamespace]) -> Result<(), Startu
 ///    the login limiters, and the realtime registries;
 /// 2. the READ COMMITTED guard ([`ensure_read_committed`]), before anything
 ///    writes;
-/// 3. the pre-migration hook;
-/// 4. the migration chain;
-/// 5. the keeper resolved into the daemon-token state, when there is one;
-/// 6. bootstrap availability, against the migrated schema;
-/// 7. the audit listeners: the audit stream's fan-out when mounted, then the
+/// 3. the migration chain;
+/// 4. the keeper resolved into the daemon-token state, when there is one;
+/// 5. bootstrap availability, against the migrated schema;
+/// 6. the audit listeners: the audit stream's fan-out when mounted, then the
 ///    revocation guard, so a revocation's row reaches the streams before the
 ///    close ends them;
-/// 8. the `/ready` router over the embedded expected schema, when the spec
+/// 7. the `/ready` router over the embedded expected schema, when the spec
 ///    has one.
 ///
 /// # Errors
@@ -449,7 +442,7 @@ fn check_migration_chain(namespaces: &[MigrationNamespace]) -> Result<(), Startu
 /// doesn't start with auth or that gives a consumer namespace a reserved spine
 /// name;
 /// [`StartupError::Database`] for the pool, a boot query, or a migration;
-/// [`StartupError::TransactionIsolation`]; whatever the hook returns; and
+/// [`StartupError::TransactionIsolation`]; and
 /// [`StartupError::ExpectedSchema`] for a malformed fixture.
 pub async fn create_app_backend(
     env: &BaseServerEnv,
@@ -463,10 +456,6 @@ pub async fn create_app_backend(
     let backend = build_app_backend(env, spec, &options)?;
 
     ensure_read_committed(&backend.pool).await?;
-
-    if let Some(hook) = options.pre_migration_hook {
-        hook(&backend.pool).await?;
-    }
 
     fuz_db::run_migrations(&backend.pool, spec.migration_namespaces).await?;
 
@@ -525,8 +514,7 @@ fn register_audit_listeners(backend: &AppBackend) {
 /// keyring from `SECRET_FUZ_COOKIE_KEYS`, the audit emitter, the login
 /// limiters through `options.rate_limiters`, and the realtime registries. A
 /// test that composes a server's routers without a database builds its core
-/// here (`fuz_testing::inert_app_backend`). `options.pre_migration_hook` is
-/// [`create_app_backend`]'s and unused here.
+/// here (`fuz_testing::inert_app_backend`).
 ///
 /// # Errors
 ///
@@ -544,7 +532,6 @@ pub fn build_app_backend(
         rate_limiters,
         login_ip_rate_limit,
         daemon_token_state,
-        pre_migration_hook: _,
         auth_cleanup,
     } = options;
     let rate_limiters = *rate_limiters;

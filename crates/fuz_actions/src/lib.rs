@@ -125,7 +125,7 @@ pub use action_registry::{
     ActionEntry, ActionHandler, ActionOutputHandler, ActionRegistry, RegistryBuildError,
 };
 pub use action_spec::{ActionSpec, ActionSpecHandler, public_readonly_spec};
-pub use consumer_lifecycle::{ExtraActionSpecsFactory, ExtraActionSpecsRuntime, PreMigrationHook};
+pub use consumer_lifecycle::{ExtraActionSpecsFactory, ExtraActionSpecsRuntime};
 pub use heartbeat::{HEARTBEAT_METHOD, heartbeat_action_spec};
 pub use peer_ping::{
     PEER_CONNECTION_GONE_MESSAGE, PEER_NO_TRANSPORT_MESSAGE, PEER_PING_INVALID_REPLY_MESSAGE,

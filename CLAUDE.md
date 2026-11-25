@@ -472,12 +472,11 @@ versions.
 ## Error handling
 
 Typed `thiserror` errors throughout; binaries render them with hints and exit
-codes (hand-written `Display` only in `fuz_pty`, `fuz_crypto::witness`, and
-`fuz_testing`'s `DbResetError`). Untrusted text is escaped in the `Display` of
-the type that holds it; `fuz`, `fuzd`, `fuzf`, `xtask`, and the spine servers
-print the whole source chain; `is_security_violation` / `is_unconfirmed` /
-`is_unusable_home` stay complete at every wrapper level. The rules:
-./docs/crates.md § Error rendering.
+codes (hand-written `Display` only in `fuz_pty` and `fuz_crypto::witness`).
+Untrusted text is escaped in the `Display` of the type that holds it; `fuz`,
+`fuzd`, `fuzf`, `xtask`, and the spine servers print the whole source chain;
+`is_security_violation` / `is_unconfirmed` / `is_unusable_home` stay complete at
+every wrapper level. The rules: ./docs/crates.md § Error rendering.
 
 ## Platform support
 

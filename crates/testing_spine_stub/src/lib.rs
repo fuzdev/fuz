@@ -546,8 +546,7 @@ fn load_expected_schema(path: &str) -> Result<&'static str, StartupError> {
 /// Run the `testing_spine_stub` lifecycle to completion.
 ///
 /// Reads the env, boots the spine core through the toolkit's
-/// `create_app_backend` (with `fuz_testing`'s env-gated startup reset as the
-/// pre-migration hook), mounts the standard surface plus the `fuz_testing`
+/// `create_app_backend`, mounts the standard surface plus the `fuz_testing`
 /// seams, and serves until SIGINT/SIGTERM.
 ///
 /// No upkeep runs beside it, unlike the production spine servers: its auth

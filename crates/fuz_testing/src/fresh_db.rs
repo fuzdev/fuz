@@ -1,17 +1,40 @@
 //! The fresh database every spine DB test opens: [`fresh_test_db`].
 //!
-//! By default each call starts a pglet server of its own, in this process, on
-//! a loopback port (`pglet_server`'s library, its in-memory B+tree store), runs
-//! the suite's migration chain and scratch DDL, and hands back a [`TestDb`]
-//! that stops the server when it drops. A test's database is its own, so the
-//! suites run in parallel under a plain `cargo test`, with nothing to create
-//! out of band and nothing to wipe.
+//! By default each call hands back a pglet server of its own, in this
+//! process, on a loopback port (`pglet_server`'s library, its in-memory B+tree
+//! store), as a [`TestDb`] that stops the server when it drops. The server is a
+//! fork of a base migrated once per process for the suite's migration set: the
+//! first call with a given set starts the base, runs the migration chain and
+//! scratch DDL on it, and keeps it for the life of the process; every call
+//! forks it ([`pglet_server::ServerHandle::fork`]), a copy-on-write branch of
+//! its committed state. A test's database is its own — its writes reach
+//! neither the base nor any other fork — so the suites run in parallel under a
+//! plain `cargo test`, with nothing to create out of band and nothing to wipe.
+//!
+//! ### Bases
+//!
+//! A base is keyed on the full content of the set: each namespace's name,
+//! ownership, and migrations (name and SQL), in order, plus
+//! [`TestingDbOptions::setup_sql`], compared directly. Two suites declaring
+//! the same set share a base; any difference makes another. The base holds
+//! only its server (std threads, no tokio runtime of any test's), migrated
+//! through a pool dropped once it's done, and nothing writes it after, so a
+//! fork waits on its writer only while another fork of it is being copied:
+//! parallel tests queue there, and one that times out on a loaded machine
+//! (`55P03`, at the base's `lock_timeout`) is retried, so load slows setup
+//! rather than failing it. A failed migration fails the test that ran it, and
+//! the next call with that set tries again. A fork carries the base's
+//! committed state as of its migration, its timestamps included (a migration
+//! tracker's `applied_at`, a `DEFAULT now()` in `setup_sql`). An empty
+//! migration set with no `setup_sql` has no base: the call starts a bare
+//! server.
 //!
 //! Set [`FUZ_TEST_POSTGRES_URL`] to a PostgreSQL server and a role with
 //! `CREATEDB`, and every call instead creates a database of its own there
-//! (named from the suite, unique per process and call) and drops it when the
-//! [`TestDb`] drops. That's the leg that catches a test passing only because
-//! pglet is lenient, and the only one a [`TestEngine::Postgres`] test runs on.
+//! (named from the suite, unique per process and call), runs the migrations
+//! and `setup_sql` on it, and drops it when the [`TestDb`] drops. That's the
+//! leg that catches a test passing only because pglet is lenient, and the only
+//! one a [`TestEngine::Postgres`] test runs on.
 //!
 //! ### Postgres-only tests
 //!
@@ -36,14 +59,6 @@
 //! stderr. A process killed before its drops ran leaves its databases;
 //! each is named `fuz_testing_<suite>_<pid>_<n>`, so they're found by that
 //! prefix.
-//!
-//! ### Not [`crate::db_reset`]
-//!
-//! [`crate::db_reset`] is the env-gated *startup* reset a long-running test
-//! **binary** performs on itself once, before its own migrations. This module
-//! is the *in-process* setup a test calls per test case, against a database it
-//! then keeps. See that module's "Why this is separate" section for the third
-//! variant ([`crate::testing_reset`], the per-test row wipe over the wire).
 
 #![expect(
     clippy::expect_used,
@@ -53,10 +68,13 @@
 
 use std::io::Write as _;
 use std::ops::Deref;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use fuz_db::{MigrationNamespace, Pool, create_pool, run_migrations};
+use parking_lot::Mutex;
+use tokio::sync::OnceCell;
 use tokio_postgres::error::SqlState;
 
 /// The variable that moves every DB test onto PostgreSQL.
@@ -166,7 +184,8 @@ impl Deref for TestDb {
 /// What a [`TestDb`] runs on.
 #[derive(Debug)]
 enum Backing {
-    /// A pglet server in this process, stopped when its handle drops.
+    /// A pglet server in this process — a fork of its set's base, or a bare
+    /// server for an empty set — stopped when its handle drops.
     Pglet { _server: pglet_server::ServerHandle },
     /// A database created on a PostgreSQL server, dropped when this drops.
     Postgres { _database: PostgresDatabase },
@@ -253,57 +272,79 @@ const SETUP_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(30);
 /// the `<n>` that keeps their names unique.
 static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
 
-/// Open a fresh database for one test: run `options.migrations`, apply
-/// `options.setup_sql`, and return it with its pool.
+/// Open a fresh database for one test, with `options.migrations` run and
+/// `options.setup_sql` applied, and return it with its pool.
 ///
-/// On pglet unless [`FUZ_TEST_POSTGRES_URL`] is set (see the module docs).
+/// On pglet, a fork of the base migrated once per process for this set; on a
+/// database of its own, migrated for this call, under
+/// [`FUZ_TEST_POSTGRES_URL`] (see the module docs).
 ///
 /// # Panics
 ///
 /// With the failing step named: a [`TestEngine::Postgres`] test without
 /// [`FUZ_TEST_POSTGRES_URL`], an invalid [`TestingDbOptions::suite`], a pglet
-/// server that doesn't start, a database that can't be created or reached, a
-/// failed migration, or failed `setup_sql` — setup faults a test body can do
-/// nothing about.
+/// server that doesn't start or fork, a database that can't be created or
+/// reached, a failed migration, or failed `setup_sql` — setup faults a test
+/// body can do nothing about.
 pub async fn fresh_test_db(options: TestingDbOptions<'_>) -> TestDb {
     assert_suite_name(options.suite);
     let postgres_url = std::env::var(FUZ_TEST_POSTGRES_URL).ok();
-    let (url, backing) = match (postgres_url, options.engine) {
+    match (postgres_url, options.engine) {
         (Some(admin_url), _) => {
             let database = create_postgres_database(admin_url, options.suite).await;
             let url = database_url_with_name(&database.admin_url, &database.name);
-            (
+            let pool = setup_pool(&url).await;
+            run_setup(&pool, &options).await;
+            TestDb {
+                pool,
                 url,
-                Backing::Postgres {
+                _backing: Backing::Postgres {
                     _database: database,
                 },
-            )
+            }
         }
         (None, TestEngine::Any) => {
-            let handle = pglet_server::Server::open(&pglet_server::ServerOptions::default())
-                .expect("open a pglet server")
+            let server = if options.migrations.is_empty() && options.setup_sql.is_none() {
+                open_pglet_server()
+            } else {
+                fork_base(pglet_base(&options).await).await
+            };
+            let handle = server
                 .spawn_loopback()
                 .expect("start a pglet server on loopback");
-            let url = format!("postgres://pglet@{}/pglet", handle.local_addr());
-            (url, Backing::Pglet { _server: handle })
+            let url = pglet_url(&handle);
+            let pool = setup_pool(&url).await;
+            TestDb {
+                pool,
+                url,
+                _backing: Backing::Pglet { _server: handle },
+            }
         }
         (None, TestEngine::Postgres) => panic!(
             "this test runs only on PostgreSQL: set {FUZ_TEST_POSTGRES_URL} to a server and a \
              role with CREATEDB (e.g. postgres://localhost/postgres)"
         ),
-    };
-    let pool = create_pool(&url, &fuz_db::PoolOptions::default()).expect("create_pool");
-    // Warm the pool with one connection under a long bound, so a loaded
-    // machine (parallel tests, each `DROP DATABASE`'s checkpoint) slows setup
-    // rather than failing it. The migrations, `setup_sql`, and the test's first
-    // checkout reuse that idle connection; the test keeps the default bound.
+    }
+}
+
+/// A pool on `url`, warmed with one connection under a long bound, so a
+/// loaded machine (parallel tests, each `DROP DATABASE`'s checkpoint) slows
+/// setup rather than failing it. Setup and the test's first checkout reuse
+/// that idle connection; the test keeps the default bound.
+async fn setup_pool(url: &str) -> Pool {
+    let pool = create_pool(url, &fuz_db::PoolOptions::default()).expect("create_pool");
     drop(
         pool.timeout_get(&fuz_db::checkout_timeouts(SETUP_CHECKOUT_TIMEOUT))
             .await
             .expect("connect for setup"),
     );
+    pool
+}
+
+/// Run `options.migrations`, then `options.setup_sql`, on `pool`'s database.
+async fn run_setup(pool: &Pool, options: &TestingDbOptions<'_>) {
     if !options.migrations.is_empty() {
-        run_migrations(&pool, options.migrations)
+        run_migrations(pool, options.migrations)
             .await
             .expect("migrations");
     }
@@ -311,11 +352,97 @@ pub async fn fresh_test_db(options: TestingDbOptions<'_>) -> TestDb {
         let client = pool.get().await.expect("pool.get");
         client.batch_execute(sql).await.expect("setup_sql");
     }
-    TestDb {
-        pool,
-        url,
-        _backing: backing,
+}
+
+/// A fork of `base`, not yet listening.
+///
+/// Forks of one base queue on its writer, each waiting up to the base's
+/// `lock_timeout`; a wait that runs out (`55P03`) is retried until
+/// [`SETUP_CHECKOUT_TIMEOUT`], so a loaded machine slows setup rather than
+/// failing it. The fork runs on the blocking pool, keeping the wait off the
+/// test's runtime.
+async fn fork_base(base: &'static pglet_server::ServerHandle) -> pglet_server::Server {
+    let deadline = tokio::time::Instant::now() + SETUP_CHECKOUT_TIMEOUT;
+    loop {
+        let forked = tokio::task::spawn_blocking(|| base.fork())
+            .await
+            .expect("the fork's task");
+        match forked {
+            Ok(server) => return server,
+            Err(e) if is_lock_timeout(&e) && tokio::time::Instant::now() < deadline => {}
+            Err(e) => panic!("fork the migrated pglet base: {e}"),
+        }
     }
+}
+
+/// Whether a fork failed waiting for the base's writer (`55P03`).
+fn is_lock_timeout(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .and_then(|e| e.downcast_ref::<pglet::Error>())
+        .is_some_and(|e| e.sqlstate() == "55P03")
+}
+
+/// A bare in-memory pglet server, not yet listening.
+fn open_pglet_server() -> pglet_server::Server {
+    pglet_server::Server::open(&pglet_server::ServerOptions::default())
+        .expect("open a pglet server")
+}
+
+/// The connection URL of the pglet server `handle` runs.
+fn pglet_url(handle: &pglet_server::ServerHandle) -> String {
+    format!("postgres://pglet@{}/pglet", handle.local_addr())
+}
+
+/// What a pglet base is migrated from: the full content of a migration set,
+/// compared directly.
+#[derive(Debug, PartialEq, Eq)]
+struct BaseKey {
+    migrations: Vec<MigrationNamespace>,
+    setup_sql: Option<String>,
+}
+
+/// This process's pglet bases, one per [`BaseKey`], each built at most once
+/// and kept for the life of the process.
+///
+/// The lock is held only to find or add an entry, never across a migration;
+/// concurrent first callers for one set wait on its cell for one migrator.
+static PGLET_BASES: LazyLock<Mutex<Vec<(BaseKey, &'static BaseCell)>>> =
+    LazyLock::new(Mutex::default);
+
+/// A pglet base, empty until its first caller has migrated it.
+type BaseCell = OnceCell<pglet_server::ServerHandle>;
+
+/// The pglet base for `options`' migration set, migrated on first use.
+///
+/// The migration runs on the first caller's runtime through a pool dropped
+/// before the base is kept, so the base holds nothing tied to a runtime that
+/// ends with that caller's test. A migration that fails (or a caller dropped
+/// mid-migration) leaves the cell empty for the next caller to try again.
+async fn pglet_base(options: &TestingDbOptions<'_>) -> &'static pglet_server::ServerHandle {
+    let key = BaseKey {
+        migrations: options.migrations.to_vec(),
+        setup_sql: options.setup_sql.map(str::to_owned),
+    };
+    let cell = {
+        let mut bases = PGLET_BASES.lock();
+        if let Some((_, cell)) = bases.iter().find(|(k, _)| *k == key) {
+            *cell
+        } else {
+            let cell: &'static BaseCell = Box::leak(Box::default());
+            bases.push((key, cell));
+            cell
+        }
+    };
+    cell.get_or_init(|| async {
+        let handle = open_pglet_server()
+            .spawn_loopback()
+            .expect("start a pglet base on loopback");
+        let pool = setup_pool(&pglet_url(&handle)).await;
+        run_setup(&pool, options).await;
+        drop(pool);
+        handle
+    })
+    .await
 }
 
 /// Create `fuz_testing_<suite>_<pid>_<n>` through `admin_url`, from
@@ -481,6 +608,179 @@ mod tests {
             .expect("count b")
             .get(0);
         assert_eq!(count, 0, "b sees none of a's rows");
+    }
+
+    /// Options for a set of its own: `setup_sql` creates `probe` with a
+    /// comment naming `tag`, so no other test's base matches it.
+    fn base_options(tag: &'static str) -> TestingDbOptions<'static> {
+        TestingDbOptions {
+            suite: "fuz_testing",
+            migrations: &[],
+            setup_sql: Some(tag),
+            engine: TestEngine::Any,
+        }
+    }
+
+    /// A fork of `options`' base, listening, with a pool on it.
+    async fn fork_of(options: &TestingDbOptions<'_>) -> (pglet_server::ServerHandle, Pool) {
+        let handle = fork_base(pglet_base(options).await)
+            .await
+            .spawn_loopback()
+            .expect("spawn the fork");
+        let pool = setup_pool(&pglet_url(&handle)).await;
+        (handle, pool)
+    }
+
+    async fn count_probe(pool: &Pool) -> i64 {
+        pool.get()
+            .await
+            .expect("pool.get")
+            .query_one("SELECT count(*) FROM probe", &[])
+            .await
+            .expect("count probe")
+            .get(0)
+    }
+
+    #[tokio::test]
+    async fn forks_are_isolated_from_each_other_and_the_base() {
+        let options = base_options(
+            "CREATE TABLE probe (id int PRIMARY KEY); -- forks_are_isolated_from_each_other_and_the_base",
+        );
+        let (_a_server, a) = fork_of(&options).await;
+        let (_b_server, b) = fork_of(&options).await;
+        a.get()
+            .await
+            .expect("pool.get")
+            .batch_execute("INSERT INTO probe VALUES (1)")
+            .await
+            .expect("insert into a");
+        assert_eq!(count_probe(&a).await, 1);
+        assert_eq!(count_probe(&b).await, 0, "b sees none of a's rows");
+        let base = setup_pool(&pglet_url(pglet_base(&options).await)).await;
+        assert_eq!(
+            count_probe(&base).await,
+            0,
+            "the base sees none of a's rows"
+        );
+        drop(base);
+        let (_c_server, c) = fork_of(&options).await;
+        assert_eq!(
+            count_probe(&c).await,
+            0,
+            "a later fork starts from the base"
+        );
+    }
+
+    /// The same set reaches the same base, built once: a later call forks it
+    /// rather than migrating another.
+    #[tokio::test]
+    async fn the_same_set_reuses_its_base() {
+        let options = base_options(
+            "CREATE TABLE probe (id int PRIMARY KEY); -- the_same_set_reuses_its_base",
+        );
+        let first = pglet_base(&options).await;
+        let (_server, pool) = fork_of(&options).await;
+        assert_eq!(count_probe(&pool).await, 0);
+        assert!(std::ptr::eq(first, pglet_base(&options).await));
+    }
+
+    #[tokio::test]
+    async fn a_different_set_gets_a_base_of_its_own() {
+        let with_probe = base_options(
+            "CREATE TABLE probe (id int PRIMARY KEY); -- a_different_set_gets_a_base_of_its_own",
+        );
+        let without_probe =
+            base_options("CREATE TABLE other (id int); -- a_different_set_gets_a_base_of_its_own");
+        let a = pglet_base(&with_probe).await;
+        let b = pglet_base(&without_probe).await;
+        assert!(!std::ptr::eq(a, b));
+        assert_ne!(a.local_addr(), b.local_addr());
+        let (_server, pool) = fork_of(&without_probe).await;
+        let missing = pool
+            .get()
+            .await
+            .expect("pool.get")
+            .query_one("SELECT count(*) FROM probe", &[])
+            .await;
+        assert!(missing.is_err(), "the other set's base has no probe table");
+    }
+
+    /// The whole set is the key: a migration's SQL, a namespace's ownership,
+    /// and the namespaces' order each tell two sets apart.
+    #[test]
+    fn a_base_key_compares_migration_content() {
+        const A: &[fuz_db::Migration] = &[fuz_db::Migration {
+            name: "probe",
+            sql: "CREATE TABLE probe (id int)",
+        }];
+        const B: &[fuz_db::Migration] = &[fuz_db::Migration {
+            name: "probe",
+            sql: "CREATE TABLE probe (id bigint)",
+        }];
+        let key = |migrations: &'static [fuz_db::Migration]| BaseKey {
+            migrations: vec![MigrationNamespace::new("probe_ns", migrations)],
+            setup_sql: None,
+        };
+        assert_eq!(key(A), key(A));
+        assert_ne!(key(A), key(B));
+        let keyed = |migrations: Vec<MigrationNamespace>| BaseKey {
+            migrations,
+            setup_sql: None,
+        };
+        assert_ne!(
+            keyed(vec![MigrationNamespace::new("probe_ns", A)]),
+            keyed(vec![MigrationNamespace::spine("probe_ns", A)]),
+            "a consumer and a spine namespace of one name are different sets"
+        );
+        let first = MigrationNamespace::new("first_ns", A);
+        let second = MigrationNamespace::new("second_ns", B);
+        assert_ne!(
+            keyed(vec![first, second]),
+            keyed(vec![second, first]),
+            "namespace order is part of the set"
+        );
+    }
+
+    /// Parallel first callers for one set wait on one migrator and share its
+    /// base; each still gets a database of its own.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_callers_share_one_base() {
+        const OPTIONS: TestingDbOptions<'static> = TestingDbOptions {
+            suite: "fuz_testing",
+            migrations: &[],
+            setup_sql: Some(
+                "CREATE TABLE probe (id int PRIMARY KEY); -- parallel_callers_share_one_base",
+            ),
+            engine: TestEngine::Any,
+        };
+        let tasks: Vec<_> = (0..8)
+            .map(|i| {
+                tokio::spawn(async move {
+                    let (server, pool) = fork_of(&OPTIONS).await;
+                    pool.get()
+                        .await
+                        .expect("pool.get")
+                        .execute("INSERT INTO probe VALUES ($1)", &[&i])
+                        .await
+                        .expect("insert");
+                    let count = count_probe(&pool).await;
+                    drop(pool);
+                    drop(server);
+                    (
+                        count,
+                        std::ptr::from_ref(pglet_base(&OPTIONS).await) as usize,
+                    )
+                })
+            })
+            .collect();
+        let mut bases = Vec::new();
+        for task in tasks {
+            let (count, base) = task.await.expect("task");
+            assert_eq!(count, 1, "each fork sees only its own row");
+            bases.push(base);
+        }
+        bases.dedup();
+        assert_eq!(bases.len(), 1, "one base for the set");
     }
 
     /// Setup's warmed connection is the one the test's first checkout gets:

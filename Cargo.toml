@@ -44,6 +44,8 @@ fuzi_core = { path = "crates/fuzi_core" }
 # A sibling checkout (`../pglet`), as consumers reach `../fuz`; test-only, so it
 # never reaches a shipped binary.
 pglet_server = { path = "../pglet/crates/pglet_server" }
+# The engine's error type, for the SQLSTATE a `pglet_server` fork error carries.
+pglet = { path = "../pglet/crates/pglet" }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: parse floats correctly rounded, as `JSON.parse` does — the
 # wire-int adapters' (`fuz_http::deserialize_wire_int`) twin parity rests on it

@@ -32,7 +32,6 @@ pub(crate) const TESTING_ACTION_AUTH: AuthSpec =
 pub mod column_guard;
 pub mod credentials;
 pub mod daemon_token;
-pub mod db_reset;
 pub mod fresh_db;
 pub mod migration_tables;
 pub mod password_argon2;
@@ -62,7 +61,6 @@ pub use credentials::{
     testing_keyring,
 };
 pub use daemon_token::{init_daemon_token, init_daemon_token_from_env};
-pub use db_reset::FUZ_TESTING_RESET_DB_ON_STARTUP;
 pub use fresh_db::{
     FUZ_TEST_POSTGRES_URL, TestDb, TestEngine, TestingDbOptions, budgeted_pool, fresh_test_db,
 };
@@ -94,8 +92,8 @@ pub use testing_reset::{
 pub use testing_room_evict::{TESTING_ROOM_EVICT_METHOD, create_testing_room_evict_action_spec};
 pub use testing_schema_snapshot::create_testing_schema_snapshot_action_spec;
 pub use testing_server::{
-    inert_app_backend, require_daemon_token_from_env, startup_reset_hook, testing_backend_options,
-    testing_reset_specs, truncate_reset_state,
+    inert_app_backend, require_daemon_token_from_env, testing_backend_options, testing_reset_specs,
+    truncate_reset_state,
 };
 pub use testing_shorten_credential_expiry::create_testing_shorten_credential_expiry_action_spec;
 

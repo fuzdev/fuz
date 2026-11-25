@@ -1,11 +1,10 @@
 //! PG-backed tests for the server toolkit's boot, `create_app_backend`: the
-//! pre-migration hook runs before the chain, the chain migrates a bare schema,
-//! `/ready` answers over the embedded fixture (and a spec without one boots
-//! and serves no `/ready`), and a database whose
+//! chain migrates a bare schema, `/ready` answers over the embedded fixture
+//! (and a spec without one boots and serves no `/ready`), and a database whose
 //! `default_transaction_isolation` is not READ COMMITTED is refused before
 //! anything is written. A migration whose body fails gets no connectivity hint.
-//! And the other end of a server's life: shutdown waits for a failure row
-//! still being written, so it lands before the runtime goes.
+//! And the other end of a server's life: shutdown waits for a failure row still
+//! being written, so it lands before the runtime goes.
 //!
 //! Each test boots over a database of its own (`fuz_testing::fresh_test_db`).
 //! The isolation test changes a database-level setting, which only PostgreSQL
@@ -17,7 +16,7 @@
 )]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -92,29 +91,11 @@ async fn boots_a_bare_database_and_serves_ready() {
     let pool = fresh_test_db(DB).await;
     assert!(!has_schema_version(&pool).await);
 
-    // the hook sees the database before the chain has run
-    let hook_saw_migrated = Arc::new(AtomicBool::new(true));
-    let seen = Arc::clone(&hook_saw_migrated);
-    let BootedAppBackend { backend, ready } = create_app_backend(
-        &env_at(pool.url()),
-        &SPEC,
-        SpineBackendOptions {
-            pre_migration_hook: Some(Box::new(move |pool: &Pool| {
-                Box::pin(async move {
-                    seen.store(has_schema_version(pool).await, Ordering::SeqCst);
-                    Ok(())
-                })
-            })),
-            ..options()
-        },
-    )
-    .await
-    .expect("the backend boots");
+    let BootedAppBackend { backend, ready } =
+        create_app_backend(&env_at(pool.url()), &SPEC, options())
+            .await
+            .expect("the backend boots");
 
-    assert!(
-        !hook_saw_migrated.load(Ordering::SeqCst),
-        "the hook ran first"
-    );
     assert!(has_schema_version(&backend.pool).await, "the chain ran");
     assert!(backend.audit_sse.is_some());
     assert_eq!(backend.session_cookie_name, "server_boot_session");

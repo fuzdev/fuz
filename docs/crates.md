@@ -939,13 +939,14 @@ not a `fuz_auth` feature, so unification can't route it into production.
   backend after every test. `db_invariants.sql` beside it is generated in
   fuz_app and copied here byte for byte (`include_str!`); edit it there,
   never here.
-- The test-database harness, `fresh_test_db` — a fresh pglet server per test,
-  in-process, or a database of its own on PostgreSQL under
+- The test-database harness, `fresh_test_db` — a pglet server per test,
+  in-process, forked from a base migrated once per process for the suite's
+  migration set, or a database of its own on PostgreSQL under
   `FUZ_TEST_POSTGRES_URL` (./testing.md § Postgres suites) — with
   `TestingTableLock` for driving races deterministically, and
   `assert_expected_schema_fixture`, a server's `/ready` fixture drift guard.
 - A `testing_*` server's toolkit wiring: `testing_backend_options` (the test
-  hasher, limiters off, `startup_reset_hook`), `require_daemon_token_from_env`,
+  hasher, limiters off), `require_daemon_token_from_env`,
   `testing_reset_specs` (`_testing_reset`, `_testing_drain_effects` and
   `_testing_db_invariants`, over the runtime's daemon-token state) over
   `truncate_reset_state` — the spine's `fuz_cell::CELL_DROP_TABLES` /

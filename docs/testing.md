@@ -68,15 +68,19 @@ independent of the developer's `~/.fuz/`.
 ## Postgres suites
 
 Every DB test opens its database with `fuz_testing::fresh_test_db`, which
-starts a pglet server of its own for the test, in-process on a loopback port,
-runs the suite's migrations, and stops it when the returned `TestDb` drops. So
-the DB tests run in plain `cargo test`, in parallel, with nothing to set up.
+hands the test a pglet server of its own, in-process on a loopback port, and
+stops it when the returned `TestDb` drops. The server is a copy-on-write fork
+of a base the process migrated once for that migration set (the namespaces,
+their migrations, and the suite's `setup_sql`, compared in full), so a suite's
+tests pay for the migrations once, and each test's writes stay its own. So the
+DB tests run in plain `cargo test`, in parallel, with nothing to set up.
 
 Set `FUZ_TEST_POSTGRES_URL` to a PostgreSQL server and a role with `CREATEDB`
 and every DB test instead creates a database of its own there, named
-`fuz_testing_<suite>_<pid>_<n>`, and drops it after. That's the PostgreSQL
-leg, the `db-tests` job, and a local Postgres is the expected way to run it —
-write and verify a change locally, don't defer to CI:
+`fuz_testing_<suite>_<pid>_<n>`, runs the migrations on it, and drops it
+after. That's the PostgreSQL leg, the `db-tests` job, and a local Postgres is
+the expected way to run it — write and verify a change locally, don't defer to
+CI:
 
 ```bash
 export FUZ_TEST_POSTGRES_URL=postgres://<user>@localhost:5432/postgres

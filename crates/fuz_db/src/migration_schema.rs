@@ -32,7 +32,7 @@ pub const RESERVED_NAMESPACES: &[&str] = &["fuz_auth", "fuz_cell", "fuz_facts"];
 /// and positions can change between versions; consumers re-bootstrap
 /// dev/test databases on schema-changing upgrades. See
 /// `fuz_app/src/lib/db/migrate.ts` module doc.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Migration {
     /// Stable identity recorded in the `schema_version` tracker.
     pub name: &'static str,
@@ -46,7 +46,7 @@ pub struct Migration {
 /// Built with [`Self::new`] (a consumer namespace) or [`Self::spine`] (a spine
 /// crate's own); the private ownership flag keeps a struct literal from
 /// skipping that choice.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MigrationNamespace {
     /// Namespace key. A [`Self::new`] namespace must not use a
     /// [`RESERVED_NAMESPACES`] name — [`crate::migration::run_migrations`]

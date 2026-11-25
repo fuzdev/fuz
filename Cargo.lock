@@ -1222,6 +1222,7 @@ dependencies = [
  "fuz_sys",
  "getrandom 0.3.4",
  "parking_lot",
+ "pglet",
  "pglet_server",
  "serde_json",
  "tempfile",

@@ -2,19 +2,16 @@
 //!
 //! Every spine server drives the same `run_app(RunAppOptions)` lifecycle, and
 //! each one with a `testing_*` sibling binary — plus the test-only
-//! `testing_spine_stub` — exposes the same two test-binary swap points: a
-//! factory that folds extra `ActionSpec`s into the registry after the standard
-//! set, and an async hook fired before migrations. This module owns the
-//! canonical, app/error-generic forms of those shapes so each consumer
-//! instantiates them with a one-line concrete alias.
+//! `testing_spine_stub` — exposes the same test-binary swap point: a factory
+//! that folds extra `ActionSpec`s into the registry after the standard set.
+//! This module owns its canonical, app-generic form, with the runtime it
+//! receives, so each consumer instantiates it with a one-line concrete alias.
 //!
 //! The signal/drain half of the lifecycle lives in `fuz_http::lifecycle` —
 //! it's transport-only and depends on no spine crate. These shapes can't join
 //! it: [`ExtraActionSpecsRuntime`] carries `fuz_auth` types and the factory
 //! returns [`crate::ActionSpec`], so they belong here, atop the spine graph.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::ActionSpec;
@@ -72,20 +69,4 @@ pub struct ExtraActionSpecsRuntime {
 /// refuses the boot, as a registry compile failure does.
 pub type ExtraActionSpecsFactory<App> = Box<
     dyn FnOnce(Arc<App>, ExtraActionSpecsRuntime) -> Result<Vec<ActionSpec>, StartupError> + Send,
->;
-
-/// Async hook fired between pool creation and migrations, generic over the
-/// consumer's startup-error type `E`.
-///
-/// Production passes `None`. A test binary passes `Some(_)` to fire
-/// `fuz_testing::startup_reset_hook` — an env-gated schema wipe so
-/// cross-process tests don't have to drop the DB manually between runs. The
-/// production crate stays clean of any `fuz_testing` dep this way.
-///
-/// The hook receives a borrowed [`fuz_db::Pool`]; cloning is cheap (`Arc`
-/// internally) when an owned handle is needed. Errors surface as the
-/// consumer's `E` so the startup chain fails the same way a real migration
-/// error would.
-pub type PreMigrationHook<E> = Box<
-    dyn FnOnce(&fuz_db::Pool) -> Pin<Box<dyn Future<Output = Result<(), E>> + Send + '_>> + Send,
 >;

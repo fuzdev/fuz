@@ -1,21 +1,19 @@
 //! What a `testing_*` server binary wires into the spine server toolkit.
 //!
 //! For `fuz_actions::server`: the test backend options (the test hasher,
-//! limiters off, the startup schema reset as a pre-migration hook, in-flight
-//! audit tracking), the daemon-token credential it can't run without, and the
-//! harness's backdoors — `_testing_reset`, `_testing_drain_effects` and
-//! `_testing_db_invariants` — with the domain truncate the reset runs.
+//! limiters off, in-flight audit tracking), the daemon-token credential it
+//! can't run without, and the harness's backdoors — `_testing_reset`,
+//! `_testing_drain_effects` and `_testing_db_invariants` — with the domain
+//! truncate the reset runs.
 
 use std::sync::Arc;
 
 use fuz_actions::server::{
     AppBackend, AppBackendSpec, SpineBackendOptions, StartupError, build_app_backend,
 };
-use fuz_actions::{ActionSpec, ExtraActionSpecsRuntime, PreMigrationHook};
+use fuz_actions::{ActionSpec, ExtraActionSpecsRuntime};
 use fuz_auth::SharedDaemonTokenState;
-use fuz_db::{DbError, Pool};
 
-use crate::db_reset::{DbResetError, reset_db_on_startup_if_env_set};
 use crate::testing_reset::{ResetStateFn, TestingResetOptions, create_testing_reset_action_spec};
 
 /// The backend options every `testing_*` server binary runs with.
@@ -27,8 +25,6 @@ use crate::testing_reset::{ResetStateFn, TestingResetOptions, create_testing_res
 ///   budget — with the once-per-process banner announcing the nulls;
 /// - `daemon_token_state`, the keeper credential `_testing_reset`
 ///   authenticates with;
-/// - [`startup_reset_hook`], the env-gated schema wipe, so repeated runs
-///   against one database start clean;
 /// - `auth_cleanup`, the caller's, as in production: a consumer's test binary
 ///   runs its production server's schedule, and `testing_spine_stub`, held
 ///   to a TS test server that schedules none, runs `Off`.
@@ -44,7 +40,6 @@ pub fn testing_backend_options(
     SpineBackendOptions {
         rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
         daemon_token_state: Some(daemon_token_state),
-        pre_migration_hook: Some(startup_reset_hook()),
         ..SpineBackendOptions::production(
             Arc::new(crate::TestingArgon2idHasher::new()),
             auth_cleanup,
@@ -90,29 +85,6 @@ pub fn testing_reset_specs(
         crate::create_testing_drain_effects_action_spec(Arc::clone(&runtime.background_writes)),
         crate::create_testing_db_invariants_action_spec(),
     ])
-}
-
-/// The pre-migration hook that fires the env-gated startup reset
-/// (`crate::db_reset`).
-///
-/// That is the env-gated (`FUZ_TESTING_RESET_DB_ON_STARTUP`) wipe of the `public` schema,
-/// so a cross-process run re-bootstraps from nothing against a shared database.
-/// A no-op when the var is unset.
-///
-/// A malformed var is [`StartupError::Config`]; a database failure
-/// [`StartupError::Database`].
-pub fn startup_reset_hook() -> PreMigrationHook<StartupError> {
-    Box::new(|pool: &Pool| {
-        Box::pin(async move {
-            let client = pool.get().await.map_err(DbError::PoolGet)?;
-            reset_db_on_startup_if_env_set(&client)
-                .await
-                .map_err(|e| match e {
-                    DbResetError::InvalidEnv(_) => StartupError::Config(e.to_string()),
-                    DbResetError::Pg(e) => StartupError::Database(DbError::Postgres(e)),
-                })
-        })
-    })
 }
 
 /// Mint the daemon-token credential under the dir `var` names — the channel
