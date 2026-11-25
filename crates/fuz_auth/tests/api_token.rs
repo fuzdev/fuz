@@ -246,9 +246,8 @@ async fn mint_without_lifetime_is_refused_not_defaulted() {
 /// connections of each id it returns. A second pass over a capped account
 /// evicts and returns nothing; another account's tokens are never counted.
 #[tokio::test]
-#[ignore = "pglet: named-argument calls"]
 async fn enforce_limit_returns_exactly_the_evicted_token_ids() {
-    let pool = common::fresh_postgres_db().await;
+    let pool = common::fresh_db().await;
     let account_id = common::seed_account(&pool, "token_cap_user", None).await;
     let bystander_id = common::seed_account(&pool, "token_cap_bystander", None).await;
     let client = pool.get().await.expect("pool.get");

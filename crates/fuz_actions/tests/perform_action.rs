@@ -12,7 +12,7 @@
 //!
 //! `perform_action`'s integrated `method_not_found` → 401 → authz → 403 → 429 → 400 → handler order and the
 //! transactional audit / rollback-discards-effects boundary are not driven
-//! here — they live in the `#[ignore]` PG sibling `perform_action_dispatch.rs`
+//! here — they live in the DB-backed sibling `perform_action_dispatch.rs`
 //! (real pool + tx), with the component-level pieces pinned here
 //! (`PostCommitEffects` drain/clear) and in `fuz_auth`'s `action_auth` unit tests,
 //! and the same order driven over the wire by `fuz_app`'s cross-backend suite

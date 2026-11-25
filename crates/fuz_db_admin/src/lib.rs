@@ -1928,9 +1928,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "pglet: to_jsonb of a row"]
     async fn detail_reports_null_primary_key_for_composite() {
-        let pool = fresh_postgres_db().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         let resp = perform_table_detail(&mut client, detail_options("scratch_composite"))
             .await
@@ -1952,9 +1951,8 @@ mod row_delete_pg_tests {
     }
 
     #[tokio::test]
-    #[ignore = "pglet: decode(…, 'hex'), to_jsonb of a row"]
     async fn detail_placeholders_bytea_values() {
-        let pool = fresh_postgres_db().await;
+        let pool = fresh_db().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1995,7 +1993,7 @@ mod row_delete_pg_tests {
     /// consumer's domain-typed blob column can't silently reopen the bytea
     /// egress amplification.
     #[tokio::test]
-    #[ignore = "pglet: CREATE DOMAIN, decode(…, 'hex'), to_jsonb of a row"]
+    #[ignore = "pglet: CREATE DOMAIN"]
     async fn detail_placeholders_a_domain_over_bytea() {
         let pool = fresh_postgres_db().await;
         let mut client = pool.get().await.unwrap();

@@ -420,9 +420,8 @@ async fn the_recheck_does_not_touch_the_api_token() {
 /// The re-check writes nothing to the session either: the row is byte-for-byte
 /// what it was.
 #[tokio::test]
-#[ignore = "pglet: a whole-row cast (auth_session::text)"]
 async fn the_recheck_leaves_the_session_row_unchanged() {
-    let pool = common::fresh_postgres_db().await;
+    let pool = common::fresh_db().await;
     let (account_id, _) = common::seed_account_actor(&pool, "session_untouched").await;
     let resolved = resolve_session(&pool, account_id).await;
     let row = || async {

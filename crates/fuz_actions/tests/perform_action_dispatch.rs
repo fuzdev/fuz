@@ -1,4 +1,4 @@
-//! PG-backed end-to-end tests for [`fuz_actions::perform_action`] — the
+//! DB-backed end-to-end tests for [`fuz_actions::perform_action`] — the
 //! integrated dispatch path the sibling `perform_action.rs` (no-DB) unit tests
 //! deliberately don't reach.
 //!
@@ -80,11 +80,6 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
 /// A fresh database with the auth chain and the scratch `probe` table.
 async fn fresh_db() -> TestDb {
     fresh_test_db(DB).await
-}
-
-/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
-async fn fresh_postgres_db() -> TestDb {
-    fresh_test_db(DB.postgres_only()).await
 }
 
 /// Test harness: the dispatcher options + the pool + a flag the `probe`
@@ -1289,14 +1284,13 @@ async fn run_ok(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "pglet: named-argument calls"]
 async fn revocations_close_connections_after_the_transaction_commits() {
     // A client whose socket is closed as revoked rechecks its session at once;
     // if the close lands before the commit, that recheck still finds the
     // session and the client keeps a dead socket. So by the time the closer
     // is asked to close, every revocation's deletion must already be
     // committed — probed per handler below.
-    let pool = fresh_postgres_db().await;
+    let pool = fresh_db().await;
     let closer = Arc::new(CommitProbingCloser::new(&pool));
     let options = auth_spec_options(&pool, Arc::<CommitProbingCloser>::clone(&closer));
     let session = CredentialType::Session;
@@ -1444,9 +1438,8 @@ fn token_create_params() -> Value {
 /// for after the commit. The newest token's connections stay open: the close
 /// names the evicted token, not the account.
 #[tokio::test]
-#[ignore = "pglet: named-argument calls"]
 async fn a_token_mint_past_the_cap_closes_the_evicted_tokens_connections() {
-    let pool = fresh_postgres_db().await;
+    let pool = fresh_db().await;
     let ws = Arc::new(fuz_realtime::ConnectionRegistry::new());
     let sse = Arc::new(fuz_realtime::SseRegistry::new());
     let options = auth_spec_options(

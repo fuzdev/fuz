@@ -55,7 +55,7 @@ use fuz_db::{Pool, create_pool};
 use fuz_http::ClientIp;
 
 mod common;
-use common::{fresh_db, fresh_postgres_db};
+use common::fresh_db;
 
 /// Sentinel returned by [`RecordingHasher::dummy_hash`] — the login handler
 /// feeds this to `verify` on the account-not-found path, so a recorded value
@@ -1081,9 +1081,8 @@ async fn login_closes_an_evicted_session_after_the_eviction_commits() {
 /// connections of each hash it returns. A second pass over a capped account
 /// evicts and returns nothing; another account's sessions are never counted.
 #[tokio::test]
-#[ignore = "pglet: named-argument calls"]
 async fn enforce_limit_returns_exactly_the_evicted_session_ids() {
-    let pool = fresh_postgres_db().await;
+    let pool = fresh_db().await;
     let alice_id = seed_account_with_hash(&pool, "alice", "stored-hash-alice").await;
     let bob_id = seed_account_with_hash(&pool, "bob", "stored-hash-bob").await;
     let client = pool.get().await.expect("pool.get");
