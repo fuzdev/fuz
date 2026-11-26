@@ -307,13 +307,14 @@ async fn query_create_invite_refuses_an_inactive_issuer_and_a_duplicate() {
     };
 
     let missing = uuid::Uuid::new_v4();
-    let (_, tombstoned) = common::seed_account_actor(&pool, "tombstoned_actor").await;
+    let (_, tombstoned) = fuz_testing::seed_account_actor(&pool, "tombstoned_actor").await;
     assert!(
         query_actor_soft_delete(&client, &tombstoned, None)
             .await
             .expect("soft-delete the actor")
     );
-    let (deleted_account, of_deleted) = common::seed_account_actor(&pool, "deleted_account").await;
+    let (deleted_account, of_deleted) =
+        fuz_testing::seed_account_actor(&pool, "deleted_account").await;
     client
         .execute(
             "UPDATE account SET deleted_at = NOW() WHERE id = $1",
@@ -334,7 +335,7 @@ async fn query_create_invite_refuses_an_inactive_issuer_and_a_duplicate() {
     }
     assert_eq!(invites().await, 0, "nothing inserted");
 
-    let (_, issuer) = common::seed_account_actor(&pool, "live_issuer").await;
+    let (_, issuer) = fuz_testing::seed_account_actor(&pool, "live_issuer").await;
     let invite = query_create_invite(&client, None, Some("dup_user"), &issuer)
         .await
         .expect("the first invite");

@@ -1,64 +1,6 @@
 //! The fresh database every spine DB test opens: [`fresh_test_db`].
 //!
-//! By default each call hands back a pglet server of its own, in this
-//! process, on a loopback port (`pglet_server`'s library, its in-memory B+tree
-//! store), as a [`TestDb`] that stops the server when it drops. The server is a
-//! fork of a base migrated once per process for the suite's migration set: the
-//! first call with a given set starts the base, runs the migration chain and
-//! scratch DDL on it, and keeps it for the life of the process; every call
-//! forks it ([`pglet_server::ServerHandle::fork`]), a copy-on-write branch of
-//! its committed state. A test's database is its own — its writes reach
-//! neither the base nor any other fork — so the suites run in parallel under a
-//! plain `cargo test`, with nothing to create out of band and nothing to wipe.
-//!
-//! ### Bases
-//!
-//! A base is keyed on the full content of the set: each namespace's name,
-//! ownership, and migrations (name and SQL), in order, plus
-//! [`TestingDbOptions::setup_sql`], compared directly. Two suites declaring
-//! the same set share a base; any difference makes another. The base holds
-//! only its server (std threads, no tokio runtime of any test's), migrated
-//! through a pool dropped once it's done, and nothing writes it after, so a
-//! fork waits on its writer only while another fork of it is being copied:
-//! parallel tests queue there, and one that times out on a loaded machine
-//! (`55P03`, at the base's `lock_timeout`) is retried, so load slows setup
-//! rather than failing it. A failed migration fails the test that ran it, and
-//! the next call with that set tries again. A fork carries the base's
-//! committed state as of its migration, its timestamps included (a migration
-//! tracker's `applied_at`, a `DEFAULT now()` in `setup_sql`). An empty
-//! migration set with no `setup_sql` has no base: the call starts a bare
-//! server.
-//!
-//! Set [`FUZ_TEST_POSTGRES_URL`] to a PostgreSQL server and a role with
-//! `CREATEDB`, and every call instead creates a database of its own there
-//! (named from the suite, unique per process and call), runs the migrations
-//! and `setup_sql` on it, and drops it when the [`TestDb`] drops. That's the
-//! leg that catches a test passing only because pglet is lenient, and the only
-//! one a [`TestEngine::Postgres`] test runs on.
-//!
-//! ### Postgres-only tests
-//!
-//! A test that observes what only PostgreSQL has (backends, lock waits,
-//! `CREATE DATABASE`, triggers) opens its database with
-//! [`TestEngine::Postgres`] and carries `#[ignore = "postgres-only: <why>"]`;
-//! one blocked only on a pglet feature still to come carries
-//! `#[ignore = "pglet: <feature>"]` and the same engine. Run under
-//! `--ignored` without [`FUZ_TEST_POSTGRES_URL`], such a test panics naming the
-//! variable rather than passing without having run.
-//!
-//! ### Dropping a PostgreSQL database
-//!
-//! `DROP DATABASE` is async work a sync `Drop` must finish. [`TestDb`]'s drop
-//! runs it on a thread of its own, with a current-thread runtime and a fresh
-//! admin connection of its own, and joins it: nothing it waits on needs the
-//! test's runtime, so it can't deadlock a `#[tokio::test]`'s current-thread
-//! runtime, and `WITH (FORCE)` ends the test pool's still-open connections
-//! server-side (waiting out an autovacuum worker, which `FORCE` can't end for
-//! a role that isn't a superuser, and a connection a still-running task opens
-//! meanwhile). A drop that still fails is reported on
-//! stderr. A process killed before its drops ran leaves its databases;
-//! each is named `fuz_testing_<suite>_<pid>_<n>`, so they're found by that
-//! prefix.
+//! The overview is on [`fresh_test_db`].
 
 #![expect(
     clippy::expect_used,
@@ -132,6 +74,17 @@ impl TestingDbOptions<'_> {
             engine: TestEngine::Postgres,
             ..self
         }
+    }
+
+    /// Open a fresh database with these options: [`fresh_test_db`] as a
+    /// method, so a suite's const opens with `DB.open().await` (or
+    /// `DB.postgres_only().open().await`) and needs no wrapper of its own.
+    ///
+    /// # Panics
+    ///
+    /// As [`fresh_test_db`].
+    pub async fn open(self) -> TestDb {
+        fresh_test_db(self).await
     }
 }
 
@@ -277,7 +230,67 @@ static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
 ///
 /// On pglet, a fork of the base migrated once per process for this set; on a
 /// database of its own, migrated for this call, under
-/// [`FUZ_TEST_POSTGRES_URL`] (see the module docs).
+/// [`FUZ_TEST_POSTGRES_URL`] (below).
+///
+/// By default each call hands back a pglet server of its own, in this
+/// process, on a loopback port (`pglet_server`'s library, its in-memory B+tree
+/// store), as a [`TestDb`] that stops the server when it drops. The server is a
+/// fork of a base migrated once per process for the suite's migration set: the
+/// first call with a given set starts the base, runs the migration chain and
+/// scratch DDL on it, and keeps it for the life of the process; every call
+/// forks it ([`pglet_server::ServerHandle::fork`]), a copy-on-write branch of
+/// its committed state. A test's database is its own — its writes reach
+/// neither the base nor any other fork — so the suites run in parallel under a
+/// plain `cargo test`, with nothing to create out of band and nothing to wipe.
+///
+/// ### Bases
+///
+/// A base is keyed on the full content of the set: each namespace's name,
+/// ownership, and migrations (name and SQL), in order, plus
+/// [`TestingDbOptions::setup_sql`], compared directly. Two suites declaring
+/// the same set share a base; any difference makes another. The base holds
+/// only its server (std threads, no tokio runtime of any test's), migrated
+/// through a pool dropped once it's done, and nothing writes it after, so a
+/// fork waits on its writer only while another fork of it is being copied:
+/// parallel tests queue there, and one that times out on a loaded machine
+/// (`55P03`, at the base's `lock_timeout`) is retried, so load slows setup
+/// rather than failing it. A failed migration fails the test that ran it, and
+/// the next call with that set tries again. A fork carries the base's
+/// committed state as of its migration, its timestamps included (a migration
+/// tracker's `applied_at`, a `DEFAULT now()` in `setup_sql`). An empty
+/// migration set with no `setup_sql` has no base: the call starts a bare
+/// server.
+///
+/// Set [`FUZ_TEST_POSTGRES_URL`] to a PostgreSQL server and a role with
+/// `CREATEDB`, and every call instead creates a database of its own there
+/// (named from the suite, unique per process and call), runs the migrations
+/// and `setup_sql` on it, and drops it when the [`TestDb`] drops. That's the
+/// leg that catches a test passing only because pglet is lenient, and the only
+/// one a [`TestEngine::Postgres`] test runs on.
+///
+/// ### Postgres-only tests
+///
+/// A test that observes what only PostgreSQL has (backends, lock waits,
+/// `CREATE DATABASE`, triggers) opens its database with
+/// [`TestEngine::Postgres`] and carries `#[ignore = "postgres-only: <why>"]`;
+/// one blocked only on a pglet feature still to come carries
+/// `#[ignore = "pglet: <feature>"]` and the same engine. Run under
+/// `--ignored` without [`FUZ_TEST_POSTGRES_URL`], such a test panics naming the
+/// variable rather than passing without having run.
+///
+/// ### Dropping a PostgreSQL database
+///
+/// `DROP DATABASE` is async work a sync `Drop` must finish. [`TestDb`]'s drop
+/// runs it on a thread of its own, with a current-thread runtime and a fresh
+/// admin connection of its own, and joins it: nothing it waits on needs the
+/// test's runtime, so it can't deadlock a `#[tokio::test]`'s current-thread
+/// runtime, and `WITH (FORCE)` ends the test pool's still-open connections
+/// server-side (waiting out an autovacuum worker, which `FORCE` can't end for
+/// a role that isn't a superuser, and a connection a still-running task opens
+/// meanwhile). A drop that still fails is reported on
+/// stderr. A process killed before its drops ran leaves its databases;
+/// each is named `fuz_testing_<suite>_<pid>_<n>`, so they're found by that
+/// prefix.
 ///
 /// # Panics
 ///

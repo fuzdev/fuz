@@ -116,8 +116,9 @@ daemon); read the rest as needed.
   is secure; power users get control with clear visibility. Fast startup,
   minimal overhead, efficient IPC; measure rather than guess.
 - **Honest** — say "planned" when things aren't built.
-- **No backwards compatibility** (pre-1.0) — no re-exports, shims, or
-  deprecation wrappers; break and update every consumer.
+- **No backwards compatibility** (pre-1.0) — no compat re-exports, shims, or
+  deprecation wrappers; break and update every consumer. (A crate's flat root
+  API over private modules, one path per item, is no shim: `fuz_testing`.)
 - **Extract early when reuse is known** — lift a primitive a sibling module
   will need on first use (common in the spine's parallel handlers: timing
   floors, audit-emit helpers, error mapping).
@@ -154,10 +155,11 @@ path itself — is a **dev-dependency-only `test_*` feature**:
 `fuz_crypto/test_trust_anchor` (a runtime trusted-key registry),
 `fuz_home/test_home_override` (a `FUZ_HOME` redirect, since
 `unsafe_code = "forbid"` rules out `set_var`),
-`fuz_http/test_router_access` (`GatedRouter::into_router_for_testing`, for
-in-process router tests), and `fuz_artifact/test_binary_stubs` (minimal
-executables per target for the publish and install suites, kept beside the
-header parser they invert). `cargo xtask check-release`
+`fuz_http/test_router_access` (`GatedRouter::send_for_testing` and
+`into_router_for_testing`, for in-process router tests), and
+`fuz_artifact/test_binary_stubs` (minimal executables per target for the
+publish and install suites, kept beside the header parser they invert).
+`cargo xtask check-release`
 refuses any `test_*` feature enabled on a normal or build edge. Don't "fix"
 these into separate crates.
 
@@ -443,7 +445,7 @@ at warn, plus `clone_on_ref_ptr` / `dbg_macro` / `expect_used` / `panic` /
 `RawPathParams`, `Query` and `Form`, `form_urlencoded::parse`,
 `Url::query_pairs`): a handler reads through `fuz_http::RouteParams`, which
 carries the one production `#[expect]`, and `fuz_http::read_query_pairs`. The
-request-reads census (`fuz_testing::request_reads_census`, shared with the
+request-reads census (`fuz_testing`'s `assert_*` census checks, shared with the
 consumer workspaces) pins those entries in every `clippy.toml` and lists every
 in-source suppression; `fuz_testing/tests/request_reads_census.rs` runs it here
 and holds the positive controls. `fuzi`, `fuzi_core` and `fuz_archive` carry

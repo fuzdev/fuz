@@ -51,23 +51,13 @@ use fuz_auth::{
 use fuz_db::{Pool, create_pool};
 use uuid::Uuid;
 
-/// A pool that never connects — every case below short-circuits before
-/// `pool.get()`, so the URL only needs to parse.
-fn pool_no_db() -> Pool {
-    create_pool(
-        "postgres://localhost/fuz_auth_resolve_unused",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("create_pool")
-}
-
 /// A daemon-token state with `current_token` and an optional bound keeper.
 fn daemon_state(current_token: &str, keeper_account_id: Option<Uuid>) -> SharedDaemonTokenState {
     fuz_testing::daemon_token_state(current_token, keeper_account_id)
 }
 
 async fn resolve(headers: &HeaderMap, daemon: Option<&SharedDaemonTokenState>) -> bool {
-    resolve_with_pool(headers, daemon, &pool_no_db()).await
+    resolve_with_pool(headers, daemon, &fuz_testing::unreachable_pool()).await
 }
 
 async fn resolve_with_pool(
@@ -552,7 +542,7 @@ async fn the_gate_refuses_a_foreign_origin_before_the_walk_dials() {
 
 #[tokio::test]
 async fn the_gate_admits_a_request_with_no_origin() {
-    let gate = gate(&pool_no_db(), None);
+    let gate = gate(&fuz_testing::unreachable_pool(), None);
     assert!(gate.check_origin(&HeaderMap::new()).is_ok());
     assert!(
         gate.preflight(&HeaderMap::new(), fuz_http::UNRESOLVED_CLIENT_IP)

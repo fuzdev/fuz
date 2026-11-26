@@ -43,14 +43,15 @@ use fuz_auth::{
     run_auth_cleanup, spawn_auth_cleanup,
 };
 use fuz_db::Pool;
+use fuz_testing::{
+    RecordingConnectionCloser, seed_account_actor, seed_extra_actor, until_lock_waiters,
+};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod common;
-use common::{
-    fresh_db, fresh_postgres_db, seed_account_actor, seed_extra_actor, seed_role_grant_direct,
-};
+use common::{fresh_db, fresh_postgres_db, seed_role_grant_direct};
 
 const HOUR: Duration = Duration::from_hours(1);
 
@@ -110,56 +111,27 @@ fn future() -> SystemTime {
     SystemTime::now() + HOUR
 }
 
-/// A `ConnectionCloser` recording every close it is asked for, by target. It
-/// reports nothing closed, as a server with no live connection would.
-#[derive(Default)]
-struct RecordingCloser {
-    closed: Mutex<Vec<ConnectionCloseTarget>>,
-}
-
-impl RecordingCloser {
-    /// Every close so far, sorted — the sweep's delete returns ids in no
-    /// order worth pinning.
-    fn closed(&self) -> Vec<ConnectionCloseTarget> {
-        let mut closed = self.closed.lock().clone();
-        closed.sort_by_key(|target| format!("{target:?}"));
-        closed
-    }
-
-    fn record(&self, target: ConnectionCloseTarget) -> usize {
-        self.closed.lock().push(target);
-        0
-    }
-}
-
-impl fuz_http::ShutdownCloser for RecordingCloser {
-    fn close_all_connections(&self) -> usize {
-        0
-    }
-    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
-        Box::pin(std::future::ready(()))
-    }
-}
-
-impl ConnectionCloser for RecordingCloser {
-    fn close_connections(&self, target: &ConnectionCloseTarget) -> usize {
-        self.record(target.clone())
-    }
+/// Every close `closer` was asked for, sorted — the sweep's delete returns ids
+/// in no order worth pinning.
+fn sorted_closes(closer: &RecordingConnectionCloser) -> Vec<ConnectionCloseTarget> {
+    let mut closed = closer.closed();
+    closed.sort_by_key(|target| format!("{target:?}"));
+    closed
 }
 
 fn session_target(id: &str) -> ConnectionCloseTarget {
     ConnectionCloseTarget::Session(id.to_owned())
 }
 
-/// Options over the test pool with a [`RecordingCloser`] — what the session
+/// Options over the test pool with a [`RecordingConnectionCloser`] — what the session
 /// sweep cases drive.
-fn options_with_closer(pool: &Pool) -> (AuthCleanupOptions, Arc<RecordingCloser>) {
-    let closer = Arc::new(RecordingCloser::default());
+fn options_with_closer(pool: &Pool) -> (AuthCleanupOptions, Arc<RecordingConnectionCloser>) {
+    let closer = Arc::new(RecordingConnectionCloser::default());
     (
         AuthCleanupOptions {
             pool: pool.clone(),
             audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
-            connection_closer: Arc::<RecordingCloser>::clone(&closer),
+            connection_closer: Arc::<RecordingConnectionCloser>::clone(&closer),
         },
         closer,
     )
@@ -544,7 +516,7 @@ async fn run_auth_cleanup_deletes_only_expired_sessions_and_sweeps_offers() {
     );
     assert_eq!(remaining_sessions(&pool).await, ["cleanup-live"]);
     assert_eq!(
-        closer.closed(),
+        sorted_closes(&closer),
         [session_target("cleanup-expired")],
         "the pass closes for the session it swept"
     );
@@ -554,7 +526,7 @@ async fn run_auth_cleanup_deletes_only_expired_sessions_and_sweeps_offers() {
         run_auth_cleanup(&options).await.unwrap(),
         AuthCleanupResult::default()
     );
-    assert_eq!(closer.closed().len(), 1, "and nothing more to close");
+    assert_eq!(sorted_closes(&closer).len(), 1, "and nothing more to close");
 }
 
 /// **One pass closes exactly the sessions it deleted.** Each swept session is
@@ -581,7 +553,7 @@ async fn the_session_sweep_closes_exactly_the_sessions_it_deletes() {
     let (options, closer) = options_with_closer(&pool);
     assert_eq!(cleanup_expired_sessions(&options).await.unwrap(), 3);
     assert_eq!(
-        closer.closed(),
+        sorted_closes(&closer),
         [
             session_target("sweep-expired-1"),
             session_target("sweep-expired-2"),
@@ -613,11 +585,11 @@ async fn a_second_session_sweep_closes_nothing() {
 
     let (options, closer) = options_with_closer(&pool);
     assert_eq!(cleanup_expired_sessions(&options).await.unwrap(), 1);
-    assert_eq!(closer.closed(), [session_target("sweep-expired")]);
+    assert_eq!(sorted_closes(&closer), [session_target("sweep-expired")]);
 
     assert_eq!(cleanup_expired_sessions(&options).await.unwrap(), 0);
     assert_eq!(
-        closer.closed(),
+        sorted_closes(&closer),
         [session_target("sweep-expired")],
         "the second pass swept nothing and closed nothing"
     );
@@ -632,7 +604,7 @@ async fn no_expired_sessions_closes_nothing() {
 
     let (options, closer) = options_with_closer(&pool);
     assert_eq!(cleanup_expired_sessions(&options).await.unwrap(), 0);
-    assert!(closer.closed().is_empty());
+    assert!(sorted_closes(&closer).is_empty());
     assert_eq!(remaining_sessions(&pool).await, ["sweep-live"]);
 }
 
@@ -686,7 +658,7 @@ async fn a_session_sweep_whose_commit_fails_still_closes_and_the_next_pass_retri
 
     assert!(failed.is_err(), "the commit failure propagates");
     assert_eq!(
-        closer.closed(),
+        sorted_closes(&closer),
         [session_target("sweep-expired")],
         "the swept session is closed although its commit failed"
     );
@@ -699,7 +671,7 @@ async fn a_session_sweep_whose_commit_fails_still_closes_and_the_next_pass_retri
     assert_eq!(cleanup_expired_sessions(&options).await.unwrap(), 1);
     assert_eq!(remaining_sessions(&pool).await, ["sweep-live"]);
     assert_eq!(
-        closer.closed(),
+        sorted_closes(&closer),
         [
             session_target("sweep-expired"),
             session_target("sweep-expired"),
@@ -952,26 +924,7 @@ async fn a_pass_waits_on_a_claimed_row_then_skips_it() {
     let (options, events) = options_recording(&pool);
     let sweep = tokio::spawn(async move { cleanup_expired_role_grant_offers(&options).await });
 
-    // wait until the sweep's backend is blocked on a row lock
-    let probe = pool.get().await.unwrap();
-    let mut waited = false;
-    for _ in 0..200 {
-        let blocked: i64 = probe
-            .query_one(
-                "SELECT count(*) FROM pg_stat_activity
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
-                &[],
-            )
-            .await
-            .unwrap()
-            .get(0);
-        if blocked > 0 {
-            waited = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert!(waited, "the sweep blocked on the claimed row's lock");
+    until_lock_waiters(&pool, 1, "the sweep waits on the claimed row's lock").await;
     assert!(!sweep.is_finished(), "the sweep is still waiting");
 
     other_tx.commit().await.unwrap();
@@ -1102,12 +1055,12 @@ async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelle
         Box::pin(async {})
     }));
     let shutdown = CancellationToken::new();
-    let closer = Arc::new(RecordingCloser::default());
+    let closer = Arc::new(RecordingConnectionCloser::default());
     let task = spawn_auth_cleanup(
         AuthCleanupOptions {
             pool: pool.clone(),
             audit,
-            connection_closer: Arc::<RecordingCloser>::clone(&closer),
+            connection_closer: Arc::<RecordingConnectionCloser>::clone(&closer),
         },
         // short, so the second pass below arrives without a wait worth
         // naming; the startup pass must not need it
@@ -1128,7 +1081,7 @@ async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelle
         "the session sweep ran too"
     );
     assert_eq!(
-        closer.closed(),
+        sorted_closes(&closer),
         [session_target("cleanup-expired")],
         "and closed for the session it swept"
     );
@@ -1150,7 +1103,7 @@ async fn spawn_auth_cleanup_sweeps_at_startup_and_on_its_interval_until_cancelle
     assert_eq!(event_offer_id(&event), later.id.to_string());
     assert_eq!(expire_audits(&pool).await.len(), 2, "each audited once");
     assert_eq!(
-        closer.closed().len(),
+        sorted_closes(&closer).len(),
         1,
         "later passes swept no session, so they closed nothing"
     );
@@ -1195,29 +1148,7 @@ async fn the_session_sweep_takes_its_rows_in_id_order() {
     let (options, _closer) = options_with_closer(&pool);
     let sweep = cleanup_expired_sessions(&options);
     let take_high = async {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        loop {
-            let waiting: i64 = pool
-                .get()
-                .await
-                .unwrap()
-                .query_one(
-                    "SELECT COUNT(*) FROM pg_stat_activity
-                     WHERE wait_event_type = 'Lock' AND datname = current_database()",
-                    &[],
-                )
-                .await
-                .unwrap()
-                .get(0);
-            if waiting > 0 {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the sweep waits on the lowest row"
-            );
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        until_lock_waiters(&pool, 1, "the sweep waits on the lowest row").await;
         holder
             .query_one(
                 "SELECT id FROM auth_session WHERE id = $1 FOR UPDATE",

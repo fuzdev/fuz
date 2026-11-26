@@ -1,40 +1,6 @@
 //! `_testing_action_manifest` action spec.
 //!
-//! Test binaries append this to their `ActionRegistry` after the rest of the
-//! mount is assembled. It dumps the live RPC method set as a normalized
-//! `{method, input, side_effects, account, actor, roles, credential_types,
-//! rate_limit, transport?}` manifest — JSON-shaped to match `fuz_app`'s TS `ActionManifest`
-//! — so the cross-backend harness can diff a Rust backend's RPC surface
-//! against the TS reference's via
-//! `assert_action_manifests_equal` (exact method-set + per-method auth shape).
-//! The action-surface twin of `_testing_schema_snapshot`.
-//!
-//! Mirrors `fuz_app`'s TS `create_testing_action_manifest_action`
-//! (`testing/cross_backend/testing_reset_actions.ts`): the manifest is built
-//! once at assembly time from every mounted spec **plus this action's own
-//! descriptor** (the manifest action is itself a live method, so it must appear
-//! in the dump it serves), and the handler serves that cached value.
-//!
-//! **Protocol actions excluded.** `heartbeat` is HTTP-unreachable on both
-//! impls (WS-only on the TS spine; `ws_only` on the Rust registry), but
-//! `peer/ping` is organized differently — the TS spine mounts it on the HTTP
-//! endpoint the manifest enumerates as well as the WS one, the Rust stub
-//! compiles one shared registry — so including the protocol family would be a
-//! spurious cross-impl diff. The builder drops every
-//! [`PROTOCOL_ACTION_SPECS`] method by name, matching the TS scope (whose
-//! mount list never contains them). `cancel` needs no filter on either side:
-//! it is a notification the WS read loop owns and is mounted on no dispatch
-//! map at all.
-//!
-//! **WS-only domain methods are listed, with `transport: "ws"`.** A domain
-//! spec marked [`ActionSpec::ws_only`] (the room verbs) is part of the
-//! surface both twins must mount alike, so it stays in the manifest; the
-//! entry says where it is served. A method served on both transports carries
-//! no `transport` key — read it as `"both"` — so a mount with no WS-only
-//! domain method dumps only the eight keys every entry carries.
-//!
-//! Read-only + daemon-token gated (`crate::TESTING_ACTION_AUTH`), matching
-//! `_testing_reset` and its siblings.
+//! The overview is on [`create_testing_action_manifest_action_spec`].
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -171,6 +137,42 @@ fn build_action_manifest(mounted: &[ActionSpec]) -> Value {
 /// dispatcher).
 /// Append it to the registry **last**, passing the assembled spec list — it must enumerate every
 /// method mounted above it.
+///
+/// Test binaries append this to their `ActionRegistry` after the rest of the
+/// mount is assembled. It dumps the live RPC method set as a normalized
+/// `{method, input, side_effects, account, actor, roles, credential_types,
+/// rate_limit, transport?}` manifest — JSON-shaped to match `fuz_app`'s TS `ActionManifest`
+/// — so the cross-backend harness can diff a Rust backend's RPC surface
+/// against the TS reference's via
+/// `assert_action_manifests_equal` (exact method-set + per-method auth shape).
+/// The action-surface twin of `_testing_schema_snapshot`.
+///
+/// Mirrors `fuz_app`'s TS `create_testing_action_manifest_action`
+/// (`testing/cross_backend/testing_reset_actions.ts`): the manifest is built
+/// once at assembly time from every mounted spec **plus this action's own
+/// descriptor** (the manifest action is itself a live method, so it must appear
+/// in the dump it serves), and the handler serves that cached value.
+///
+/// **Protocol actions excluded.** `heartbeat` is HTTP-unreachable on both
+/// impls (WS-only on the TS spine; `ws_only` on the Rust registry), but
+/// `peer/ping` is organized differently — the TS spine mounts it on the HTTP
+/// endpoint the manifest enumerates as well as the WS one, the Rust stub
+/// compiles one shared registry — so including the protocol family would be a
+/// spurious cross-impl diff. The builder drops every
+/// [`PROTOCOL_ACTION_SPECS`] method by name, matching the TS scope (whose
+/// mount list never contains them). `cancel` needs no filter on either side:
+/// it is a notification the WS read loop owns and is mounted on no dispatch
+/// map at all.
+///
+/// **WS-only domain methods are listed, with `transport: "ws"`.** A domain
+/// spec marked [`ActionSpec::ws_only`] (the room verbs) is part of the
+/// surface both twins must mount alike, so it stays in the manifest; the
+/// entry says where it is served. A method served on both transports carries
+/// no `transport` key — read it as `"both"` — so a mount with no WS-only
+/// domain method dumps only the eight keys every entry carries.
+///
+/// Read-only + daemon-token gated (`crate::TESTING_ACTION_AUTH`), matching
+/// `_testing_reset` and its siblings.
 #[must_use]
 pub fn create_testing_action_manifest_action_spec(mounted: &[ActionSpec]) -> ActionSpec {
     let manifest = build_action_manifest(mounted);

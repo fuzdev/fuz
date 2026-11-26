@@ -16,7 +16,8 @@
 //! credential's 401 for a deleted grantor or issuer — and writes nothing. And
 //! each lock is shown to serialize, on two connections: a create waits on an
 //! uncommitted delete and is then refused, and a delete waits on an uncommitted
-//! create and then ends what it wrote.
+//! create and then ends what it wrote. The wait is read off `pg_stat_activity`,
+//! so those cases run on PostgreSQL only.
 //!
 //! And the last-admin guard against an admin-offer accept: the accept holds
 //! its grantor's account row shared, the guard takes the grantor's account
@@ -48,7 +49,7 @@
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fuz_auth::actor_queries::query_count_active_accounts_with_global_role_locked;
 use fuz_auth::admin_action_specs::ERROR_CANNOT_DELETE_LAST_ADMIN;
@@ -63,17 +64,13 @@ use fuz_auth::role_grant_schema::RoleGrantRow;
 use fuz_auth::{AdminOfferAuthorize, InviteCreateError, RoleGrantOfferActionSpecs, RoleRegistry};
 use fuz_db::{ActionDb, Pool};
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
-use fuz_testing::TestDb;
+use fuz_testing::{
+    TestDb, in_tx, race, seed_account_actor, until_lock_waiters, until_lock_waiters_or,
+};
 use serde_json::{Value, json};
 
 mod common;
-use common::{
-    LOCK_WAIT_DEADLINE, fresh_db, fresh_postgres_db, in_tx, seed_account_actor, seed_actor_context,
-    seed_admin, seed_role_grant_direct,
-};
-
-/// How long a blocked call is given to show it is blocked.
-const HOLD: Duration = Duration::from_millis(300);
+use common::{fresh_db, fresh_postgres_db, seed_actor_context, seed_admin, seed_role_grant_direct};
 
 /// `auth` with an in-memory global `admin` grant — the handlers are called
 /// directly, so a context carries exactly what a test hands it.
@@ -208,26 +205,6 @@ fn assert_unauthenticated(result: Result<Value, JsonrpcError>, label: &str) {
     );
 }
 
-/// Run `blocked` beside a holder that commits after [`HOLD`]; returns
-/// `blocked`'s output and whether it finished only after the commit.
-async fn race_against_commit<T>(
-    blocked: impl Future<Output = T>,
-    commit: impl Future<Output = ()>,
-) -> (T, bool) {
-    let blocked = async {
-        let out = blocked.await;
-        (out, Instant::now())
-    };
-    let commit = async {
-        tokio::time::sleep(HOLD).await;
-        let at = Instant::now();
-        commit.await;
-        at
-    };
-    let ((out, finished_at), committed_at) = tokio::join!(blocked, commit);
-    (out, finished_at > committed_at)
-}
-
 // -- authorized before the delete ----------------------------------------------
 
 #[tokio::test]
@@ -303,13 +280,18 @@ async fn query_create_invite_refuses_an_issuer_deleted_before_it() {
 }
 
 // -- the locks serialize -------------------------------------------------------
+//
+// Each case holds one call's transaction open, runs the other into the lock it
+// holds, and commits the first only once the second is seen waiting on it
+// (`race!`), so the order is the lock's, never a sleep's.
 
-/// A delete of `account_id`, uncommitted on `tx`: its tombstone's row lock held.
-async fn hold_a_delete(
+/// A delete of `account_id` on `tx` — uncommitted, as `race!` holds it, its
+/// tombstone's row lock held.
+async fn delete_on(
     f: &Fixture,
     account_id: uuid::Uuid,
     tx: &deadpool_postgres::Transaction<'_>,
-) {
+) -> Result<Value, JsonrpcError> {
     admin_action(
         &f.pool,
         &f.deleter,
@@ -318,21 +300,18 @@ async fn hold_a_delete(
         tx,
     )
     .await
-    .expect("account_delete");
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_waits_on_an_uncommitted_offer_to_the_account_and_then_supersedes_it() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    offer(&f.pool, &f.grantor, f.recipient, &tx)
-        .await
-        .expect("offer");
-    let ((), waited) = race_against_commit(delete(&f, f.recipient), async {
-        tx.commit().await.unwrap();
-    })
-    .await;
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, (), waited) = race!(
+        &f.pool,
+        first: |tx| offer(&f.pool, &f.grantor, f.recipient, &tx),
+        second: delete(&f, f.recipient).await
+    );
+    held.expect("offer");
     assert!(waited, "the delete's tombstone waits on the offer's lock");
     assert_eq!(
         pending_offers(&f).await,
@@ -342,42 +321,30 @@ async fn a_delete_waits_on_an_uncommitted_offer_to_the_account_and_then_supersed
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_offer_create_waits_on_an_uncommitted_delete_of_its_recipient_and_is_then_refused() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    hold_a_delete(&f, f.recipient, &tx).await;
-    let (result, waited) = race_against_commit(
-        async {
-            in_tx!(f.pool, |offer_tx| offer(
-                &f.pool,
-                &f.grantor,
-                f.recipient,
-                &offer_tx
-            ))
-        },
-        async {
-            tx.commit().await.unwrap();
-        },
-    )
-    .await;
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, result, waited) = race!(
+        &f.pool,
+        first: |tx| delete_on(&f, f.recipient, &tx),
+        second: in_tx!(f.pool, |offer_tx| offer(&f.pool, &f.grantor, f.recipient, &offer_tx))
+    );
+    held.expect("account_delete");
     assert!(waited, "the offer waits on the tombstone's row lock");
     assert_recipient_not_found(result, "the offer that waited");
     assert_eq!(pending_offers(&f).await, 0, "nothing pending");
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_waits_on_an_uncommitted_offer_from_the_account_and_then_supersedes_it() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    offer(&f.pool, &f.grantor, f.recipient, &tx)
-        .await
-        .expect("offer");
-    let ((), waited) = race_against_commit(delete(&f, f.grantor.account.id), async {
-        tx.commit().await.unwrap();
-    })
-    .await;
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, (), waited) = race!(
+        &f.pool,
+        first: |tx| offer(&f.pool, &f.grantor, f.recipient, &tx),
+        second: delete(&f, f.grantor.account.id).await
+    );
+    held.expect("offer");
     assert!(waited, "the delete's tombstone waits on the offer's lock");
     assert_eq!(
         pending_offers(&f).await,
@@ -387,98 +354,76 @@ async fn a_delete_waits_on_an_uncommitted_offer_from_the_account_and_then_supers
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_offer_create_waits_on_an_uncommitted_delete_of_its_grantor_and_is_then_refused() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    hold_a_delete(&f, f.grantor.account.id, &tx).await;
-    let (result, waited) = race_against_commit(
-        async {
-            in_tx!(f.pool, |offer_tx| offer(
-                &f.pool,
-                &f.grantor,
-                f.recipient,
-                &offer_tx
-            ))
-        },
-        async {
-            tx.commit().await.unwrap();
-        },
-    )
-    .await;
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, result, waited) = race!(
+        &f.pool,
+        first: |tx| delete_on(&f, f.grantor.account.id, &tx),
+        second: in_tx!(f.pool, |offer_tx| offer(&f.pool, &f.grantor, f.recipient, &offer_tx))
+    );
+    held.expect("account_delete");
     assert!(waited, "the offer waits on the tombstone's row lock");
     assert_unauthenticated(result, "the offer that waited");
     assert_eq!(pending_offers(&f).await, 0, "nothing pending");
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_waits_on_an_uncommitted_invite_from_the_account_and_then_deletes_it() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    admin_action(
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, (), waited) = race!(
         &f.pool,
-        &f.issuer,
-        "invite_create",
-        &json!({ "username": "race_invitee" }),
-        &tx,
-    )
-    .await
-    .expect("invite_create");
-    let ((), waited) = race_against_commit(delete(&f, f.issuer.account.id), async {
-        tx.commit().await.unwrap();
-    })
-    .await;
+        first: |tx| admin_action(
+            &f.pool,
+            &f.issuer,
+            "invite_create",
+            &json!({ "username": "race_invitee" }),
+            &tx
+        ),
+        second: delete(&f, f.issuer.account.id).await
+    );
+    held.expect("invite_create");
     assert!(waited, "the delete's tombstone waits on the invite's lock");
     assert_eq!(invites(&f).await, 0, "the delete deleted the invite");
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn an_invite_create_waits_on_an_uncommitted_delete_of_its_issuer_and_is_then_refused() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    hold_a_delete(&f, f.issuer.account.id, &tx).await;
-    let (result, waited) = race_against_commit(
-        async {
-            in_tx!(f.pool, |invite_tx| admin_action(
-                &f.pool,
-                &f.issuer,
-                "invite_create",
-                &json!({ "username": "race_invitee" }),
-                &invite_tx
-            ))
-        },
-        async {
-            tx.commit().await.unwrap();
-        },
-    )
-    .await;
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, result, waited) = race!(
+        &f.pool,
+        first: |tx| delete_on(&f, f.issuer.account.id, &tx),
+        second: in_tx!(f.pool, |invite_tx| admin_action(
+            &f.pool,
+            &f.issuer,
+            "invite_create",
+            &json!({ "username": "race_invitee" }),
+            &invite_tx
+        ))
+    );
+    held.expect("account_delete");
     assert!(waited, "the invite waits on the tombstone's row lock");
     assert_unauthenticated(result, "the invite that waited");
     assert_eq!(invites(&f).await, 0, "no invite row");
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn query_create_invite_waits_on_an_uncommitted_delete_of_its_issuer_and_is_then_refused() {
-    let f = setup().await;
-    let mut client = f.pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    hold_a_delete(&f, f.issuer.account.id, &tx).await;
-    let (result, waited) = race_against_commit(
-        async {
-            in_tx!(f.pool, |invite_tx| fuz_auth::query_create_invite(
-                &invite_tx,
-                None,
-                Some("race_invitee"),
-                &f.issuer.actor.id
-            ))
-        },
-        async {
-            tx.commit().await.unwrap();
-        },
-    )
-    .await;
+    let f = setup_on(fresh_postgres_db().await).await;
+    let (held, result, waited) = race!(
+        &f.pool,
+        first: |tx| delete_on(&f, f.issuer.account.id, &tx),
+        second: in_tx!(f.pool, |invite_tx| fuz_auth::query_create_invite(
+            &invite_tx,
+            None,
+            Some("race_invitee"),
+            &f.issuer.actor.id
+        ))
+    );
+    held.expect("account_delete");
     assert!(waited, "the query waits on the tombstone's row lock");
     assert!(
         matches!(result, Err(InviteCreateError::IssuerNotActive)),
@@ -488,20 +433,6 @@ async fn query_create_invite_waits_on_an_uncommitted_delete_of_its_issuer_and_is
 }
 
 // -- the last-admin guard --------------------------------------------------------
-
-/// Backends waiting on a lock in this database.
-async fn lock_waiters(pool: &Pool) -> i64 {
-    let client = pool.get().await.unwrap();
-    client
-        .query_one(
-            "SELECT COUNT(*) FROM pg_stat_activity
-             WHERE wait_event_type = 'Lock' AND datname = current_database()",
-            &[],
-        )
-        .await
-        .unwrap()
-        .get(0)
-}
 
 /// An offer between two admins and a third admin's delete never deadlock.
 ///
@@ -557,14 +488,7 @@ async fn an_offer_between_two_admins_and_a_third_admins_delete_never_deadlock() 
             ))
         };
         let offer_then_release = async {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while lock_waiters(&f.pool).await < 1 {
-                assert!(
-                    Instant::now() < deadline,
-                    "the delete's guard waits on the held row"
-                );
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
+            until_lock_waiters(&f.pool, 1, "the delete's guard waits on the held row").await;
             let create = async {
                 in_tx!(f.pool, |offer_tx| offer(
                     &f.pool,
@@ -851,17 +775,6 @@ async fn an_admin_offer_accept_sent_across_a_removal_of_its_grantor_is_refused()
     }
 }
 
-/// Wait until `n` sessions of the database wait on a lock. The deadline fails a
-/// wait that never comes; it is no timing assertion, so it is set far past any
-/// scheduling delay.
-async fn until_lock_waiters(pool: &Pool, n: i64, what: &str) {
-    let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
-    while lock_waiters(pool).await < n {
-        assert!(Instant::now() < deadline, "{what}");
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
 // -- the accept's account locks and the multi-row offer writes ------------------
 
 /// The role the lock-order cases offer and grant.
@@ -935,19 +848,6 @@ async fn offer_state(pool: &Pool, id: uuid::Uuid) -> (bool, bool) {
     (row.get(0), row.get(1))
 }
 
-/// Wait until a session waits on a lock or `done` is set — the query under
-/// test either waits or has finished. A bound on a hang only.
-async fn until_waiting_or_done(pool: &Pool, done: &std::sync::atomic::AtomicBool) {
-    let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
-    while !done.load(std::sync::atomic::Ordering::SeqCst) && lock_waiters(pool).await < 1 {
-        assert!(
-            Instant::now() < deadline,
-            "the query neither waits nor finishes"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
 /// Hold `held`'s statements in a transaction, run `query` in one of its own,
 /// then — once the query waits or has finished — run `then` on the held
 /// transaction and commit it. Every statement is one with no parameters but
@@ -966,7 +866,13 @@ macro_rules! against_held {
             result
         };
         let finish = async {
-            until_waiting_or_done(pool, &done).await;
+            until_lock_waiters_or(
+                pool,
+                1,
+                || done.load(std::sync::atomic::Ordering::SeqCst),
+                "the query neither waits nor finishes",
+            )
+            .await;
             $(holder
                 .batch_execute(AsRef::<str>::as_ref(&$then))
                 .await
@@ -1348,16 +1254,13 @@ macro_rules! pinned {
                 result
             };
             let release = async {
-                let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
-                while !second_done.load(std::sync::atomic::Ordering::SeqCst)
-                    && lock_waiters(pool).await < 2
-                {
-                    assert!(
-                        Instant::now() < deadline,
-                        "the second neither waits nor finishes"
-                    );
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
+                until_lock_waiters_or(
+                    pool,
+                    2,
+                    || second_done.load(std::sync::atomic::Ordering::SeqCst),
+                    "the second neither waits nor finishes",
+                )
+                .await;
                 pin.commit().await.unwrap();
             };
             let (second, ()) = tokio::join!(second, release);

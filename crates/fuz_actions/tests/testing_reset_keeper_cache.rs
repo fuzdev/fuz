@@ -28,22 +28,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::http::HeaderMap;
-use fuz_actions::ActionRegistry;
-use fuz_actions::perform_action::{PerformActionInput, PerformActionOptions, perform_action};
+use fuz_actions::perform_action::PerformActionOptions;
 use fuz_auth::daemon_token::DAEMON_TOKEN_HEADER;
-use fuz_auth::{
-    AUTH_MIGRATIONS, AuditEmitter, NoopConnectionCloser, NoopNotificationSender,
-    SESSION_COOKIE_NAME, SharedDaemonTokenState,
-};
+use fuz_auth::{AUTH_MIGRATIONS, SESSION_COOKIE_NAME, SharedDaemonTokenState};
 use fuz_db::ActionDb;
 use fuz_db::Pool;
-use fuz_realtime::SignalToken;
-use fuz_testing::testing_reset::{
-    BoxFutureResetResult, ResetStateFn, TestingResetOptions, create_testing_reset_action_spec,
-};
 use fuz_testing::{
-    TESTING_DAEMON_TOKEN, TestDb, TestEngine, TestingArgon2idHasher, TestingDbOptions,
-    daemon_token_state, fresh_test_db, seed_account_actor, testing_keyring,
+    BoxFutureResetResult, ResetStateFn, TESTING_DAEMON_TOKEN, TestDb, TestEngine,
+    TestingArgon2idHasher, TestingDbOptions, TestingResetOptions, create_testing_reset_action_spec,
+    daemon_token_state, dispatch_options, perform_with_auth, seed_account_actor, testing_keyring,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -72,7 +65,7 @@ struct Harness {
 /// A fresh database holding one keeper the daemon token resolves to, as a
 /// booted test binary has, and a registry carrying `_testing_reset` alone.
 async fn setup() -> Harness {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (boot_keeper_id, _) = seed_account_actor(&pool, "boot_keeper").await;
     let daemon_token_state = daemon_token_state(TESTING_DAEMON_TOKEN, Some(boot_keeper_id));
     let fail_reset_state = Arc::new(AtomicBool::new(false));
@@ -100,16 +93,7 @@ async fn setup() -> Harness {
         session_cookie_name: SESSION_COOKIE_NAME,
         reset_state: Some(reset_state),
     });
-    let options = PerformActionOptions {
-        pool: pool.clone(),
-        registry: Arc::new(ActionRegistry::compile(vec![spec]).expect("compile registry")),
-        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
-        connection_closer: Arc::new(NoopConnectionCloser),
-        notification_sender: Arc::new(NoopNotificationSender),
-        peer: fuz_realtime::noop_action_peer(),
-        account_rate_limiter: None,
-        ip_rate_limiter: None,
-    };
+    let options = dispatch_options(&pool, vec![spec]);
     Harness {
         options,
         pool,
@@ -152,23 +136,7 @@ async fn reset_with(
     .await
     .expect("the fixture sends no foreign origin")
     .expect("the daemon token resolves to the cached keeper");
-
-    let request_id = json!(1);
-    let signal = SignalToken::new();
-    let span = tracing::Span::none();
-    let notify: &(dyn Fn(&str, &Value) + Send + Sync) = &fuz_realtime::http_no_op_notify;
-    let input = PerformActionInput {
-        method: "_testing_reset",
-        params: &params,
-        request_id: &request_id,
-        auth: Some(&resolved),
-        client_ip: None,
-        connection_id: None,
-        notify,
-        signal: &signal,
-        log: &span,
-    };
-    perform_action(input, &h.options).await
+    perform_with_auth(&h.options, "_testing_reset", params, Some(&resolved)).await
 }
 
 /// The seeded keeper's account id from a successful reset's response.

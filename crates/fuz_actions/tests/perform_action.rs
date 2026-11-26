@@ -103,11 +103,7 @@ fn registry_compose_account_and_protocol() {
 /// Build the self-service surface over an unreachable pool — construction
 /// touches no DB, so only the eligible-role guard can decide the outcome.
 fn build_self_service(eligible_roles: &[&str]) -> Vec<ActionSpec> {
-    let pool = fuz_db::create_pool(
-        "postgres://nobody@127.0.0.1:1/nothing",
-        &fuz_db::PoolOptions::default(),
-    )
-    .unwrap();
+    let pool = fuz_testing::unreachable_pool();
     fuz_actions::auth_adapter::build_self_service_role_specs(
         Arc::new(fuz_auth::AuditEmitter::new(pool, Arc::default())),
         Arc::new(fuz_auth::NoopConnectionCloser),
@@ -217,11 +213,7 @@ async fn heartbeat_spec_composes() {
 /// instantly. That is what makes the pair of cases below discriminating: the
 /// `ws_only` refusal precedes the pool, an ordinary spec's dispatch does not.
 fn dead_pool_rpc_state(registry: ActionRegistry) -> fuz_actions::ActionDispatch {
-    let pool = fuz_db::create_pool(
-        "postgres://nobody@127.0.0.1:1/nothing",
-        &fuz_db::PoolOptions::default(),
-    )
-    .unwrap();
+    let pool = fuz_testing::unreachable_pool();
     fuz_actions::ActionDispatch {
         gate: fuz_testing::testing_auth_gate(pool.clone()),
         registry: Arc::new(registry),
@@ -553,8 +545,6 @@ async fn a_failed_credential_checkout_answers_the_503_not_an_anonymous_call() {
 /// answers the 405.
 #[tokio::test]
 async fn the_ws_path_serves_get_alone_and_gates_before_the_upgrade() {
-    use tower::ServiceExt as _;
-
     let dispatch = dead_pool_rpc_state(ActionRegistry::compile(PROTOCOL_ACTION_SPECS()).unwrap());
     let router = fuz_http::compose_stack(
         [fuz_http::RouteGroup::new(
@@ -571,10 +561,9 @@ async fn the_ws_path_serves_get_alone_and_gates_before_the_upgrade() {
             fuz_http::AllowedOrigins::parse(fuz_testing::TESTING_ALLOWED_ORIGIN).unwrap(),
             Arc::new(Vec::new()),
         ),
-    )
-    .into_router_for_testing();
+    );
     let answer = |method: &'static str, upgrade: bool| {
-        let router = router.clone();
+        let router = &router;
         async move {
             let mut request = axum::http::Request::builder().method(method).uri("/ws");
             if upgrade {
@@ -584,20 +573,18 @@ async fn the_ws_path_serves_get_alone_and_gates_before_the_upgrade() {
                     .header("sec-websocket-version", "13")
                     .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
             }
-            let mut request = request.body(axum::body::Body::empty()).unwrap();
-            request.extensions_mut().insert(axum::extract::ConnectInfo(
-                std::net::SocketAddr::from(([127, 0, 0, 1], 40000)),
-            ));
-            let response = router.oneshot(request).await.unwrap();
+            let request = request.body(axum::body::Body::empty()).unwrap();
+            let response = router.send_for_testing(request, fuz_http::TEST_PEER).await;
             let status = response.status().as_u16();
             let allow = response
                 .headers()
                 .get(axum::http::header::ALLOW)
                 .map(|v| v.to_str().unwrap().to_owned());
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            (status, allow, String::from_utf8_lossy(&body).into_owned())
+            (
+                status,
+                allow,
+                String::from_utf8_lossy(response.body()).into_owned(),
+            )
         }
     };
     let status = |method: &'static str, upgrade: bool| {

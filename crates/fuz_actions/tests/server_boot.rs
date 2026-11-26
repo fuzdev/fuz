@@ -27,7 +27,7 @@ use fuz_actions::server::{
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_db::Pool;
 use fuz_http::{BaseServerEnv, ServerEnvOptions};
-use fuz_testing::{TestEngine, TestingArgon2idHasher, TestingDbOptions, fresh_test_db};
+use fuz_testing::{TestEngine, TestingArgon2idHasher, TestingDbOptions};
 use tower::ServiceExt;
 
 const DB: TestingDbOptions<'static> = TestingDbOptions {
@@ -88,7 +88,7 @@ async fn has_schema_version(pool: &Pool) -> bool {
 
 #[tokio::test]
 async fn boots_a_bare_database_and_serves_ready() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     assert!(!has_schema_version(&pool).await);
 
     let BootedAppBackend { backend, ready } =
@@ -121,7 +121,7 @@ async fn boots_a_bare_database_and_serves_ready() {
 /// the router a server composes over the core answers `/ready` `404`.
 #[tokio::test]
 async fn a_spec_without_a_fixture_boots_and_serves_no_ready() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let BootedAppBackend { backend, ready } = create_app_backend(
         &env_at(pool.url()),
         &AppBackendSpec {
@@ -148,21 +148,11 @@ async fn a_spec_without_a_fixture_boots_and_serves_no_ready() {
         ("/health", StatusCode::OK),
         ("/ready", StatusCode::NOT_FOUND),
     ] {
-        let mut request = Request::builder()
+        let request = Request::builder()
             .uri(path)
             .body(Body::empty())
             .expect("the request builds");
-        request.extensions_mut().insert(axum::extract::ConnectInfo(
-            "127.0.0.1:40000"
-                .parse::<std::net::SocketAddr>()
-                .expect("the peer parses"),
-        ));
-        let response = router
-            .clone()
-            .into_router_for_testing()
-            .oneshot(request)
-            .await
-            .expect("the router answers");
+        let response = router.send_for_testing(request, fuz_http::TEST_PEER).await;
         assert_eq!(response.status(), status, "{path}");
     }
 }
@@ -171,7 +161,7 @@ async fn a_spec_without_a_fixture_boots_and_serves_no_ready() {
 #[ignore = "postgres-only: a database-level `ALTER DATABASE … SET`"]
 async fn refuses_a_database_not_at_read_committed_before_migrating() {
     // a database of its own, so the database-level setting reaches no other test
-    let pool = fresh_test_db(DB.postgres_only()).await;
+    let pool = DB.postgres_only().open().await;
     ensure_read_committed(&pool)
         .await
         .expect("the Postgres default passes");
@@ -211,7 +201,7 @@ async fn a_failed_migration_body_gets_no_connectivity_hint() {
         name: "broken_body",
         sql: "CREATE TABLE server_boot_broken (id NOT_A_TYPE)",
     }];
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let error = fuz_db::run_migrations(
         &pool,
         &[fuz_db::MigrationNamespace::new(
@@ -254,7 +244,7 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
     use fuz_auth::{AuditEventType, AuditLogInput};
     use fuz_testing::TestingTableLock;
 
-    let pool = fresh_test_db(AUTH_DB.postgres_only()).await;
+    let pool = AUTH_DB.postgres_only().open().await;
     let backend =
         build_app_backend(&env_at(pool.url()), &SPEC, &options()).expect("the backend builds");
     let emitter = Arc::clone(&backend.audit_emitter);

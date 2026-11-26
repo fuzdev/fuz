@@ -18,10 +18,11 @@ use fuz_auth::{
     RequestContext, ResolvedAuthOwned, apply_authorization_phase,
 };
 use fuz_http::JsonrpcErrorCode;
+use fuz_testing::seed_account_actor;
 use serde_json::json;
 
 mod common;
-use common::{fresh_db, seed_account_actor};
+use common::fresh_db;
 
 #[tokio::test]
 async fn an_account_grain_phase_builds_on_the_carried_account_without_reading_it() {

@@ -915,7 +915,9 @@ the unoverridable `NON_BROWSABLE_TABLES` credential floor, a
 ### `fuz_testing`
 
 **Test-only spine fixtures — never in a production binary (audited).** A crate,
-not a `fuz_auth` feature, so unification can't route it into production.
+not a `fuz_auth` feature, so unification can't route it into production. Its
+modules are private and its API is the crate root, one path per item
+(`fuz_testing::seed_account_actor`, never through a module).
 
 - What production must be unable to reach: the test hasher, the daemon-token
   producer, and the daemon-token-gated `_testing_*` specs. A consumer's
@@ -923,8 +925,7 @@ not a `fuz_auth` feature, so unification can't route it into production.
   twins, since the cross-backend action-manifest diff is exact.
 - `_testing_credential_read` (`testing_credential_read`) reads a list of raw
   header lines as the credential legs would, for fuz_app's credential
-  conformance suite — at most `TESTING_CREDENTIAL_READ_LINES_MAX` lines of
-  `TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX` characters, since `HeaderMap`
+  conformance suite — a bounded count of bounded lines, since `HeaderMap`
   panics past its own entry limit; every refusal of `lines` carries
   `invalid_header_line`. `credential_conformance.json` beside it is a
   byte-identical copy of fuz_app's table, embedded with `include_str!` and run
@@ -939,28 +940,50 @@ not a `fuz_auth` feature, so unification can't route it into production.
   backend after every test. `db_invariants.sql` beside it is generated in
   fuz_app and copied here byte for byte (`include_str!`); edit it there,
   never here.
-- The test-database harness, `fresh_test_db` — a pglet server per test,
-  in-process, forked from a base migrated once per process for the suite's
-  migration set, or a database of its own on PostgreSQL under
-  `FUZ_TEST_POSTGRES_URL` (./testing.md § Postgres suites) — with
-  `TestingTableLock` for driving races deterministically, and
-  `assert_expected_schema_fixture`, a server's `/ready` fixture drift guard.
+- The test-database harness, `fresh_test_db` (a suite's const opens with
+  `TestingDbOptions::open`) — a pglet server per test, in-process, forked
+  from a base migrated once per process for the suite's migration set, or a
+  database of its own on PostgreSQL under `FUZ_TEST_POSTGRES_URL`
+  (./testing.md § Postgres suites) — with `assert_expected_schema_fixture`, a
+  server's `/ready` fixture drift guard.
+- The race kit: `TestingTableLock` stalls a handler at one table read, and
+  the lock-wait observers (`until_lock_waiters`, `until_blocked_by`, their
+  `_or` forms ending on a finished call, `backend_pid`, `LOCK_WAIT_DEADLINE`)
+  read a wait off `pg_stat_activity` rather than inferring it from a sleep —
+  PostgreSQL only, as pglet has neither view nor `pg_blocking_pids`. The
+  `in_tx!` and `race!` macros run a call in its own transaction and race a
+  held transaction against a second call.
+- Fixtures and doubles: the seeding (`seed_account_actor`, its `_with_email`
+  form, `seed_extra_actor`, `grant_role` / `grant_scoped_role` returning the
+  grant id, `refuse_audit_rows` over `AuditEventType`), the credential mints
+  (`mint_session_cookie`, `mint_api_token`, `resolve_test_credential`),
+  `unreachable_pool` over `UNREACHABLE_DATABASE_URL`, `budgeted_pool`, and
+  `RecordingConnectionCloser`.
+- The dispatcher harness, for a suite that drives `perform_action` without a
+  transport: `dispatch_options` (inert side channels over a spec list),
+  `perform_as` (a fresh credential for an account) and `perform_with_auth`,
+  read with `assert_rpc_ok`, `assert_rpc_err`, and `rpc_refusal`.
 - A `testing_*` server's toolkit wiring: `testing_backend_options` (the test
   hasher, limiters off), `require_daemon_token_from_env`,
   `testing_reset_specs` (`_testing_reset`, `_testing_drain_effects` and
   `_testing_db_invariants`, over the runtime's daemon-token state) over
   `truncate_reset_state` — the spine's `fuz_cell::CELL_DROP_TABLES` /
   `fuz_fact::FACT_DROP_TABLES` joined with the server's own tables — and
-  `inert_app_backend` for router tests without a database. Each spine table
-  const, `fuz_auth::AUTH_INTEGRATION_TRUNCATE_TABLES` (the auth tables the reset
+  `assert_strict_server_argv`, the strict command line a `testing_*` binary
+  keeps. For in-process router tests, `test_app_backend` builds a spine core
+  over `TestAppBackendOptions` (the allowlist, a lazy pool's URL, the
+  limiters, a bootstrap token path), and `inert_app_backend` is its form
+  without a database. Each spine table const,
+  `fuz_auth::AUTH_INTEGRATION_TRUNCATE_TABLES` (the auth tables the reset
   deletes from) among them, is held to its chain's DDL by
   `migration_created_tables`.
-- The request-reads census (`request_reads_census`): the checks that hold a
-  workspace's lenient-reader disallows in place — every `clippy.toml` carries
-  each canonical entry, every in-source suppression is listed, no `[lints]`
-  table allows them — run by the spine and the consumer workspaces that adopt
-  it, each over its own root, beside the positive controls that must compile
-  under its own clippy config.
+- The request-reads census (`assert_clippy_configs_disallow_lenient_readers`,
+  `assert_suppressions_listed`, `assert_no_lints_table_allows_disallows`): the
+  checks that hold a workspace's lenient-reader disallows in place — every
+  `clippy.toml` carries each canonical entry, every in-source suppression is
+  listed, no `[lints]` table allows them — run by the spine and the consumer
+  workspaces that adopt it, each over its own root, beside the positive
+  controls that must compile under its own clippy config.
 - A dev-dependency of the spine crates other than `fuz_db` and `fuz_http` and
   of consumer servers, and a normal dependency of `testing_spine_stub`
   (`fuz_audit` walks runtime edges only, so the dev cycles are allowed).

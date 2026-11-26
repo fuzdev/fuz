@@ -22,11 +22,12 @@ use fuz_auth::{
 };
 use fuz_db::ActionDb;
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
+use fuz_testing::{seed_account_actor, seed_extra_actor, until_lock_waiters};
 use serde_json::{Value, json};
 mod common;
 use common::{
-    build_audit, closer, ctx, fresh_db, fresh_postgres_db, seed_account_actor, seed_actor_context,
-    seed_admin, seed_extra_actor, seed_role_grant_direct,
+    build_audit, closer, ctx, fresh_db, fresh_postgres_db, seed_actor_context, seed_admin,
+    seed_role_grant_direct,
 };
 
 /// Dispatch an offer verb with the builtin registry and the default
@@ -2856,26 +2857,7 @@ async fn cross_revokes_of_the_last_two_admins_serialize() {
         }
     };
     let release = async {
-        // both revokes are waiting on the holder's row locks
-        let observer = pool.get().await.expect("pool.get");
-        let mut polls = 0;
-        loop {
-            let waiting: i64 = observer
-                .query_one(
-                    "SELECT count(*) FROM pg_stat_activity
-                     WHERE datname = current_database() AND wait_event_type = 'Lock'",
-                    &[],
-                )
-                .await
-                .expect("pg_stat_activity")
-                .get(0);
-            if waiting >= 2 {
-                break;
-            }
-            polls += 1;
-            assert!(polls < 1000, "both revokes reach the guard");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        until_lock_waiters(&pool, 2, "both revokes wait on the holder's row locks").await;
         holder.commit().await.expect("release");
     };
     let (first, second, ()) = tokio::time::timeout(Duration::from_secs(30), async {

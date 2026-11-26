@@ -22,9 +22,9 @@ uuid.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# Dev-only: the shared test-database harness (`fuz_testing::fresh_db`). The
-# `fuz_fact` ⊥ {axum, fuz_http, fuz_cell, fuz_auth, fuz_actions} layering rule
-# is a *runtime* rule; `fuz_audit` skips dev edges.
+# Dev-only: the shared test-database harness (`fuz_testing::fresh_test_db`).
+# The `fuz_fact` ⊥ {axum, fuz_http, fuz_cell, fuz_auth, fuz_actions} layering
+# rule is a *runtime* rule; `fuz_audit` skips dev edges.
 fuz_testing.workspace = true
 # Dev-only: `AUTH_MIGRATIONS` — `fact_holder` FKs into the auth schema's
 # `actor` table, so the suites run the auth chain ahead of the fact chain.

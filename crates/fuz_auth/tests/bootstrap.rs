@@ -1506,11 +1506,7 @@ async fn an_exhausted_limiter_answers_the_429() {
     use axum::http::{Request, StatusCode, header};
     use tower::ServiceExt;
 
-    let pool = fuz_db::create_pool(
-        "postgres://bootstrap_limiter@127.0.0.1:1/none",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("pool builds without connecting");
+    let pool = fuz_testing::unreachable_pool();
     let limiter = one_attempt_limiter();
     limiter.record(&fuz_http::rate_limit_ip_key("1.2.3.4"));
     let (token_store, _burned) = InMemoryTokenStore::with_token(TOKEN.as_bytes());
@@ -1683,11 +1679,7 @@ async fn the_boot_report_logs_each_state_at_its_level() {
 /// fails naming it, as the twin's boot throws.
 #[tokio::test]
 async fn a_failed_lock_read_is_an_error() {
-    let pool = fuz_db::create_pool(
-        "postgres://bootstrap_boot@127.0.0.1:1/none",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("pool builds without connecting");
+    let pool = fuz_testing::unreachable_pool();
     let path = std::path::Path::new("/nonexistent/bootstrap_token");
     assert!(is_bootstrap_available(&pool, Some(path)).await.is_err());
     // no token path: no database read at all

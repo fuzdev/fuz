@@ -1,17 +1,7 @@
 //! The column-projection drift assertion shared by the spine's
 //! `tests/columns.rs` guards.
 //!
-//! Each migrating crate ships a `tests/columns.rs` pinning that every live
-//! table is either a `*_COLUMNS` projection const naming exactly its columns or
-//! a reasoned exemption. What varies between them is only the *registry* — which
-//! [`ColumnProjections`] sets that crate's migration chains contribute, plus any
-//! fixture-local exemption. The assertion itself (read the live `public` schema,
-//! merge the sets, require no mismatches) is identical across them;
-//! [`assert_column_projections`] is that body, and each guard keeps its own
-//! registry declaration.
-//!
-//! Rust twin of the assertion inside `fuz_app`'s
-//! `src/test/db/column_projections.db.test.ts`.
+//! The overview is on [`assert_column_projections`].
 
 #![expect(
     clippy::expect_used,
@@ -26,6 +16,18 @@ use fuz_db::{ColumnProjections, Pool, column_projection_mismatches_merged, query
 ///
 /// `pool` is the test's `fresh_test_db` database, so "live" means the
 /// schema the crate's migration chains just built.
+///
+/// Each migrating crate ships a `tests/columns.rs` pinning that every live
+/// table is either a `*_COLUMNS` projection const naming exactly its columns or
+/// a reasoned exemption. What varies between them is only the *registry* — which
+/// [`ColumnProjections`] sets that crate's migration chains contribute, plus any
+/// fixture-local exemption. The assertion itself (read the live `public` schema,
+/// merge the sets, require no mismatches) is identical across them;
+/// [`assert_column_projections`] is that body, and each guard keeps its own
+/// registry declaration.
+///
+/// Rust twin of the assertion inside `fuz_app`'s
+/// `src/test/db/column_projections.db.test.ts`.
 ///
 /// # Panics
 ///

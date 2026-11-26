@@ -469,10 +469,10 @@ pub const BUILTIN_CRATE_LAYERING: &[CrateLayering] = &[
 /// The name prefix that marks a feature of a local package as test-only.
 ///
 /// A crate gates a test-only escape hatch behind such a feature — `fuz_http`'s
-/// `test_router_access` exposes `GatedRouter::into_router_for_testing`, the
-/// composed router a shipping binary must not reach; `fuz_crypto`'s
-/// `test_trust_anchor`, `fuz_home`'s `test_home_override`, and `fuz_artifact`'s
-/// `test_binary_stubs` are the others.
+/// `test_router_access` exposes `GatedRouter::into_router_for_testing` and
+/// `send_for_testing`, the composed router a shipping binary must not reach;
+/// `fuz_crypto`'s `test_trust_anchor`, `fuz_home`'s `test_home_override`, and
+/// `fuz_artifact`'s `test_binary_stubs` are the others.
 /// The audit derives the set from the metadata — every feature of a local
 /// (`source: null`) package whose name starts with this prefix — so a new seam
 /// is covered the moment it is declared, with no list to keep. Registry and

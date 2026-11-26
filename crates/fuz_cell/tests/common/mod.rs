@@ -9,7 +9,7 @@
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_cell::CELL_MIGRATIONS;
 use fuz_db::Pool;
-use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db, seed_account_actor};
+use fuz_testing::{TestDb, TestEngine, TestingDbOptions, seed_account_actor};
 
 /// This suite's database: the crate's full DDL surface in FK order — auth first (`cell` FKs into
 /// `actor`), then cell.
@@ -23,13 +23,13 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
 /// A fresh database with the auth and cell chains, ready for fixture seeding.
 #[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub async fn fresh_db() -> TestDb {
-    fresh_test_db(DB).await
+    DB.open().await
 }
 
 /// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
 #[allow(dead_code, reason = "each test binary uses only part of this module")]
 pub async fn fresh_postgres_db() -> TestDb {
-    fresh_test_db(DB.postgres_only()).await
+    DB.postgres_only().open().await
 }
 
 /// Seed an `account` + `actor` pair and return the actor id — the value

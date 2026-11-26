@@ -1,46 +1,5 @@
 //! The credential fixtures — a signed session cookie, an `api_token` row, and
 //! a daemon-token state — shared by the spine's database suites.
-//!
-//! Third sibling of [`crate::fresh_db`] and [`crate::seed`], one layer further
-//! into the request: `fresh_db` hands a suite a migrated pool, `seed` gives it
-//! an identity, and this module mints the credential that identity
-//! authenticates with — one per channel the credential walk
-//! (`AuthGate::resolve_credential`) tries — and the [`testing_auth_gate`] a
-//! suite resolves it through.
-//! `fuz_auth`'s `public_request_context` and `resolve_auth`,
-//! `fuz_fact_serving`'s `serve`, and `fuz_realtime`'s `audit_stream` each
-//! hand-copied the session-cookie mint (three copies), the `api_token` mint
-//! (three), the `TokenScope::Methods` document (three), the keyring (six), and
-//! the daemon-token state literal (four) — the same duplication `seed` was
-//! extracted to end.
-//!
-//! ### The cookie mint returns a *request* header value
-//!
-//! `fuz_auth::sign_session_cookie` builds a **`Set-Cookie`** value —
-//! `name=value` followed by `; Path=/; HttpOnly; Secure; SameSite=Strict;
-//! Max-Age=…`. A request `Cookie` header is only the `name=value` pair, so
-//! [`mint_session_cookie`] signs the value alone
-//! (`fuz_auth::create_session_cookie_value`, checked through the production
-//! formatter) and every caller can hand the result straight to a `Cookie`
-//! header.
-//!
-//! ### The daemon-token state is built as a literal, and must be
-//!
-//! `fuz_auth` exposes no constructor for [`DaemonTokenState`] — the producer
-//! lives in [`crate::daemon_token`] by dep-graph rule, so no production binary
-//! can mint or persist the credential. A test that only needs the *shape*
-//! (a bound keeper and a token to send) would otherwise spell the struct
-//! literal itself. [`daemon_token_state`] is that
-//! literal, once: a field added to the struct is one compile error, not
-//! one per suite.
-//!
-//! ### A bearer fixture carries no `Origin` / `Referer`
-//!
-//! Not enforced here — it is a property of the *request* a suite builds, not
-//! of the token — but it belongs with the mint: the bearer leg of
-//! the credential walk refuses a browser-context request outright, so
-//! a case that sets either header passes for the wrong reason. Every suite
-//! consuming [`mint_api_token`] builds its headers without them.
 
 #![expect(
     clippy::expect_used,
@@ -114,12 +73,22 @@ pub fn testing_auth_gate(pool: Pool) -> AuthGate {
 /// `query_create_session` stores it, and expires a day out — comfortably
 /// future so the server-side row gate (`WHERE expires_at > NOW()`) passes. A
 /// suite that wants the *expired* case wants
-/// [`crate::testing_mint_session`]'s backdated mint instead, which is
+/// [`crate::create_testing_mint_session_action_spec`]'s backdated mint instead, which is
 /// constrained to only ever produce a dead row.
 ///
 /// Bypasses `create_capped_session`, so no concurrent-session eviction runs —
 /// the point of a fixture is a credential, not the capping policy, which has
 /// its own coverage in `fuz_auth`.
+///
+/// ### The cookie mint returns a *request* header value
+///
+/// `fuz_auth::sign_session_cookie` builds a **`Set-Cookie`** value —
+/// `name=value` followed by `; Path=/; HttpOnly; Secure; SameSite=Strict;
+/// Max-Age=…`. A request `Cookie` header is only the `name=value` pair, so
+/// [`mint_session_cookie`] signs the value alone
+/// (`fuz_auth::create_session_cookie_value`, checked through the production
+/// formatter) and every caller can hand the result straight to a `Cookie`
+/// header.
 ///
 /// # Panics
 ///
@@ -156,7 +125,7 @@ pub async fn mint_session_cookie(
 /// # Errors
 ///
 /// [`SessionCookieError`] when the name or the signed value cannot be written.
-pub(crate) fn signed_session_cookie_value(
+pub fn signed_session_cookie_value(
     keyring: &Keyring,
     session_token: &str,
     cookie_name: &str,
@@ -177,6 +146,14 @@ pub(crate) fn signed_session_cookie_value(
 /// The row takes the column default for `expires_at` (none). A suite pinning
 /// expiry behaviour writes its own insert; `fuz_auth`'s `api_token` suite
 /// does, since bounded-vs-eternal lifetime is the thing it tests.
+///
+/// ### A bearer fixture carries no `Origin` / `Referer`
+///
+/// Not enforced here — it is a property of the *request* a suite builds, not
+/// of the token — but it belongs with the mint: the bearer leg of
+/// the credential walk refuses a browser-context request outright, so
+/// a case that sets either header passes for the wrong reason. Every suite
+/// consuming [`mint_api_token`] builds its headers without them.
 ///
 /// # Panics
 ///
@@ -224,8 +201,18 @@ pub const TESTING_DAEMON_TOKEN: &str = "daemon-token-fixture-AAAAAAAAAAAAAAAAAAA
 ///
 /// `previous_token` is `None` (no rotation window) and `token_path` is empty:
 /// nothing here writes the token file, which is the half
-/// [`crate::daemon_token`] owns. A suite exercising persistence wants that
-/// module's real producer, not this.
+/// [`crate::init_daemon_token`] owns. A suite exercising persistence wants that
+/// real producer, not this.
+///
+/// ### The daemon-token state is built as a literal, and must be
+///
+/// `fuz_auth` exposes no constructor for [`DaemonTokenState`] — the producer
+/// is [`crate::init_daemon_token`], here by dep-graph rule, so no production binary
+/// can mint or persist the credential. A test that only needs the *shape*
+/// (a bound keeper and a token to send) would otherwise spell the struct
+/// literal itself. [`daemon_token_state`] is that
+/// literal, once: a field added to the struct is one compile error, not
+/// one per suite.
 #[must_use]
 pub fn daemon_token_state(
     current_token: &str,

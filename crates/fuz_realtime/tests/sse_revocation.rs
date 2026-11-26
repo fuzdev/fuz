@@ -25,7 +25,6 @@
 //! database suite in `tests/audit_stream.rs`.
 
 #![expect(
-    clippy::expect_used,
     clippy::panic,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
@@ -48,12 +47,10 @@ mod common;
 /// An emitter over a pool that is never connected — `notify` fans to the
 /// listener chain directly and touches neither.
 fn emitter() -> Arc<AuditEmitter> {
-    let pool = fuz_db::create_pool(
-        "postgres://unused@127.0.0.1:1/unused",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("lazy pool");
-    Arc::new(AuditEmitter::new(pool, Arc::default()))
+    Arc::new(AuditEmitter::new(
+        fuz_testing::unreachable_pool(),
+        Arc::default(),
+    ))
 }
 
 fn event(

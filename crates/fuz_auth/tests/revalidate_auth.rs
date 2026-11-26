@@ -161,7 +161,7 @@ fn token_id(resolved: &ResolvedAuth) -> &str {
 #[tokio::test]
 async fn a_live_session_revalidates() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "session_live").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "session_live").await;
     let resolved = resolve_session(&pool, account_id).await;
     assert!(is_live(&pool, &resolved).await);
     assert!(is_live(&pool, &resolved).await, "and keeps revalidating");
@@ -170,7 +170,7 @@ async fn a_live_session_revalidates() {
 #[tokio::test]
 async fn a_revoked_session_does_not_revalidate() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "session_revoked").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "session_revoked").await;
     let resolved = resolve_session(&pool, account_id).await;
 
     let client = pool.get().await.unwrap();
@@ -187,7 +187,7 @@ async fn a_revoked_session_does_not_revalidate() {
 #[tokio::test]
 async fn an_expired_session_does_not_revalidate() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "session_expired").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "session_expired").await;
     let resolved = resolve_session(&pool, account_id).await;
 
     execute(
@@ -205,8 +205,8 @@ async fn an_expired_session_does_not_revalidate() {
 #[tokio::test]
 async fn a_session_now_owned_by_another_account_does_not_revalidate() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "session_owner").await;
-    let (other_id, _) = common::seed_account_actor(&pool, "session_other").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "session_owner").await;
+    let (other_id, _) = fuz_testing::seed_account_actor(&pool, "session_other").await;
     let resolved = resolve_session(&pool, account_id).await;
 
     execute(
@@ -224,7 +224,7 @@ async fn a_session_now_owned_by_another_account_does_not_revalidate() {
 #[tokio::test]
 async fn revoking_another_session_leaves_this_one_valid() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "session_sibling").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "session_sibling").await;
     let resolved = resolve_session(&pool, account_id).await;
     let other = resolve_session(&pool, account_id).await;
 
@@ -245,7 +245,7 @@ async fn revoking_another_session_leaves_this_one_valid() {
 #[tokio::test]
 async fn a_live_api_token_revalidates() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "token_live").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "token_live").await;
     let resolved = resolve_api_token(&pool, account_id).await;
     assert!(is_live(&pool, &resolved).await);
 }
@@ -253,7 +253,7 @@ async fn a_live_api_token_revalidates() {
 #[tokio::test]
 async fn a_revoked_api_token_does_not_revalidate() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "token_revoked").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "token_revoked").await;
     let resolved = resolve_api_token(&pool, account_id).await;
     let sibling = resolve_api_token(&pool, account_id).await;
 
@@ -275,7 +275,7 @@ async fn a_revoked_api_token_does_not_revalidate() {
 #[tokio::test]
 async fn an_expired_api_token_does_not_revalidate() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "token_expired").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "token_expired").await;
     let resolved = resolve_api_token(&pool, account_id).await;
 
     execute(
@@ -291,8 +291,8 @@ async fn an_expired_api_token_does_not_revalidate() {
 #[tokio::test]
 async fn an_api_token_now_owned_by_another_account_does_not_revalidate() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "token_owner").await;
-    let (other_id, _) = common::seed_account_actor(&pool, "token_other").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "token_owner").await;
+    let (other_id, _) = fuz_testing::seed_account_actor(&pool, "token_other").await;
     let resolved = resolve_api_token(&pool, account_id).await;
 
     execute(
@@ -312,7 +312,7 @@ async fn an_api_token_now_owned_by_another_account_does_not_revalidate() {
 #[tokio::test]
 async fn a_password_change_invalidates_sessions_and_tokens() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "password_changed").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "password_changed").await;
     let session = resolve_session(&pool, account_id).await;
     let token = resolve_api_token(&pool, account_id).await;
 
@@ -334,7 +334,7 @@ async fn a_password_change_invalidates_sessions_and_tokens() {
 #[tokio::test]
 async fn a_soft_deleted_account_invalidates_every_credential() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "account_deleted").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "account_deleted").await;
     let session = resolve_session(&pool, account_id).await;
     let token = resolve_api_token(&pool, account_id).await;
     let daemon_state = daemon_token_state(TESTING_DAEMON_TOKEN, Some(account_id));
@@ -372,7 +372,7 @@ async fn resolve_daemon_token(pool: &Pool, state: &SharedDaemonTokenState) -> Re
 #[tokio::test]
 async fn a_daemon_token_revalidates_across_a_rotation() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "keeper").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "keeper").await;
     let state = daemon_token_state(TESTING_DAEMON_TOKEN, Some(account_id));
     let resolved = resolve_daemon_token(&pool, &state).await;
     assert!(is_live(&pool, &resolved).await);
@@ -395,7 +395,7 @@ async fn a_daemon_token_revalidates_across_a_rotation() {
 #[tokio::test]
 async fn the_recheck_does_not_touch_the_api_token() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "token_untouched").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "token_untouched").await;
     let resolved = resolve_api_token(&pool, account_id).await;
     execute(
         &pool,
@@ -420,7 +420,7 @@ async fn the_recheck_does_not_touch_the_api_token() {
 #[tokio::test]
 async fn the_recheck_leaves_the_session_row_unchanged() {
     let pool = common::fresh_db().await;
-    let (account_id, _) = common::seed_account_actor(&pool, "session_untouched").await;
+    let (account_id, _) = fuz_testing::seed_account_actor(&pool, "session_untouched").await;
     let resolved = resolve_session(&pool, account_id).await;
     let row = || async {
         pool.get()
@@ -462,7 +462,7 @@ async fn recheck(
 #[tokio::test]
 async fn a_live_connection_is_admitted() {
     let pool = common::fresh_db().await;
-    let (account_id, actor_id) = common::seed_account_actor(&pool, "recheck_live").await;
+    let (account_id, actor_id) = fuz_testing::seed_account_actor(&pool, "recheck_live").await;
     common::seed_role_grant_direct(&pool, actor_id, "admin", None).await;
     let resolved = resolve_session(&pool, account_id).await;
     assert_eq!(
@@ -480,7 +480,7 @@ async fn a_live_connection_is_admitted() {
 #[tokio::test]
 async fn a_revoked_credential_refuses_first() {
     let pool = common::fresh_db().await;
-    let (account_id, actor_id) = common::seed_account_actor(&pool, "recheck_revoked").await;
+    let (account_id, actor_id) = fuz_testing::seed_account_actor(&pool, "recheck_revoked").await;
     let resolved = resolve_session(&pool, account_id).await;
     let client = pool.get().await.unwrap();
     assert!(
@@ -506,8 +506,8 @@ async fn a_revoked_credential_refuses_first() {
 #[tokio::test]
 async fn a_tombstoned_actor_refuses() {
     let pool = common::fresh_db().await;
-    let (account_id, actor_id) = common::seed_account_actor(&pool, "recheck_tombstoned").await;
-    common::seed_extra_actor(&pool, account_id, "recheck_sibling").await;
+    let (account_id, actor_id) = fuz_testing::seed_account_actor(&pool, "recheck_tombstoned").await;
+    fuz_testing::seed_extra_actor(&pool, account_id, "recheck_sibling").await;
     common::seed_role_grant_direct(&pool, actor_id, "admin", None).await;
     let resolved = resolve_session(&pool, account_id).await;
     let client = pool.get().await.unwrap();
@@ -536,7 +536,7 @@ async fn a_tombstoned_actor_refuses() {
 #[tokio::test]
 async fn a_lost_role_refuses() {
     let pool = common::fresh_db().await;
-    let (account_id, actor_id) = common::seed_account_actor(&pool, "recheck_role").await;
+    let (account_id, actor_id) = fuz_testing::seed_account_actor(&pool, "recheck_role").await;
     let resolved = resolve_session(&pool, account_id).await;
     assert_eq!(
         recheck(&pool, &resolved, &actor_id, &["admin"]).await,

@@ -42,9 +42,8 @@ use fuz_db::Pool;
 use fuz_fact::{FACT_MIGRATIONS, mint_fact_file_url};
 use fuz_fact_serving::{FactServingRouteState, bare_fact_router, cell_fact_router};
 use fuz_testing::{
-    TESTING_DAEMON_TOKEN, TestDb, TestEngine, TestingDbOptions, fresh_test_db, grant_role,
-    grant_scoped_role, mint_api_token, narrowed_scope, seed_account_actor, seed_extra_actor,
-    testing_keyring,
+    TESTING_DAEMON_TOKEN, TestEngine, TestingDbOptions, grant_role, grant_scoped_role,
+    mint_api_token, narrowed_scope, seed_account_actor, seed_extra_actor, testing_keyring,
 };
 use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
@@ -59,11 +58,6 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
     setup_sql: None,
     engine: TestEngine::Any,
 };
-
-/// A fresh database with the auth + cell + fact chains.
-async fn fresh_db() -> TestDb {
-    fresh_test_db(DB).await
-}
 
 fn keyring() -> Arc<Keyring> {
     Arc::new(testing_keyring())
@@ -262,7 +256,7 @@ fn off_grammar_hashes() -> Vec<String> {
 
 #[tokio::test]
 async fn cell_fact_malformed_hash_is_400() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let router = cell_fact_router(state(pool.clone(), keyring(), None));
     for hash in off_grammar_hashes() {
         let uri = format!("/api/cells/{}/facts/{hash}", Uuid::new_v4());
@@ -281,7 +275,7 @@ async fn cell_fact_uppercase_hex_of_a_served_hash_is_400() {
     // The same fact the lowercase spelling serves 200 for, asked for in
     // uppercase hex: one digest, but a spelling the TS twin refuses before it
     // reaches the store, so this route refuses it too.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"case-sensitive-bytes");
     seed_embedded_fact(&pool, &hash, b"case-sensitive-bytes", "text/plain").await;
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -309,7 +303,7 @@ async fn cell_fact_malformed_cell_id_is_400() {
     // grammar the TS twin declares, so the hyphenless spelling of a real id —
     // which `Uuid::parse_str` and Postgres both accept — is refused too, with
     // the same body a garbage segment gets.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"bytes");
     let router = cell_fact_router(state(pool.clone(), keyring(), None));
     let real_id = Uuid::new_v4().to_string();
@@ -331,7 +325,7 @@ async fn cell_fact_malformed_cell_id_is_400() {
 
 #[tokio::test]
 async fn cell_fact_missing_cell_is_404() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"bytes");
     let router = cell_fact_router(state(pool.clone(), keyring(), None));
     let uri = format!("/api/cells/{}/facts/{}", Uuid::new_v4(), hash.to_prefixed());
@@ -343,7 +337,7 @@ async fn cell_fact_missing_cell_is_404() {
 async fn cell_fact_edge_absent_is_404() {
     // Cell exists + is public + the fact exists, but the cell doesn't reference
     // the hash → 404 (the `refs ∋ hash` edge check, never "exists elsewhere").
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"the-bytes");
     let other = hash_of(b"a-different-fact");
     seed_embedded_fact(&pool, &hash, b"the-bytes", "text/plain").await;
@@ -358,7 +352,7 @@ async fn cell_fact_edge_absent_is_404() {
 async fn cell_fact_public_cell_serves_embedded_200() {
     // Positive control: a public cell that references the hash serves the
     // embedded fact to an anonymous caller.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"hello-bytes");
     seed_embedded_fact(&pool, &hash, b"hello-bytes", "text/plain").await;
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -384,7 +378,7 @@ async fn cell_fact_served_response_carries_security_headers() {
     // serve branch; the disk-stream + X-Accel-Redirect branches share the
     // same `body_response` funnel. These values must stay byte-identical to
     // the TS twin (`serve_fact_route.ts`) for cross-backend parity.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"html-bytes");
     seed_embedded_fact(&pool, &hash, b"<script>alert(1)</script>", "text/html").await;
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -412,7 +406,7 @@ async fn cell_fact_served_response_carries_security_headers() {
 async fn cell_fact_external_response_carries_security_headers() {
     // The same hardening headers on the external (`X-Accel-Redirect`) branch —
     // a different `body_response` call site, so pin it independently.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"external-html");
     seed_external_fact(&pool, &hash, "text/html").await;
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -446,7 +440,7 @@ async fn cell_fact_external_response_carries_security_headers() {
 async fn cell_fact_private_cell_anonymous_is_404() {
     // A private cell that references the hash is masked from an anonymous caller
     // as 404 (never 403 — the cell→fact edge must not leak).
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"secret-bytes");
     let (_account, owner) = seed_account_actor(&pool, "owner").await;
     seed_embedded_fact(&pool, &hash, b"secret-bytes", "text/plain").await;
@@ -465,7 +459,7 @@ async fn cell_fact_unviewable_cell_answers_alike_whatever_it_references() {
     // grant read broken, so the view check's own work shows — the flat 500 for
     // both, never a 404 for the hash the cell doesn't reference.
     for break_grants in [false, true] {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let keyring = keyring();
         let hash = hash_of(b"unviewable-bytes");
         let unreferenced = hash_of(b"never-referenced");
@@ -505,7 +499,7 @@ async fn cell_fact_unviewable_cell_answers_alike_whatever_it_references() {
 async fn cell_fact_private_cell_single_actor_owner_serves_200() {
     // A single-actor owner resolves from the session cookie and can view their
     // own private cell's fact.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"owner-bytes");
     let (account, owner) = seed_account_actor(&pool, "owner").await;
@@ -523,7 +517,7 @@ async fn cell_fact_multi_actor_is_treated_as_anonymous_404() {
     // Same private cell + owner, but the account is now multi-actor. The public
     // route has no `acting` slot, so a multi-actor caller is downgraded to
     // anonymous → the private cell is 404 even with a valid session.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"owner-bytes");
     let (account, owner) = seed_account_actor(&pool, "owner").await;
@@ -549,7 +543,7 @@ async fn cell_fact_multi_actor_is_treated_as_anonymous_404() {
 async fn cell_fact_full_scope_bearer_serves_private_cell_200() {
     // A `TokenScope::Full` bearer is a first-class caller here — the leg the
     // Rust side answered 404 for before, where the TS twin answered 200.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"owner-bytes");
     let (account, owner) = seed_account_actor(&pool, "owner").await;
     seed_embedded_fact(&pool, &hash, b"owner-bytes", "text/plain").await;
@@ -571,7 +565,7 @@ async fn cell_fact_narrowed_bearer_is_anonymous_on_a_private_cell_404() {
     // identically: a REST fact read has no RPC method name to test a scope
     // against, and inventing a route→method mapping is the coupling the
     // blanket rule declines.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"owner-bytes");
     let (account, owner) = seed_account_actor(&pool, "owner").await;
     seed_embedded_fact(&pool, &hash, b"owner-bytes", "text/plain").await;
@@ -598,7 +592,7 @@ async fn cell_fact_narrowed_bearer_still_reads_a_public_cell_200() {
     // `Methods(∅)` token reads a public cell's fact, because an anonymous
     // caller may — which is exactly why a 403 here would enforce nothing (the
     // holder would simply drop the header and get this 200 anyway).
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"public-bytes");
     let (account, _actor) = seed_account_actor(&pool, "owner").await;
     seed_embedded_fact(&pool, &hash, b"public-bytes", "text/plain").await;
@@ -626,7 +620,7 @@ async fn cell_fact_narrowed_bearer_on_an_admin_account_is_404() {
     // grants, so no admin context exists to short-circuit on. That ordering is
     // exactly what a later refactor could invert (resolving the actor first,
     // then filtering by scope), and this pins it.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"admin-owned-bytes");
     let (account, admin_actor) = seed_account_actor(&pool, "admin_user").await;
     grant_role(&pool, admin_actor, ROLE_ADMIN).await;
@@ -671,7 +665,7 @@ async fn cell_fact_cookie_wins_over_a_narrowed_bearer_200() {
     // walk rather than to the credential the walk returned: a browser that
     // happens to also send an `Authorization` header would silently lose access
     // to its own private cells.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"owner-bytes");
     let (account, owner) = seed_account_actor(&pool, "owner").await;
@@ -704,7 +698,7 @@ async fn cell_fact_daemon_token_serves_private_cell_200() {
     // The other converged leg: `X-Daemon-Token` resolves the keeper account and
     // is `TokenScope::Full` by construction, so it keeps full visibility rather
     // than tripping the narrowed-token downgrade.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"keeper-bytes");
     let (account, keeper_actor) = seed_account_actor(&pool, "keeper").await;
     seed_embedded_fact(&pool, &hash, b"keeper-bytes", "text/plain").await;
@@ -726,7 +720,7 @@ async fn cell_fact_unknown_bearer_is_404_not_500() {
     // An unrecognized token is anonymous, not an error: the private cell stays
     // masked as 404, and a caller learns nothing about token validity from the
     // status.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"owner-bytes");
     let (_account, owner) = seed_account_actor(&pool, "owner").await;
     seed_embedded_fact(&pool, &hash, b"owner-bytes", "text/plain").await;
@@ -743,7 +737,7 @@ async fn cell_fact_unknown_bearer_is_404_not_500() {
 async fn cell_fact_external_emits_x_accel_redirect() {
     // An external fact under a production `XAccelConfig` hands off to nginx via
     // an `X-Accel-Redirect` header (no disk read).
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"external-bytes");
     let url = seed_external_fact(&pool, &hash, "image/png").await;
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -771,7 +765,7 @@ async fn cell_fact_external_emits_x_accel_redirect() {
 
 #[tokio::test]
 async fn bare_fact_no_credentials_is_401() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"bytes");
     let router = bare_fact_router(state(pool.clone(), keyring(), None));
     let uri = format!("/api/facts/{}", hash.to_prefixed());
@@ -788,7 +782,7 @@ async fn bare_fact_no_credentials_is_401() {
 
 #[tokio::test]
 async fn bare_fact_non_admin_is_403() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"bytes");
     seed_embedded_fact(&pool, &hash, b"bytes", "text/plain").await;
@@ -807,7 +801,7 @@ async fn bare_fact_non_admin_is_403() {
 /// (legacy data — no grant path mints one) reads no fact.
 #[tokio::test]
 async fn bare_fact_scoped_admin_is_403() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"scoped-bytes");
     seed_embedded_fact(&pool, &hash, b"scoped-bytes", "text/plain").await;
@@ -822,7 +816,7 @@ async fn bare_fact_scoped_admin_is_403() {
 
 #[tokio::test]
 async fn bare_fact_single_actor_admin_serves_200() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"admin-bytes");
     seed_embedded_fact(&pool, &hash, b"admin-bytes", "text/plain").await;
@@ -840,7 +834,7 @@ async fn bare_fact_single_actor_admin_serves_200() {
 /// route, not the 500 of a failed read.
 #[tokio::test]
 async fn bare_fact_refused_checkout_is_503() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let (account, actor) = seed_account_actor(&pool, "admin_checkout").await;
     grant_role(&pool, actor, ROLE_ADMIN).await;
@@ -872,7 +866,7 @@ async fn bare_fact_multi_actor_admin_requires_acting() {
     // A bare 403 would be a local reading ("no persona, so not
     // admin") rather than the authorization-phase denial the twin emits for a
     // route declaring `actor: 'required'`.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"admin-bytes");
     seed_embedded_fact(&pool, &hash, b"admin-bytes", "text/plain").await;
@@ -908,7 +902,7 @@ async fn bare_fact_foreign_acting_actor_is_400_opaquely() {
     // `actor_not_on_account` — 400, and deliberately no `available` list, so a
     // guessed id learns nothing about the account it named. (A bare 403
     // before, which is the shape a *role* denial has.)
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"admin-bytes");
     seed_embedded_fact(&pool, &hash, b"admin-bytes", "text/plain").await;
@@ -930,7 +924,7 @@ async fn bare_fact_foreign_acting_actor_is_400_opaquely() {
 
 #[tokio::test]
 async fn bare_fact_malformed_hash_is_400() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let router = bare_fact_router(state(pool.clone(), keyring(), None));
     for hash in off_grammar_hashes() {
         let uri = format!("/api/facts/{hash}");
@@ -951,7 +945,7 @@ async fn bare_fact_unknown_query_key_is_400_before_auth() {
     // params → query → 401 phase order, so even an anonymous caller hears
     // 400 — while a clean anonymous request stays the 401 control
     // (`bare_fact_no_credentials_is_401`).
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"bytes");
     let router = bare_fact_router(state(pool.clone(), keyring(), None));
     let uri = format!("/api/facts/{}?foo=1", hash.to_prefixed());
@@ -964,7 +958,7 @@ async fn bare_fact_duplicated_acting_takes_the_first() {
     // First occurrence is the admin's real actor, the second garbage —
     // first-wins resolves and serves (a derived-serde extractor would
     // 400 the duplication pre-handler; last-wins would 400 the garbage).
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"dup-acting-bytes");
     seed_embedded_fact(&pool, &hash, b"dup-acting-bytes", "text/plain").await;
@@ -982,7 +976,7 @@ async fn bare_fact_duplicated_acting_takes_the_first() {
 
 #[tokio::test]
 async fn bare_fact_malformed_acting_is_400() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"bad-acting-bytes");
     seed_embedded_fact(&pool, &hash, b"bad-acting-bytes", "text/plain").await;
@@ -1000,7 +994,7 @@ async fn bare_fact_nameless_query_pair_is_ignored_and_serves_200() {
     // `?=x` names no key: the TS twin's strict schema never sees it (Hono
     // leaves a nameless pair out of the query record), so it is no unknown
     // key here either, and the `acting` beside it is still the one read.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"nameless-pair-bytes");
     seed_embedded_fact(&pool, &hash, b"nameless-pair-bytes", "text/plain").await;
@@ -1052,7 +1046,7 @@ async fn cell_fact_internal_failures_answer_the_flat_500_body() {
 
     // The cell read.
     {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let hash = hash_of(b"cell-read-fails");
         let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
         execute(&pool, "ALTER TABLE cell RENAME TO cell_gone").await;
@@ -1067,7 +1061,7 @@ async fn cell_fact_internal_failures_answer_the_flat_500_body() {
     // The cell read counts the cell's `cell_grant` rows, so the table has to
     // stay: a column only the grant projection names is what goes.
     {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let keyring = keyring();
         let hash = hash_of(b"grant-list-fails");
         let (account, owner) = seed_account_actor(&pool, "owner").await;
@@ -1088,7 +1082,7 @@ async fn cell_fact_internal_failures_answer_the_flat_500_body() {
 
     // The fact's metadata read.
     {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let hash = hash_of(b"meta-read-fails");
         seed_embedded_fact(&pool, &hash, b"meta-read-fails", "text/plain").await;
         let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -1103,7 +1097,7 @@ async fn cell_fact_internal_failures_answer_the_flat_500_body() {
     // The embedded bytes read: the metadata projection leaves `bytes` out, so
     // renaming that column fails this read and not the one before it.
     {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let hash = hash_of(b"bytes-read-fails");
         seed_embedded_fact(&pool, &hash, b"bytes-read-fails", "text/plain").await;
         let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -1119,7 +1113,7 @@ async fn cell_fact_internal_failures_answer_the_flat_500_body() {
     // file" (which is the masked 404): the facts directory is a regular file,
     // so the open is refused as not-a-directory.
     {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let hash = hash_of(b"disk-open-fails");
         seed_external_fact(&pool, &hash, "text/plain").await;
         let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -1144,7 +1138,7 @@ async fn cell_fact_internal_failures_answer_the_flat_500_body() {
 async fn cell_fact_referenced_hash_with_no_fact_row_is_404() {
     // The cell admits the caller and references the hash, but no `fact` row
     // exists: the masked 404, bodyless — not the flat 500 a failed read gets.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"referenced-but-never-stored");
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
     let router = cell_fact_router(state(pool.clone(), keyring(), None));
@@ -1159,7 +1153,7 @@ async fn cell_fact_external_file_absent_is_404() {
     // An external fact whose file is not on disk is the masked 404 — the one
     // open failure that is not the flat 500. The facts directory exists and is
     // a directory, so the open fails as "no such file" and nothing else.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let hash = hash_of(b"external-file-absent");
     seed_external_fact(&pool, &hash, "text/plain").await;
     let cell_id = seed_cell(&pool, "public", &[&hash.to_prefixed()], None).await;
@@ -1180,7 +1174,7 @@ async fn cell_fact_external_url_of_another_fact_is_404() {
     // is public and references the hash, so only the hash-to-path binding
     // stands between the request and the other fact's bytes — on the disk
     // branch and on the X-Accel branch alike.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let facts_dir = tempfile::tempdir().unwrap();
     let other = hash_of(b"bytes of another fact");
     let other_url = fuz_fact::write_fact_atomic(facts_dir.path(), &other, b"bytes of another fact")
@@ -1241,7 +1235,7 @@ async fn bare_fact_internal_failures_answer_the_flat_500_body() {
             "ALTER TABLE role_grant RENAME TO role_grant_gone",
         ),
     ] {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let keyring = keyring();
         let hash = hash_of(b"bare-internal-failure");
         seed_embedded_fact(&pool, &hash, b"bare-internal-failure", "text/plain").await;
@@ -1269,7 +1263,7 @@ async fn a_failed_credential_read_answers_the_500_on_both_routes() {
     // not go on as anonymous and serve the public cell, and the bare route
     // does not answer the 401 of a caller with no credential. Both answer the
     // fault's plain-text 500, the TS twin's unhandled-error answer.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"credential-read-fails");
     seed_embedded_fact(&pool, &hash, b"credential-read-fails", "text/plain").await;
@@ -1334,7 +1328,7 @@ async fn cell_fact_failed_caller_reads_answer_the_flat_500_body() {
             "ALTER TABLE role_grant RENAME TO role_grant_gone",
         ),
     ] {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let keyring = keyring();
         let hash = hash_of(b"caller-read-fails");
         seed_embedded_fact(&pool, &hash, b"caller-read-fails", "text/plain").await;
@@ -1393,7 +1387,7 @@ async fn cell_fact_pending_contribution_serves_its_steward_only() {
     // A pending contribution flipped public reaches no audience — anonymous and
     // a stranger 404 — while the governing root's (non-admin) owner reads its
     // fact through the steward arm, and the author through the owner arm.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let hash = hash_of(b"pending-bytes");
     let (root_owner_account, root_owner) = seed_account_actor(&pool, "root_owner").await;

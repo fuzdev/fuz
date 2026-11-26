@@ -1,27 +1,6 @@
 //! `_testing_shorten_credential_expiry` action spec.
 //!
-//! Pulls the expiry of an account's stored credentials — every `auth_session`
-//! row and every `api_token` row it owns — in to `seconds` from now, so the
-//! cross-backend credential-deadline cases can open a WebSocket or SSE stream
-//! on a credential that expires a moment later, and watch the connection
-//! close at its deadline (`fuz_auth::ResolvedAuth::credential_deadline`)
-//! without waiting out a real lifetime.
-//!
-//! Applied **before the open**: it rewrites the stored rows, and a connection
-//! reads its deadline when it resolves its credential, so only a connection
-//! opened afterwards sees the near deadline. One already open keeps the
-//! deadline it resolved.
-//!
-//! **Shorten-only.** The new expiry is `LEAST(expires_at, NOW() + seconds)` —
-//! an eternal token (`expires_at IS NULL`) gains one, and nothing already due
-//! sooner moves later, so the action cannot extend a credential's life or
-//! revive an expired one. `seconds` is an integer in
-//! `TESTING_SHORTEN_CREDENTIAL_EXPIRY_MIN_SECONDS..=TESTING_SHORTEN_CREDENTIAL_EXPIRY_MAX_SECONDS`.
-//!
-//! Reads `{account_id: string, seconds: number}`; answers
-//! `{sessions, api_tokens}`, the row counts it rewrote. Gated on the
-//! daemon-token credential, matching `_testing_reset`. Mirrors `fuz_app`'s TS
-//! `_testing_shorten_credential_expiry`.
+//! The overview is on [`create_testing_shorten_credential_expiry_action_spec`].
 
 use std::sync::Arc;
 
@@ -30,11 +9,11 @@ use fuz_http::{InputShape, JsonrpcError, internal_error_with_source, invalid_inp
 use serde_json::{Value, json};
 
 /// The shortest expiry the action sets, in seconds from now.
-pub(crate) const TESTING_SHORTEN_CREDENTIAL_EXPIRY_MIN_SECONDS: i32 = 1;
+pub const TESTING_SHORTEN_CREDENTIAL_EXPIRY_MIN_SECONDS: i32 = 1;
 
 /// The longest expiry the action sets, in seconds from now — a minute: the
 /// action exists to make a deadline arrive inside a test.
-pub(crate) const TESTING_SHORTEN_CREDENTIAL_EXPIRY_MAX_SECONDS: i32 = 60;
+pub const TESTING_SHORTEN_CREDENTIAL_EXPIRY_MAX_SECONDS: i32 = 60;
 
 /// Declared input keys — the exact key set of the TS twin's
 /// `testing_shorten_credential_expiry_action_spec.input` strict object.
@@ -78,6 +57,29 @@ const SHORTEN_EXPIRES_AT_SQL: &str = "LEAST(COALESCE(expires_at, 'infinity'::tim
 ///
 /// `side_effects: true`, so the dispatcher wraps both updates in one
 /// transaction.
+///
+/// Pulls the expiry of an account's stored credentials — every `auth_session`
+/// row and every `api_token` row it owns — in to `seconds` from now, so the
+/// cross-backend credential-deadline cases can open a WebSocket or SSE stream
+/// on a credential that expires a moment later, and watch the connection
+/// close at its deadline (`fuz_auth::ResolvedAuth::credential_deadline`)
+/// without waiting out a real lifetime.
+///
+/// Applied **before the open**: it rewrites the stored rows, and a connection
+/// reads its deadline when it resolves its credential, so only a connection
+/// opened afterwards sees the near deadline. One already open keeps the
+/// deadline it resolved.
+///
+/// **Shorten-only.** The new expiry is `LEAST(expires_at, NOW() + seconds)` —
+/// an eternal token (`expires_at IS NULL`) gains one, and nothing already due
+/// sooner moves later, so the action cannot extend a credential's life or
+/// revive an expired one. `seconds` is an integer in
+/// `TESTING_SHORTEN_CREDENTIAL_EXPIRY_MIN_SECONDS..=TESTING_SHORTEN_CREDENTIAL_EXPIRY_MAX_SECONDS`.
+///
+/// Reads `{account_id: string, seconds: number}`; answers
+/// `{sessions, api_tokens}`, the row counts it rewrote. Gated on the
+/// daemon-token credential, matching `_testing_reset`. Mirrors `fuz_app`'s TS
+/// `_testing_shorten_credential_expiry`.
 #[must_use]
 pub fn create_testing_shorten_credential_expiry_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |params: Value, ctx: ActionContext<'_>| {

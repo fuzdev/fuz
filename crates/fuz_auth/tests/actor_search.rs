@@ -53,7 +53,7 @@ fn account_ctx<'a>(
 /// Seed an account with one actor holding a global `admin` grant, and return
 /// the caller's context alongside that actor's id.
 async fn seed_admin_account(pool: &fuz_db::Pool, username: &str) -> (RequestContext, uuid::Uuid) {
-    let (account_id, actor_id) = common::seed_account_actor(pool, username).await;
+    let (account_id, actor_id) = fuz_testing::seed_account_actor(pool, username).await;
     common::seed_role_grant_direct(pool, actor_id, ROLE_ADMIN, None).await;
     (
         RequestContext {
@@ -82,7 +82,7 @@ async fn search(
 async fn unbounded_search_admits_an_admin_and_refuses_a_tombstoned_one() {
     let pool = common::fresh_db().await;
     let (auth, actor_id) = seed_admin_account(&pool, "search_admin").await;
-    common::seed_account_actor(&pool, "search_target").await;
+    fuz_testing::seed_account_actor(&pool, "search_target").await;
     let params = json!({"query": "search"});
 
     // Control: the grant is live, so the unbounded arm runs and finds rows.
@@ -150,7 +150,7 @@ async fn search_and_lookup_exclude_soft_deleted_actors_and_accounts() {
     let scope = uuid::Uuid::new_v4();
     let mut actors = Vec::new();
     for username in ["tomb_live", "tomb_actor_gone", "tomb_account_gone"] {
-        let (account_id, actor_id) = common::seed_account_actor(&pool, username).await;
+        let (account_id, actor_id) = fuz_testing::seed_account_actor(&pool, username).await;
         client
             .execute(
                 "INSERT INTO role_grant (actor_id, role, scope_kind, scope_id)

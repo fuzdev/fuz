@@ -1,29 +1,7 @@
 //! Daemon-token **producer** — generate and persist the `X-Daemon-Token`
 //! credential.
 //!
-//! **Test-only by dep graph.** This half lives here rather than in
-//! `fuz_auth` because no @fuzdev consumer authenticates with
-//! `X-Daemon-Token` in production: the credential exists to let the
-//! cross-backend harness drive the `_testing_*` backdoor specs, which are
-//! already confined to this crate. Keeping the producer alongside them means
-//! a production binary cannot mint a keeper-grade credential or write it to
-//! disk — the symbols aren't in its dependency graph, and `cargo xtask
-//! check-release` fails the build if `fuz_testing` ever enters one.
-//!
-//! The consuming half — [`fuz_auth::DaemonTokenState`],
-//! [`fuz_auth::validate_daemon_token`], and the keeper-account adapters —
-//! stays in `fuz_auth`, where the credential walk needs it. On a
-//! production assembly that state is `None` and the leg is unreachable.
-//!
-//! ## Secret-file discipline
-//!
-//! `write_token_file` goes through [`fuz_sys::secure_file::write_secure_file`],
-//! which creates its temp with the mode applied **at creation** (`O_EXCL` +
-//! `.mode(0o600)`), fsyncs, renames, then fsyncs the parent dir. A
-//! hand-rolled path that writes the temp at the ambient umask and chmods
-//! *after* the rename with the error discarded would publish the credential
-//! world-readable for the length of that window, permanently if the chmod
-//! failed.
+//! The overview is on [`init_daemon_token`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -87,6 +65,30 @@ async fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
 /// The sole constructor of a populated [`DaemonTokenState`]. A test binary
 /// calls this and injects the handle into the production assembly it wraps;
 /// production assemblies leave the slot `None`.
+///
+/// **Test-only by dep graph.** This half lives here rather than in
+/// `fuz_auth` because no @fuzdev consumer authenticates with
+/// `X-Daemon-Token` in production: the credential exists to let the
+/// cross-backend harness drive the `_testing_*` backdoor specs, which are
+/// already confined to this crate. Keeping the producer alongside them means
+/// a production binary cannot mint a keeper-grade credential or write it to
+/// disk — the symbols aren't in its dependency graph, and `cargo xtask
+/// check-release` fails the build if `fuz_testing` ever enters one.
+///
+/// The consuming half — [`fuz_auth::DaemonTokenState`],
+/// [`fuz_auth::validate_daemon_token`], and the keeper-account adapters —
+/// stays in `fuz_auth`, where the credential walk needs it. On a
+/// production assembly that state is `None` and the leg is unreachable.
+///
+/// ## Secret-file discipline
+///
+/// `write_token_file` goes through [`fuz_sys::secure_file::write_secure_file`],
+/// which creates its temp with the mode applied **at creation** (`O_EXCL` +
+/// `.mode(0o600)`), fsyncs, renames, then fsyncs the parent dir. A
+/// hand-rolled path that writes the temp at the ambient umask and chmods
+/// *after* the rename with the error discarded would publish the credential
+/// world-readable for the length of that window, permanently if the chmod
+/// failed.
 ///
 /// # Errors
 ///

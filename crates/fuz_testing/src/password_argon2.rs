@@ -1,16 +1,6 @@
 //! Test-mode Argon2id hasher implementing [`fuz_auth::PasswordHasher`].
 //!
-//! Parameters are the RFC 9106 floor (`m_cost: 8 KiB, t_cost: 1,
-//! p_cost: 1`). Cannot go lower: argon2 enforces `m_cost >= 8 * p_cost`
-//! and `p_cost >= 1`. Per-call cost drops from production's ~30-50 ms
-//! to ~1-5 ms, which is the whole reason the test binary exists.
-//!
-//! The cross-verify property — a hash minted here verifies with
-//! [`fuz_auth::Argon2idHasher`] and vice versa — is the load-bearing
-//! claim of the test-binary pattern. argon2 PHC strings encode params,
-//! and `Argon2::default().verify_password` reads the params off the
-//! parsed hash rather than from the `Argon2` instance, so the property
-//! holds. Codified by `tests/cross_verify.rs`.
+//! The overview is on [`TestingArgon2idHasher`].
 
 use argon2::password_hash::{
     PasswordHash, PasswordHasher as ArgonHasher, PasswordVerifier, SaltString,
@@ -68,6 +58,18 @@ fn testing_argon2() -> Result<Argon2<'static>, PasswordHashError> {
 /// [`fuz_auth::Argon2idHasher`] because argon2 PHC strings encode
 /// params and `Argon2::default().verify_password` reads them off the
 /// parsed hash. Codified by `tests/cross_verify.rs`.
+///
+/// Parameters are the RFC 9106 floor (`m_cost: 8 KiB, t_cost: 1,
+/// p_cost: 1`). Cannot go lower: argon2 enforces `m_cost >= 8 * p_cost`
+/// and `p_cost >= 1`. Per-call cost drops from production's ~30-50 ms
+/// to ~1-5 ms, which is the whole reason the test binary exists.
+///
+/// The cross-verify property — a hash minted here verifies with
+/// [`fuz_auth::Argon2idHasher`] and vice versa — is the load-bearing
+/// claim of the test-binary pattern. argon2 PHC strings encode params,
+/// and `Argon2::default().verify_password` reads the params off the
+/// parsed hash rather than from the `Argon2` instance, so the property
+/// holds. Codified by `tests/cross_verify.rs`.
 #[derive(Debug, Clone, Default)]
 pub struct TestingArgon2idHasher;
 

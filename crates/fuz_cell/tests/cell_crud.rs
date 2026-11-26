@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{fresh_db, seed_actor};
+use common::{fresh_db, fresh_postgres_db, seed_actor};
 use fuz_cell::CellVisibility;
 use fuz_cell::cell_queries::{
     CELL_LIST_LIMIT_MAX, CellListParams, query_cell_create, query_cell_delete, query_cell_get,
@@ -18,6 +18,7 @@ use fuz_cell::cell_queries::{
 };
 use fuz_cell::cell_view_sql::CellViewer;
 use fuz_db::is_pg_unique_violation;
+use fuz_testing::{backend_pid, until_blocked_by_or};
 use serde_json::json;
 
 #[tokio::test]
@@ -565,8 +566,9 @@ async fn policy_is_a_roots_json_object() {
 /// `cell_policy_set`'s audited `previous_policy` is what the write replaced.
 /// Twin of `fuz_app`'s `cell_queries.set_policy.db.test.ts`.
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn policy_set_reads_the_previous_policy_under_its_lock() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let actor = seed_actor(&pool, "owner").await;
     let first_policy = json!({"post": {"moderation_required": true}});
     let second_policy = json!({"post": {"moderation_required": false}});
@@ -611,11 +613,14 @@ async fn policy_set_reads_the_previous_policy_under_its_lock() {
             set
         }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(
-        !second.is_finished(),
-        "the second set waits on the first's row lock"
-    );
+    let waited = until_blocked_by_or(
+        &pool,
+        backend_pid(&first).await,
+        || second.is_finished(),
+        "the second set waits on the first's row lock",
+    )
+    .await;
+    assert!(waited, "the second set waits on the first's row lock");
     first.commit().await.expect("commit");
     let set = tokio::time::timeout(std::time::Duration::from_secs(10), second)
         .await

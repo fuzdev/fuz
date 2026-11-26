@@ -100,9 +100,9 @@ use fuz_realtime::{
     audit_stream_router, register_audit_sse_listener,
 };
 use fuz_testing::{
-    TestDb, TestEngine, TestingArgon2idHasher, TestingDbOptions, TestingTableLock, fresh_test_db,
-    grant_role, grant_scoped_role, mint_api_token, mint_session_cookie, narrowed_scope,
-    refuse_audit_rows, seed_account_actor, seed_extra_actor, testing_keyring,
+    TestEngine, TestingArgon2idHasher, TestingDbOptions, TestingTableLock, grant_role,
+    grant_scoped_role, mint_api_token, mint_session_cookie, narrowed_scope, refuse_audit_rows,
+    seed_account_actor, seed_extra_actor, testing_keyring,
 };
 use serde_json::json;
 use tower::ServiceExt; // for `oneshot`
@@ -118,15 +118,6 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
     setup_sql: None,
     engine: TestEngine::Any,
 };
-
-async fn fresh_db() -> TestDb {
-    fresh_test_db(DB).await
-}
-
-/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
-async fn fresh_postgres_db() -> TestDb {
-    fresh_test_db(DB.postgres_only()).await
-}
 
 fn keyring() -> Arc<Keyring> {
     Arc::new(testing_keyring())
@@ -220,7 +211,7 @@ async fn seed_admin(pool: &Pool, keyring: &Keyring, username: &str) -> AdminFixt
 /// `200` to `?foo=bar` — a shape divergence with no test that could see it.
 #[tokio::test]
 async fn an_unknown_query_key_is_refused_before_auth() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let registry = Arc::new(SseRegistry::new());
     let router = audit_stream_router(state(pool.clone(), keyring(), &registry));
 
@@ -234,7 +225,7 @@ async fn an_unknown_query_key_is_refused_before_auth() {
 /// that resolves an actor.
 #[tokio::test]
 async fn a_malformed_acting_selector_is_refused() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_malformed_acting").await;
@@ -258,7 +249,7 @@ async fn a_malformed_acting_selector_is_refused() {
 /// "multi-actor admins pass `?acting=<uuid>`" with no implementation here.
 #[tokio::test]
 async fn a_multi_actor_account_must_pick_an_acting_actor() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_multi_pick").await;
@@ -280,7 +271,7 @@ async fn a_multi_actor_account_must_pick_an_acting_actor() {
 /// *routing* result rather than a route that refuses multi-actor outright.
 #[tokio::test]
 async fn a_multi_actor_admin_opens_the_stream_by_picking_its_actor() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_multi_picks").await;
@@ -306,7 +297,7 @@ async fn a_multi_actor_admin_opens_the_stream_by_picking_its_actor() {
 /// — a caller cannot borrow a sibling's role by acting as itself.
 #[tokio::test]
 async fn acting_as_a_persona_without_the_role_is_refused() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_sibling").await;
@@ -332,7 +323,7 @@ async fn acting_as_a_persona_without_the_role_is_refused() {
 /// account it named.
 #[tokio::test]
 async fn a_foreign_acting_actor_is_refused_opaquely() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_foreign").await;
@@ -359,7 +350,7 @@ async fn a_foreign_acting_actor_is_refused_opaquely() {
 /// simply stopped working.
 #[tokio::test]
 async fn a_cookie_session_on_an_admin_account_opens_the_stream() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_opens").await;
@@ -389,7 +380,7 @@ async fn a_cookie_session_on_an_admin_account_opens_the_stream() {
 /// data — no grant path mints one) doesn't open the instance-wide stream.
 #[tokio::test]
 async fn a_scoped_admin_is_refused() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let (account_id, actor_id) = seed_account_actor(&pool, "scoped_admin").await;
@@ -408,7 +399,7 @@ async fn a_scoped_admin_is_refused() {
 /// role gate had no reason to.
 #[tokio::test]
 async fn a_full_scope_bearer_is_refused_at_the_credential_gate() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_bearer").await;
@@ -440,7 +431,7 @@ async fn a_full_scope_bearer_is_refused_at_the_credential_gate() {
 /// coarse-to-fine ordering `fuz_db_admin::require_role` runs.
 #[tokio::test]
 async fn the_credential_gate_precedes_the_scope_gate() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_narrowed").await;
@@ -471,7 +462,7 @@ async fn the_credential_gate_precedes_the_scope_gate() {
 /// about its channel, not about the deployment's role structure.
 #[tokio::test]
 async fn the_credential_gate_precedes_the_role_gate() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let (account_id, _) = seed_account_actor(&pool, "no_role_bearer").await;
@@ -497,7 +488,7 @@ async fn the_credential_gate_precedes_the_role_gate() {
 /// narrowed the door, it did not replace the lock.
 #[tokio::test]
 async fn a_session_without_the_role_is_still_refused_on_role_grounds() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let (account_id, _) = seed_account_actor(&pool, "no_role_session").await;
@@ -515,7 +506,7 @@ async fn a_session_without_the_role_is_still_refused_on_role_grounds() {
 
 #[tokio::test]
 async fn an_unauthenticated_request_is_refused_before_anything_else() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
 
@@ -531,7 +522,7 @@ async fn an_unauthenticated_request_is_refused_before_anything_else() {
 /// where the read throws out of the auth middleware — not the 401.
 #[tokio::test]
 async fn a_failed_credential_read_answers_the_500() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_read_fails").await;
@@ -565,7 +556,7 @@ async fn a_failed_credential_read_answers_the_500() {
 /// read, and no stream opened.
 #[tokio::test]
 async fn a_failed_route_checkout_answers_the_503() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let admin = seed_admin(&pool, &keyring, "admin_checkout_fails").await;
@@ -599,7 +590,7 @@ async fn a_failed_route_checkout_answers_the_503() {
 /// listener, and watch the response body end.
 #[tokio::test]
 async fn a_bearer_stream_on_a_widened_gate_closes_on_token_revoke() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
     let emitter = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
@@ -664,7 +655,7 @@ async fn a_bearer_stream_on_a_widened_gate_closes_on_token_revoke() {
 /// its body ends with no revocation row written.
 #[tokio::test]
 async fn a_bearer_stream_on_a_widened_gate_ends_when_its_token_expires() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let registry = Arc::new(SseRegistry::new());
 
@@ -832,12 +823,12 @@ async fn post_account(h: &RevocationHarness, path: &str, cookie: &str, body: Bod
 /// credential is still live — stays open. Nothing committed, so nothing closed.
 #[tokio::test]
 async fn logout_with_a_refused_audit_row_leaves_the_stream_open() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_logout_refused").await;
     let h = revocation_harness(pool.clone(), &keyring);
     let _body = open_stream(&h, &admin.cookie).await;
-    refuse_audit_rows(&h.pool, &["logout"]).await;
+    refuse_audit_rows(&h.pool, &[fuz_auth::AuditEventType::Logout]).await;
 
     let response = post_account(&h, "/logout", &admin.cookie, Body::empty()).await;
     assert_eq!(
@@ -854,13 +845,13 @@ async fn logout_with_a_refused_audit_row_leaves_the_stream_open() {
 /// session and token stays, and the stream stays open.
 #[tokio::test]
 async fn password_change_with_a_refused_audit_row_leaves_the_stream_open() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_password_refused").await;
     set_current_password(&pool, admin.account_id).await;
     let h = revocation_harness(pool.clone(), &keyring);
     let _body = open_stream(&h, &admin.cookie).await;
-    refuse_audit_rows(&h.pool, &["password_change"]).await;
+    refuse_audit_rows(&h.pool, &[fuz_auth::AuditEventType::PasswordChange]).await;
 
     let input = json!({
         "current_password": CURRENT_PASSWORD,
@@ -963,7 +954,7 @@ fn add_ws(h: &RevocationHarness, account_id: Uuid, session_hash: &str) -> fuz_re
 /// not the account.
 #[tokio::test]
 async fn a_login_past_the_session_cap_closes_the_evicted_sessions_connections() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_capped").await;
     set_current_password(&pool, admin.account_id).await;
@@ -1053,7 +1044,7 @@ async fn the_logout_row_alone_closes_only_its_session() {
 }
 
 async fn logout_closes_only_its_session(username: &str, handler_closes: HandlerCloses) {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, username).await;
     set_current_password(&pool, admin.account_id).await;
@@ -1157,7 +1148,7 @@ async fn logout_closes_only_its_session(username: &str, handler_closes: HandlerC
 /// listener is involved.
 #[tokio::test]
 async fn the_auth_cleanup_sweep_closes_an_expired_sessions_connections() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_expiring").await;
     set_current_password(&pool, admin.account_id).await;
@@ -1325,7 +1316,7 @@ async fn stall_at_the_re_read(h: &RevocationHarness, cookie: &str) -> StalledReq
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_stalled_request_with_no_revocation_opens_the_stream() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_stall_control").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1347,7 +1338,7 @@ async fn a_stalled_request_with_no_revocation_opens_the_stream() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_session_revoked_during_the_request_opens_no_stream() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_revoked_mid_request").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1385,7 +1376,7 @@ async fn a_session_revoked_during_the_request_opens_no_stream() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn an_actor_deleted_during_the_request_opens_no_stream() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_actor_deleted_mid_request").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1422,7 +1413,7 @@ async fn an_actor_deleted_during_the_request_opens_no_stream() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_role_lost_during_the_request_opens_no_stream() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_role_lost_mid_request").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1457,7 +1448,7 @@ async fn a_role_lost_during_the_request_opens_no_stream() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_stream_closed_while_pending_ends_after_its_connect_comment() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_closed_pending").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1487,7 +1478,7 @@ async fn a_stream_closed_while_pending_ends_after_its_connect_comment() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_failing_recheck_opens_no_stream() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_recheck_fails").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1514,7 +1505,7 @@ async fn a_failing_recheck_opens_no_stream() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_logout_during_the_request_opens_no_stream() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_logout_mid_request").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1555,7 +1546,7 @@ async fn assert_connect_comment_alone(response: Response, what: &str) {
 /// the same.
 #[tokio::test]
 async fn the_gates_answer_their_refusals_during_a_shutdown() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let keyring = keyring();
     let h = revocation_harness(pool.clone(), &keyring);
     assert_eq!(h.registry.close_all_connections(), 0);
@@ -1614,7 +1605,7 @@ async fn the_gates_answer_their_refusals_during_a_shutdown() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_request_born_closed_skips_the_re_read() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_born_closed").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1643,7 +1634,7 @@ async fn a_request_born_closed_skips_the_re_read() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_recheck_failing_after_the_shutdown_answers_the_connect_comment() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_recheck_fails_shutdown").await;
     let h = revocation_harness(pool.clone(), &keyring);
@@ -1698,7 +1689,7 @@ async fn a_recheck_failing_after_the_shutdown_answers_the_connect_comment() {
 #[tokio::test]
 #[ignore = "postgres-only: stalls a table behind LOCK TABLE"]
 async fn a_recheck_failing_after_a_revocation_is_a_500() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let keyring = keyring();
     let admin = seed_admin(&pool, &keyring, "admin_recheck_fails_revoked").await;
     let h = revocation_harness(pool.clone(), &keyring);

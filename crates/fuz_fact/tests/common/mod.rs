@@ -12,7 +12,7 @@
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_db::Pool;
 use fuz_fact::{FACT_MIGRATIONS, PutOptions};
-use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
+use fuz_testing::{TestDb, TestEngine, TestingDbOptions};
 use uuid::Uuid;
 
 /// This suite's database: the auth chain (`fact_holder` FKs into `actor`) then the fact chain, plus a
@@ -30,7 +30,7 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
 /// A fresh database with the auth + fact chains and the `cell` stub, ready for
 /// the store.
 pub async fn fresh_db() -> TestDb {
-    fresh_test_db(DB).await
+    DB.open().await
 }
 
 /// Insert a `cell` stub row referencing `hash` (active unless `deleted` is

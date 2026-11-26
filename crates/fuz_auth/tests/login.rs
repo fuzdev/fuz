@@ -51,8 +51,9 @@ use fuz_auth::{
     RateLimitResult, RateLimiter, RateLimiterOptions, USERNAME_PROVIDED_LENGTH_MAX, login_handler,
     query_session_enforce_limit,
 };
-use fuz_db::{Pool, create_pool};
+use fuz_db::Pool;
 use fuz_http::ClientIp;
+use fuz_testing::{RecordingConnectionCloser, unreachable_pool};
 
 mod common;
 use common::fresh_db;
@@ -198,17 +199,6 @@ async fn seed_account_with_email_and_hash(
     row.get(0)
 }
 
-/// A pool that never connects — the pre-DB guards below return before any DB
-/// access, so those tests need no database. `create_pool` only parses the
-/// URL; `deadpool` connects lazily on first `get()`.
-fn pool_no_db() -> Pool {
-    create_pool(
-        "postgres://never-connected.invalid/none",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("create_pool")
-}
-
 // -- Pre-DB guards (no Postgres) --------------------------------------------
 
 #[tokio::test]
@@ -219,8 +209,8 @@ async fn login_rejects_invalid_input() {
     // *before* any DB lookup or password verify, never falling through to a
     // lookup-miss 401.
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
-    let state = build_state(pool_no_db(), hasher, audit, None, None);
+    let audit = Arc::new(AuditEmitter::new(unreachable_pool(), Arc::default()));
+    let state = build_state(unreachable_pool(), hasher, audit, None, None);
 
     let oversized_password = "a".repeat(PASSWORD_LENGTH_MAX + 1);
     let oversized_username = "a".repeat(USERNAME_PROVIDED_LENGTH_MAX + 1);
@@ -263,8 +253,8 @@ async fn login_rejects_unknown_body_field() {
     // `invalid_request_body` (not axum's default 422, not a silent ignore),
     // before any DB / verify work.
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
-    let state = build_state(pool_no_db(), hasher, audit, None, None);
+    let audit = Arc::new(AuditEmitter::new(unreachable_pool(), Arc::default()));
+    let state = build_state(unreachable_pool(), hasher, audit, None, None);
 
     let body = Bytes::from(
         serde_json::to_vec(&serde_json::json!({
@@ -288,8 +278,8 @@ async fn login_answers_invalid_json_body_for_a_non_object_body() {
     // anything but an object, is `invalid_json_body` — never the schema
     // refusal `invalid_request_body`.
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
-    let state = build_state(pool_no_db(), hasher, audit, None, None);
+    let audit = Arc::new(AuditEmitter::new(unreachable_pool(), Arc::default()));
+    let state = build_state(unreachable_pool(), hasher, audit, None, None);
 
     for body in ["{", "", "[]", "null", "5"] {
         let response = login_handler(
@@ -319,9 +309,9 @@ async fn login_rejects_disallowed_origin() {
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
     let connection_closer: Arc<dyn ConnectionCloser> = Arc::new(NoopConnectionCloser);
     let state = AccountRouteState {
-        gate: fuz_testing::testing_auth_gate(pool_no_db()),
+        gate: fuz_testing::testing_auth_gate(unreachable_pool()),
         password_hasher: hasher,
-        audit: Arc::new(AuditEmitter::new(pool_no_db(), Arc::default())),
+        audit: Arc::new(AuditEmitter::new(unreachable_pool(), Arc::default())),
         connection_closer,
         bootstrap_available: Arc::new(AtomicBool::new(false)),
         login_ip_rate_limiter: None,
@@ -354,8 +344,8 @@ async fn login_refuses_bodies_a_browser_sends_without_a_preflight() {
     // same-site (another localhost port), so the handler refuses it before
     // the body is read
     let (hasher, verify_hashes) = RecordingHasher::new("unused");
-    let audit = Arc::new(AuditEmitter::new(pool_no_db(), Arc::default()));
-    let state = build_state(pool_no_db(), hasher, audit, None, None);
+    let audit = Arc::new(AuditEmitter::new(unreachable_pool(), Arc::default()));
+    let state = build_state(unreachable_pool(), hasher, audit, None, None);
 
     let mut text_plain = HeaderMap::new();
     text_plain.insert(CONTENT_TYPE, "text/plain;charset=UTF-8".parse().unwrap());
@@ -904,8 +894,8 @@ async fn login_beyond_the_cap_evicts_the_oldest_sessions() {
     let (hasher, _) = RecordingHasher::new("correct-password");
     let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let mut state = build_state(pool.clone(), hasher, audit, None, None);
-    let closer = Arc::new(RecordingCloser::default());
-    state.connection_closer = Arc::<RecordingCloser>::clone(&closer);
+    let closer = Arc::new(RecordingConnectionCloser::default());
+    state.connection_closer = Arc::<RecordingConnectionCloser>::clone(&closer);
 
     // One more login than the cap admits. Each returns its own `Set-Cookie`, so the
     // stored hashes are recovered from the DB in creation order rather than by
@@ -1133,38 +1123,6 @@ async fn enforce_limit_returns_exactly_the_evicted_session_ids() {
         .map(|r| r.get(0))
         .collect();
     assert_eq!(surviving, ["session_2", "session_3", "session_bob"]);
-}
-
-/// A `ConnectionCloser` recording every close it is asked for, by target.
-#[derive(Default)]
-struct RecordingCloser {
-    closed: Mutex<Vec<ConnectionCloseTarget>>,
-}
-
-impl RecordingCloser {
-    fn closed(&self) -> Vec<ConnectionCloseTarget> {
-        self.closed.lock().unwrap().clone()
-    }
-
-    fn record(&self, target: ConnectionCloseTarget) -> usize {
-        self.closed.lock().unwrap().push(target);
-        0
-    }
-}
-
-impl fuz_http::ShutdownCloser for RecordingCloser {
-    fn close_all_connections(&self) -> usize {
-        0
-    }
-    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
-        Box::pin(std::future::ready(()))
-    }
-}
-
-impl ConnectionCloser for RecordingCloser {
-    fn close_connections(&self, target: &ConnectionCloseTarget) -> usize {
-        self.record(target.clone())
-    }
 }
 
 // -- Rate-limit fast path ---------------------------------------------------

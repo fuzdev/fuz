@@ -1,24 +1,6 @@
 //! `_testing_db_invariants` action spec.
 //!
-//! Runs the database invariant statement — states no sequence of spine
-//! operations may leave behind, checked over the rows themselves — and
-//! answers every violating row as `{rows: [{invariant, row}]}`, unfiltered:
-//! the harness drops the invariants its setup excludes. `fuz_app`'s
-//! cross-process setups call it after every test, so a backend whose database
-//! the test process can't reach is checked like one it can.
-//!
-//! The statement is `db_invariants.sql`, a byte-identical copy of the file
-//! `fuz_app` generates from its TS composition of the invariants
-//! (`testing/db_invariants.gen.sql.ts`); `fuz_app`'s cross-backend copy check
-//! holds the pair equal. It binds the keeper role as `$1` and the admin role
-//! as `$2`, and selects each row's columns as JSON text
-//! (`jsonb_build_object(...)::text`), parsed here, so the answer matches the
-//! TS twin's for the same database state. A row's key order is not part of
-//! the contract (`serde_json` sorts keys, the TS twin keeps Postgres's
-//! order); compare rows as objects.
-//!
-//! Read-only + daemon-token gated, writing no audit row — matching
-//! `_testing_migration_tracker`.
+//! The overview is on [`create_testing_db_invariants_action_spec`].
 
 use std::sync::Arc;
 
@@ -29,7 +11,7 @@ use fuz_http::{InputShape, internal_error, internal_error_with_source};
 use serde_json::{Value, json};
 
 /// The invariant statement, `$1` the keeper role and `$2` the admin role.
-pub const DB_INVARIANTS_SQL: &str = include_str!("db_invariants.sql");
+const DB_INVARIANTS_SQL: &str = include_str!("db_invariants.sql");
 
 /// Build the `_testing_db_invariants` action spec.
 ///
@@ -37,6 +19,26 @@ pub const DB_INVARIANTS_SQL: &str = include_str!("db_invariants.sql");
 /// [`InputShape::Void`]: the dispatcher reads an absent `params`, `null`, and
 /// `{}` as the call and refuses anything else (`-32602`) before the handler
 /// runs.
+///
+/// Runs the database invariant statement — states no sequence of spine
+/// operations may leave behind, checked over the rows themselves — and
+/// answers every violating row as `{rows: [{invariant, row}]}`, unfiltered:
+/// the harness drops the invariants its setup excludes. `fuz_app`'s
+/// cross-process setups call it after every test, so a backend whose database
+/// the test process can't reach is checked like one it can.
+///
+/// The statement is `db_invariants.sql`, a byte-identical copy of the file
+/// `fuz_app` generates from its TS composition of the invariants
+/// (`testing/db_invariants.gen.sql.ts`); `fuz_app`'s cross-backend copy check
+/// holds the pair equal. It binds the keeper role as `$1` and the admin role
+/// as `$2`, and selects each row's columns as JSON text
+/// (`jsonb_build_object(...)::text`), parsed here, so the answer matches the
+/// TS twin's for the same database state. A row's key order is not part of
+/// the contract (`serde_json` sorts keys, the TS twin keeps Postgres's
+/// order); compare rows as objects.
+///
+/// Read-only + daemon-token gated, writing no audit row — matching
+/// `_testing_migration_tracker`.
 #[must_use]
 pub fn create_testing_db_invariants_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |_params: Value, ctx: ActionContext<'_>| {

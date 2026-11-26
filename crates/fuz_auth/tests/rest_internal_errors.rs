@@ -70,14 +70,15 @@ use fuz_auth::{
     PasswordHashError, PasswordHasher, RateLimitResult, RateLimiter, RateLimiterOptions,
     SESSION_COOKIE_NAME, SignupOptions, SignupRouteState, TokenScopeDocument, account_router,
 };
-use fuz_db::{Pool, create_pool};
+use fuz_db::Pool;
 use fuz_http::{BackgroundWrites, ClientIp};
+use fuz_testing::seed_account_actor;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 mod common;
-use common::{fresh_db, fresh_postgres_db, seed_account_actor};
+use common::{fresh_db, fresh_postgres_db};
 
 /// The body every internal failure answers, byte for byte.
 const INTERNAL_ERROR_BODY: &str = r#"{"error":"internal_error"}"#;
@@ -271,11 +272,7 @@ impl BootstrapTokenStore for StubTokenStore {
 /// every checkout fails. `create_pool` only parses the URL — `deadpool`
 /// connects on the first `get()` — so building one needs no database.
 fn unreachable_pool() -> Pool {
-    create_pool(
-        "postgres://rest_internal_errors@127.0.0.1:1/none",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("pool builds without connecting")
+    fuz_testing::unreachable_pool()
 }
 
 /// A pool on the suite's database whose `nth` checkout (counted from one)
@@ -1197,7 +1194,7 @@ async fn password_refused_audit_row_changes_nothing_and_closes_nothing() {
     let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "password_audit_refused").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
-    fuz_testing::seed::refuse_audit_rows(&pool, &["password_change"]).await;
+    fuz_testing::refuse_audit_rows(&pool, &[fuz_auth::AuditEventType::PasswordChange]).await;
 
     let reply = post_password(router, &cookie).await;
 
@@ -2352,7 +2349,7 @@ async fn account_count(pool: &Pool, username: &str) -> i64 {
 async fn login_refused_audit_row_mints_no_session() {
     let pool = fresh_db().await;
     let (account_id, _) = seed_account_actor(&pool, "login_audit_refused").await;
-    fuz_testing::seed::refuse_audit_rows(&pool, &["login"]).await;
+    fuz_testing::refuse_audit_rows(&pool, &[fuz_auth::AuditEventType::Login]).await;
 
     let reply = post_login(account_routes(pool.clone()), "login_audit_refused").await;
 
@@ -2368,7 +2365,7 @@ async fn logout_refused_audit_row_ends_no_session_and_closes_nothing() {
     let pool = fresh_db().await;
     let (account_id, cookie) = seed_credentials(&pool, "logout_audit_refused").await;
     let (router, closer) = probed_routes(&pool, StubHasher::accepting());
-    fuz_testing::seed::refuse_audit_rows(&pool, &["logout"]).await;
+    fuz_testing::refuse_audit_rows(&pool, &[fuz_auth::AuditEventType::Logout]).await;
 
     let reply = post_logout(router, &cookie).await;
 
@@ -2389,7 +2386,7 @@ async fn signup_refused_audit_row_creates_no_account() {
         "UPDATE app_settings SET open_signup = true WHERE id = 1",
     )
     .await;
-    fuz_testing::seed::refuse_audit_rows(&pool, &["signup"]).await;
+    fuz_testing::refuse_audit_rows(&pool, &[fuz_auth::AuditEventType::Signup]).await;
 
     let reply = post_signup(signup_router(signup_state(pool.clone()))).await;
 
@@ -2420,7 +2417,7 @@ impl BootstrapTokenStore for BurnRecordingTokenStore {
 #[tokio::test]
 async fn bootstrap_refused_audit_row_creates_nothing_and_keeps_the_token() {
     let pool = fresh_db().await;
-    fuz_testing::seed::refuse_audit_rows(&pool, &["bootstrap"]).await;
+    fuz_testing::refuse_audit_rows(&pool, &[fuz_auth::AuditEventType::Bootstrap]).await;
     let store = Arc::new(BurnRecordingTokenStore {
         burned: AtomicBool::new(false),
     });

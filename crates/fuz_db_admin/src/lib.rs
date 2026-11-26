@@ -1036,11 +1036,7 @@ mod origin_gate_tests {
     use super::*;
 
     fn state() -> DbAdminRouteState {
-        let pool = fuz_db::create_pool(
-            "postgres://nobody@127.0.0.1:1/nothing",
-            &fuz_db::PoolOptions::default(),
-        )
-        .unwrap();
+        let pool = fuz_testing::unreachable_pool();
         DbAdminRouteState {
             gate: fuz_testing::testing_auth_gate(pool.clone()),
             required_role: fuz_auth::ROLE_ADMIN,
@@ -1187,7 +1183,7 @@ mod origin_gate_tests {
 mod row_delete_pg_tests {
     use super::*;
     use fuz_db::Pool;
-    use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
+    use fuz_testing::{TestEngine, TestingDbOptions};
 
     /// This suite's database: the real `fuz_auth::AUTH_MIGRATIONS`
     /// (single-sourced spine DDL — a hand-copied
@@ -1220,17 +1216,6 @@ mod row_delete_pg_tests {
         ),
         engine: TestEngine::Any,
     };
-
-    /// A fresh database with the auth chain and the scratch tables.
-    async fn fresh_db() -> TestDb {
-        fresh_test_db(DB).await
-    }
-
-    /// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL
-    /// has.
-    async fn fresh_postgres_db() -> TestDb {
-        fresh_test_db(DB.postgres_only()).await
-    }
 
     /// Default allowlist for the suite. Deliberately includes `account` — the
     /// credential floor must subtract it even when listed. `actor` exists
@@ -1306,7 +1291,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn primary_key_query_returns_all_columns_in_key_order() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let client = pool.get().await.unwrap();
         assert_eq!(
             query_primary_key(&client, "scratch_single").await.unwrap(),
@@ -1323,7 +1308,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn single_pk_delete_removes_only_the_targeted_row() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1357,7 +1342,7 @@ mod row_delete_pg_tests {
     /// the row still there.
     #[tokio::test]
     async fn refused_audit_row_deletes_nothing() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1366,7 +1351,7 @@ mod row_delete_pg_tests {
             )
             .await
             .unwrap();
-        fuz_testing::seed::refuse_audit_rows(&pool, &["db_admin_row_delete"]).await;
+        fuz_testing::refuse_audit_rows(&pool, &[AuditEventType::DbAdminRowDelete]).await;
 
         let (audit, account_id) = test_audit(&pool);
         let resp = perform_row_delete(
@@ -1389,7 +1374,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn uncoercible_id_is_the_masked_row_not_found() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1451,7 +1436,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn typed_compare_matches_spellings_and_audits_the_canonical_id() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1520,7 +1505,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn restricted_fk_delete_is_a_409_and_deletes_nothing() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1571,7 +1556,7 @@ mod row_delete_pg_tests {
     /// raises 23001 on PG 18. Same scrubbed 409 either way.
     #[tokio::test]
     async fn no_action_fk_delete_is_a_409_and_deletes_nothing() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -1629,7 +1614,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn composite_pk_delete_is_refused_and_deletes_nothing() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         // Three rows sharing the SAME `name` across different `source_id`s — the
         // exact over-delete trap: a single-column `WHERE "name" = 'title'`
@@ -1668,7 +1653,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn builtin_non_deletable_table_is_refused_and_deletes_nothing() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         // Single-column PK — the key-shape gate would pass, so the refusal
         // must be the policy exclusion.
@@ -1702,7 +1687,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn non_deletable_refusal_precedes_the_key_shape_check() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         // `schema_version` is both excluded AND composite-keyed — the policy
         // exclusion is checked first, so its code wins (mirrors the TS
@@ -1725,7 +1710,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn consumer_extension_unions_with_the_builtin_floor() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1772,7 +1757,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn successful_delete_emits_the_db_admin_row_delete_audit_event() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1824,7 +1809,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn refused_deletes_emit_nothing() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         let (audit, account_id) = test_audit(&pool);
 
@@ -1864,7 +1849,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn unbrowsable_delete_masks_as_table_not_found() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1929,7 +1914,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn detail_reports_null_primary_key_for_composite() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         let resp = perform_table_detail(&mut client, detail_options("scratch_composite"))
             .await
@@ -1952,7 +1937,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn detail_placeholders_bytea_values() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         client
             .execute(
@@ -1995,7 +1980,7 @@ mod row_delete_pg_tests {
     #[tokio::test]
     #[ignore = "pglet: CREATE DOMAIN"]
     async fn detail_placeholders_a_domain_over_bytea() {
-        let pool = fresh_postgres_db().await;
+        let pool = DB.postgres_only().open().await;
         let mut client = pool.get().await.unwrap();
         client
             .batch_execute(
@@ -2023,7 +2008,7 @@ mod row_delete_pg_tests {
 
     #[tokio::test]
     async fn detail_masks_unbrowsable_tables() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let mut client = pool.get().await.unwrap();
         // unlisted-but-existing, floor-listed, and truly missing all answer
         // with the same masked 404 code
@@ -2093,7 +2078,7 @@ mod row_delete_pg_tests {
     /// spent too) — never the 500 of a failed read.
     #[tokio::test]
     async fn a_refused_checkout_after_the_credential_answers_the_503() {
-        let pool = fresh_db().await;
+        let pool = DB.open().await;
         let headers = admin_headers(&pool, "db_admin_checkout").await;
         for (budget, phase) in [(1, "the role gate"), (2, "the handler")] {
             let state = || State(route_state(fuz_testing::budgeted_pool(pool.url(), budget)));

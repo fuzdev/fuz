@@ -1,7 +1,8 @@
 //! The hand-kept lists of database suites agree with the tree.
 //!
-//! Every DB test opens its database through `fuz_testing::fresh_test_db`, on
-//! pglet in plain `cargo test` and on PostgreSQL under `FUZ_TEST_POSTGRES_URL`.
+//! Every DB test opens its database through `fuz_testing::fresh_test_db` (or
+//! `TestingDbOptions::open` over it), on pglet in plain `cargo test` and on
+//! PostgreSQL under `FUZ_TEST_POSTGRES_URL`.
 //! The PostgreSQL leg runs only where a list names it: the `db-tests` job in
 //! `.github/workflows/check.yml` (its env block and its `cargo test -p …`
 //! line) and the recipe in `docs/testing.md` § Postgres suites (its `export`
@@ -14,8 +15,8 @@
 //! files names `fresh_test_db` as a whole word outside a comment — a call, or
 //! the `use` that imports it, so an `as` alias still counts — or carries one
 //! of the two markers below, or when its `Cargo.toml` lists `fuz_testing`
-//! under `[dev-dependencies]`, which catches an opener reached through a
-//! wrapper or re-export in `fuz_testing` that never names `fresh_test_db`.
+//! under `[dev-dependencies]`, which catches an opener that never names
+//! `fresh_test_db` (`TestingDbOptions::open`, a suite's own wrapper).
 //! Each must be in both `-p` lists, and nothing else may be.
 //!
 //! **Markers.** In such a crate every `#[ignore` attribute (and every

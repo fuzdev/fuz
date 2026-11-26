@@ -100,11 +100,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
-use fuz_actions::ActionRegistry;
-use fuz_actions::perform_action::{PerformActionInput, PerformActionOptions, perform_action};
+use fuz_actions::perform_action::PerformActionOptions;
 use fuz_auth::{
-    AUTH_MIGRATIONS, AccountRow, AuditEmitter, CredentialType, NoopConnectionCloser,
-    NoopNotificationSender, ROLE_ADMIN, RequestActorContext, RoleRegistry, RoleSpec,
+    AUTH_MIGRATIONS, AccountRow, CredentialType, ROLE_ADMIN, RequestActorContext, RoleRegistry,
+    RoleSpec,
 };
 use fuz_cell::cell_item_queries::query_cell_item_insert;
 use fuz_cell::cell_queries::{CELL_LIST_LIMIT_MAX, query_cell_create};
@@ -119,9 +118,9 @@ use fuz_fact::{
     FACT_MIGRATIONS, FactStore, PgFactStore, PutOptions, query_orphan_facts_select_for_delete,
 };
 use fuz_http::JsonrpcError;
-use fuz_realtime::SignalToken;
 use fuz_testing::{
-    TestEngine, TestingDbOptions, fresh_test_db, grant_role, grant_scoped_role, seed_account_actor,
+    TestEngine, TestingDbOptions, assert_rpc_ok, dispatch_options, grant_role, grant_scoped_role,
+    perform_as, rpc_refusal, seed_account_actor,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -233,17 +232,7 @@ fn test_roles() -> Arc<RoleRegistry> {
 }
 
 fn options_from(pool: &Pool, cell_options: CellSpecSetOptions) -> PerformActionOptions {
-    let specs = build_cell_spec_set(cell_options);
-    PerformActionOptions {
-        pool: pool.clone(),
-        registry: Arc::new(ActionRegistry::compile(specs).expect("compile cell specs")),
-        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
-        connection_closer: Arc::new(NoopConnectionCloser),
-        notification_sender: Arc::new(NoopNotificationSender),
-        peer: fuz_realtime::noop_action_peer(),
-        account_rate_limiter: None,
-        ip_rate_limiter: None,
-    }
+    dispatch_options(pool, build_cell_spec_set(cell_options))
 }
 
 /// Seed a single-actor account; returns the account row and its actor id.
@@ -284,63 +273,14 @@ async fn run(
     params: Value,
     account: &AccountRow,
 ) -> Result<fuz_actions::ActionOutput, JsonrpcError> {
-    let request_id = json!(1);
-    let signal = SignalToken::new();
-    let span = tracing::Span::none();
-    let notify: &(dyn Fn(&str, &Value) + Send + Sync) = &fuz_realtime::http_no_op_notify;
-    let auth =
-        fuz_testing::resolve_test_credential(&options.pool, account.id, CredentialType::Session)
-            .await;
-    perform_action(
-        PerformActionInput {
-            method,
-            params: &params,
-            request_id: &request_id,
-            auth: Some(&auth),
-            client_ip: None,
-            connection_id: None,
-            notify,
-            signal: &signal,
-            log: &span,
-        },
-        options,
-    )
-    .await
+    perform_as(options, method, params, account.id, CredentialType::Session).await
 }
 
 /// The `(status, data.reason)` of a refused call.
+#[track_caller]
 fn refusal(result: &Result<fuz_actions::ActionOutput, JsonrpcError>) -> (u16, String) {
-    match result {
-        Err(error) => {
-            let status = fuz_http::error_code_to_http_status(error.code);
-            (
-                status.as_u16(),
-                error
-                    .data
-                    .as_ref()
-                    .and_then(|d| d.get("reason"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned(),
-            )
-        }
-        Ok(_) => panic!("expected a refusal, got Ok"),
-    }
-}
-
-/// The success payload of a call.
-fn ok_value(result: Result<fuz_actions::ActionOutput, JsonrpcError>) -> Value {
-    match result {
-        Ok(output) => {
-            let out = fuz_actions::write_success_response(&json!(1), &output).expect("render");
-            let envelope: Value = serde_json::from_slice(&out).expect("json");
-            envelope["result"].clone()
-        }
-        Err(error) => {
-            let status = fuz_http::error_code_to_http_status(error.code);
-            panic!("expected Ok, got {status} {error:?}")
-        }
-    }
+    let (status, reason) = rpc_refusal(result);
+    (status.as_u16(), reason.unwrap_or("").to_owned())
 }
 
 async fn count_cells(pool: &Pool) -> i64 {
@@ -361,7 +301,7 @@ async fn count_cells(pool: &Pool) -> i64 {
 /// `limit` and `offset` honored.
 #[tokio::test]
 async fn cell_list_refuses_an_out_of_range_page() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let mut ids = Vec::new();
@@ -395,7 +335,7 @@ async fn cell_list_refuses_an_out_of_range_page() {
         }
     }
 
-    let at_max = ok_value(
+    let at_max = assert_rpc_ok(
         run(
             &options,
             "cell_list",
@@ -405,7 +345,7 @@ async fn cell_list_refuses_an_out_of_range_page() {
         .await,
     );
     assert_eq!(at_max["cells"].as_array().unwrap().len(), 3);
-    let paged = ok_value(
+    let paged = assert_rpc_ok(
         run(
             &options,
             "cell_list",
@@ -427,7 +367,7 @@ async fn cell_list_refuses_an_out_of_range_page() {
 /// the existence and visibility check that 404-masks a missing or hidden cell.
 #[tokio::test]
 async fn cell_data_of_the_wrong_type_is_refused_before_any_cell_check() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
@@ -496,7 +436,7 @@ async fn cell_data_of_the_wrong_type_is_refused_before_any_cell_check() {
 
     // the loose schema's extras pass through, and well-typed data still meets
     // the 404 mask on a missing cell
-    let created = ok_value(
+    let created = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -521,7 +461,7 @@ async fn cell_data_of_the_wrong_type_is_refused_before_any_cell_check() {
 
 #[tokio::test]
 async fn the_cell_admin_bypass_requires_a_global_admin() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (_, owner) = seed(&pool, "owner").await;
     let private = seed_cell(&pool, "note", CellVisibility::Private, owner).await;
@@ -534,7 +474,7 @@ async fn the_cell_admin_bypass_requires_a_global_admin() {
     // cell_get: 404-masked for the scoped admin, served to the global one.
     let get = run(&options, "cell_get", json!({"id": private}), &scoped_admin).await;
     assert_eq!(refusal(&get).0, 404);
-    let got = ok_value(run(&options, "cell_get", json!({"id": private}), &global_admin).await);
+    let got = assert_rpc_ok(run(&options, "cell_get", json!({"id": private}), &global_admin).await);
     assert_eq!(got["cell"]["id"], json!(private));
 
     // cell_list: the admin visibility branch is global-only.
@@ -545,9 +485,9 @@ async fn the_cell_admin_bypass_requires_a_global_admin() {
             .iter()
             .any(|c| c["id"] == json!(private))
     };
-    let scoped_list = ok_value(run(&options, "cell_list", json!({}), &scoped_admin).await);
+    let scoped_list = assert_rpc_ok(run(&options, "cell_list", json!({}), &scoped_admin).await);
     assert!(!listed(&scoped_list), "a scoped admin doesn't list it");
-    let global_list = ok_value(run(&options, "cell_list", json!({}), &global_admin).await);
+    let global_list = assert_rpc_ok(run(&options, "cell_list", json!({}), &global_admin).await);
     assert!(listed(&global_list), "the global admin does");
 
     // `path` writes are admin-only — the global admin.
@@ -562,7 +502,7 @@ async fn the_cell_admin_bypass_requires_a_global_admin() {
         refusal(&path_write),
         (403, "cell_path_admin_only".to_owned())
     );
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -575,7 +515,7 @@ async fn the_cell_admin_bypass_requires_a_global_admin() {
 
 #[tokio::test]
 async fn cell_clone_runs_the_create_authorizer() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (admin, admin_actor) = seed(&pool, "admin").await;
     grant_role(&pool, admin_actor, ROLE_ADMIN).await;
@@ -609,9 +549,10 @@ async fn cell_clone_runs_the_create_authorizer() {
 
     // What the policy admits still clones: a shallow note clone (the child is
     // an edge, not a new cell), and the admin's space clone.
-    let shallow = ok_value(run(&options, "cell_clone", json!({"source_id": note}), &member).await);
+    let shallow =
+        assert_rpc_ok(run(&options, "cell_clone", json!({"source_id": note}), &member).await);
     assert_ne!(shallow["cell"]["id"], json!(note));
-    ok_value(run(&options, "cell_clone", json!({"source_id": space}), &admin).await);
+    assert_rpc_ok(run(&options, "cell_clone", json!({"source_id": space}), &admin).await);
 }
 
 /// Seed a public space with a post under it through the dispatcher, assert a
@@ -623,20 +564,21 @@ async fn seed_post_under_deleted_space(
 ) -> Uuid {
     let create = |params: Value| run(options, "cell_create", params, member);
     let space =
-        ok_value(create(json!({"kind": "space", "data": {}, "visibility": "public"})).await);
+        assert_rpc_ok(create(json!({"kind": "space", "data": {}, "visibility": "public"})).await);
     let space_id = space["cell"]["id"].clone();
-    let post = ok_value(create(json!({"kind": "post", "data": {}, "parent_id": space_id})).await);
+    let post =
+        assert_rpc_ok(create(json!({"kind": "post", "data": {}, "parent_id": space_id})).await);
     let post_id = post["cell"]["id"].clone();
     let comment =
-        ok_value(create(json!({"kind": "comment", "data": {}, "parent_id": post_id})).await);
+        assert_rpc_ok(create(json!({"kind": "comment", "data": {}, "parent_id": post_id})).await);
     assert_eq!(comment["cell"]["root_id"], space_id, "live root: governed");
-    ok_value(run(options, "cell_delete", json!({"cell_id": space_id}), member).await);
+    assert_rpc_ok(run(options, "cell_delete", json!({"cell_id": space_id}), member).await);
     serde_json::from_value(post_id).unwrap()
 }
 
 #[tokio::test]
 async fn create_under_a_deleted_root_is_not_found_without_an_authorizer() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options_with(&pool, None);
     let (member, _) = seed(&pool, "member").await;
     let post = seed_post_under_deleted_space(&options, &member).await;
@@ -655,7 +597,7 @@ async fn create_under_a_deleted_root_is_not_found_without_an_authorizer() {
 
 #[tokio::test]
 async fn create_under_a_deleted_root_never_reaches_the_authorizer() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let authorizer = Arc::new(CountingAllow::default());
     let mounted: Arc<dyn CellCreateAuthorize> = Arc::<CountingAllow>::clone(&authorizer);
     let options = options_with(&pool, Some(mounted));
@@ -711,7 +653,7 @@ impl CellCreateAuthorize for RecordingAllow {
 
 #[tokio::test]
 async fn the_hooks_see_the_cell_and_parent_kinds() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let validated: Arc<Mutex<Vec<KindAndData>>> = Arc::default();
     let validator: CellDataValidator = {
         let validated = Arc::clone(&validated);
@@ -742,15 +684,15 @@ async fn the_hooks_see_the_cell_and_parent_kinds() {
 
     // create: the input's kind to the validator, the parent's to the authorizer
     let create = |params: Value| run(&options, "cell_create", params, &member);
-    let space = ok_value(create(json!({"kind": "space", "data": {"label": "s"}})).await);
+    let space = assert_rpc_ok(create(json!({"kind": "space", "data": {"label": "s"}})).await);
     let space_id = space["cell"]["id"].clone();
-    let post = ok_value(
+    let post = assert_rpc_ok(
         create(json!({"kind": "post", "data": {"label": "p"}, "parent_id": space_id})).await,
     );
     let post_id = post["cell"]["id"].clone();
-    let note = ok_value(create(json!({"data": {}, "parent_id": post_id})).await);
+    let note = assert_rpc_ok(create(json!({"data": {}, "parent_id": post_id})).await);
     let note_id = note["cell"]["id"].clone();
-    ok_value(create(json!({"kind": "comment", "data": {}, "parent_id": note_id})).await);
+    assert_rpc_ok(create(json!({"kind": "comment", "data": {}, "parent_id": note_id})).await);
     assert_eq!(
         take_validated(),
         [
@@ -773,8 +715,8 @@ async fn the_hooks_see_the_cell_and_parent_kinds() {
 
     // update: the existing cell's kind, and only when `data` is present
     let update = |params: Value| run(&options, "cell_update", params, &member);
-    ok_value(update(json!({"cell_id": post_id, "data": {"label": "p2"}})).await);
-    ok_value(update(json!({"cell_id": post_id, "visibility": "public"})).await);
+    assert_rpc_ok(update(json!({"cell_id": post_id, "data": {"label": "p2"}})).await);
+    assert_rpc_ok(update(json!({"cell_id": post_id, "visibility": "public"})).await);
     assert_eq!(take_validated(), [(s("post"), json!({"label": "p2"}))]);
 
     // clone: the source's kind for every row, each asked as a parentless create
@@ -786,7 +728,7 @@ async fn the_hooks_see_the_cell_and_parent_kinds() {
             .await
             .expect("attach child");
     }
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_clone",
@@ -850,7 +792,7 @@ async fn seed_contribution(
 /// reveals the row it touches (`cell_update` returns the full cell).
 #[tokio::test]
 async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -865,7 +807,7 @@ async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
     )
     .await;
     let other = seed_cell(&pool, "note", CellVisibility::Public, editor_actor).await;
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_create",
@@ -876,10 +818,10 @@ async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
         .await,
     );
     // control: the grant admits a write while the post is approved
-    ok_value(run(&options, "cell_update", json!({"cell_id": post}), &editor).await);
+    assert_rpc_ok(run(&options, "cell_update", json!({"cell_id": post}), &editor).await);
     // the root owner holds an editor grant too, so after the rejection the
     // steward arm reads the row while the grant arm stays shut
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_create",
@@ -889,7 +831,7 @@ async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
         )
         .await,
     );
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_moderate",
@@ -917,14 +859,15 @@ async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
         assert_eq!(refusal(&result), masked, "{method}");
     }
     // a steward's pre-rejection editor grant: `cell_get` admits, `can_edit` is false
-    let stewarded = ok_value(run(&options, "cell_get", json!({"id": post}), &root_owner).await);
+    let stewarded =
+        assert_rpc_ok(run(&options, "cell_get", json!({"id": post}), &root_owner).await);
     assert_eq!(
         stewarded["can_edit"],
         json!(false),
         "steward with an editor grant"
     );
     // the author keeps the owner arm
-    ok_value(run(&options, "cell_update", json!({"cell_id": post}), &author).await);
+    assert_rpc_ok(run(&options, "cell_update", json!({"cell_id": post}), &author).await);
 }
 
 /// `cell_grant_revoke`'s `still_admitted` recompute follows moderation: a
@@ -932,13 +875,13 @@ async fn editor_grant_on_a_rejected_contribution_stops_admitting_writes() {
 /// grant.
 #[tokio::test]
 async fn self_revoke_on_a_rejected_cell_is_not_still_admitted() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (holder, holder_actor) = seed(&pool, "holder").await;
     grant_role(&pool, holder_actor, ROLE_MEMBER).await;
     let cell = seed_cell(&pool, "note", CellVisibility::Private, owner_actor).await;
-    let actor_grant = ok_value(
+    let actor_grant = assert_rpc_ok(
         run(
             &options,
             "cell_grant_create",
@@ -948,7 +891,7 @@ async fn self_revoke_on_a_rejected_cell_is_not_still_admitted() {
         )
         .await,
     );
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_create",
@@ -959,7 +902,7 @@ async fn self_revoke_on_a_rejected_cell_is_not_still_admitted() {
         .await,
     );
     set_moderation(&pool, cell, Some("rejected")).await;
-    let revoked = ok_value(
+    let revoked = assert_rpc_ok(
         run(
             &options,
             "cell_grant_revoke",
@@ -973,7 +916,7 @@ async fn self_revoke_on_a_rejected_cell_is_not_still_admitted() {
 
 #[tokio::test]
 async fn grant_create_refuses_an_unapproved_cell_after_the_manage_gate() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (admin, admin_actor) = seed(&pool, "admin").await;
@@ -1019,7 +962,7 @@ async fn grant_create_refuses_an_unapproved_cell_after_the_manage_gate() {
             "{moderation}"
         );
     }
-    let listed = ok_value(
+    let listed = assert_rpc_ok(
         run(
             &options,
             "cell_grant_list",
@@ -1032,14 +975,14 @@ async fn grant_create_refuses_an_unapproved_cell_after_the_manage_gate() {
 
     for moderation in [Some("approved"), None] {
         set_moderation(&pool, post, moderation).await;
-        ok_value(run(&options, "cell_grant_create", actor_shaped.clone(), &owner).await);
-        ok_value(run(&options, "cell_grant_create", role_shaped.clone(), &admin).await);
+        assert_rpc_ok(run(&options, "cell_grant_create", actor_shaped.clone(), &owner).await);
+        assert_rpc_ok(run(&options, "cell_grant_create", role_shaped.clone(), &admin).await);
     }
 }
 
 #[tokio::test]
 async fn the_root_owner_stewards_a_pending_contribution() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -1065,7 +1008,7 @@ async fn the_root_owner_stewards_a_pending_contribution() {
     };
 
     // cell_get: the steward reads it, with the base predicates' flags.
-    let got = ok_value(run(&options, "cell_get", json!({"id": post}), &root_owner).await);
+    let got = assert_rpc_ok(run(&options, "cell_get", json!({"id": post}), &root_owner).await);
     assert_eq!(got["cell"]["id"], json!(post));
     assert_eq!(got["can_edit"], json!(false), "a steward does not edit");
     assert_eq!(got["can_grant"], json!(false), "a steward does not manage");
@@ -1073,7 +1016,7 @@ async fn the_root_owner_stewards_a_pending_contribution() {
     assert_eq!(refusal(&masked), (404, "cell_not_found".to_owned()));
 
     // cell_list: the queue under the steward's root.
-    let queue = ok_value(
+    let queue = assert_rpc_ok(
         run(
             &options,
             "cell_list",
@@ -1131,7 +1074,7 @@ async fn the_root_owner_stewards_a_pending_contribution() {
         refusal(&moderate(&stranger).await),
         (404, "cell_not_found".to_owned())
     );
-    let approved = ok_value(moderate(&root_owner).await);
+    let approved = assert_rpc_ok(moderate(&root_owner).await);
     assert_eq!(approved["cell"]["moderation"], json!("approved"));
 }
 
@@ -1150,7 +1093,7 @@ fn status_of(result: &Result<fuz_actions::ActionOutput, JsonrpcError>) -> u16 {
 /// the post's author does not.
 #[tokio::test]
 async fn steward_arm_reaches_a_nested_contribution_through_the_root() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (post_author, post_author_actor) = seed(&pool, "post_author").await;
@@ -1213,7 +1156,7 @@ async fn steward_arm_reaches_a_nested_contribution_through_the_root() {
 /// untouched); a rejected or unmarked one moves neither way.
 #[tokio::test]
 async fn cell_moderate_transitions_carry_their_from_state() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -1236,7 +1179,8 @@ async fn cell_moderate_transitions_carry_their_from_state() {
         let options = &options;
         let author = &author;
         async move {
-            ok_value(run(options, "cell_get", json!({"id": cell}), author).await)["cell"].clone()
+            assert_rpc_ok(run(options, "cell_get", json!({"id": cell}), author).await)["cell"]
+                .clone()
         }
     };
 
@@ -1250,7 +1194,7 @@ async fn cell_moderate_transitions_carry_their_from_state() {
         author_actor,
     )
     .await;
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_create",
@@ -1289,14 +1233,14 @@ async fn cell_moderate_transitions_carry_their_from_state() {
         author_actor,
     )
     .await;
-    let approved = ok_value(moderate(pending, "approved").await);
+    let approved = assert_rpc_ok(moderate(pending, "approved").await);
     assert_eq!(approved["cell"]["visibility"], json!("public"));
     assert_eq!(
         refusal(&moderate(pending, "approved").await),
         not_pending,
         "approve twice"
     );
-    let taken_down = ok_value(moderate(pending, "rejected").await);
+    let taken_down = assert_rpc_ok(moderate(pending, "rejected").await);
     assert_eq!(taken_down["cell"]["moderation"], json!("rejected"));
     assert_eq!(
         taken_down["cell"]["visibility"],
@@ -1320,7 +1264,7 @@ async fn cell_moderate_transitions_carry_their_from_state() {
         author_actor,
     )
     .await;
-    ok_value(moderate(rejected, "rejected").await);
+    assert_rpc_ok(moderate(rejected, "rejected").await);
     for decision in ["approved", "rejected"] {
         assert_eq!(
             refusal(&moderate(rejected, decision).await),
@@ -1361,7 +1305,7 @@ async fn cell_moderate_transitions_carry_their_from_state() {
 /// and closes on every surface once the root is tombstoned.
 #[tokio::test]
 async fn unknown_markers_and_tombstoned_root() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options(&pool);
     let (root_owner, root_owner_actor) = seed(&pool, "root_owner").await;
     let (author, author_actor) = seed(&pool, "author").await;
@@ -1378,7 +1322,7 @@ async fn unknown_markers_and_tombstoned_root() {
         .await;
         for (who, acct) in [("stranger", &stranger), ("root_owner", &root_owner)] {
             let got = run(&options, "cell_get", json!({"id": c}), acct).await;
-            let listed = ok_value(run(&options, "cell_list", json!({"ids": [c]}), acct).await);
+            let listed = assert_rpc_ok(run(&options, "cell_list", json!({"ids": [c]}), acct).await);
             assert_eq!(status_of(&got), 404, "{marker:?} {who}");
             assert!(
                 listed["cells"].as_array().unwrap().is_empty(),
@@ -1414,7 +1358,7 @@ async fn unknown_markers_and_tombstoned_root() {
         author_actor,
     )
     .await;
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_update",
@@ -1426,7 +1370,7 @@ async fn unknown_markers_and_tombstoned_root() {
     let s = run(&options, "cell_get", json!({"id": pending}), &stranger).await;
     assert_eq!(status_of(&s), 404, "author-published pending stays hidden");
     // Steward via the ids batch.
-    let listed = ok_value(
+    let listed = assert_rpc_ok(
         run(
             &options,
             "cell_list",
@@ -1449,7 +1393,7 @@ async fn unknown_markers_and_tombstoned_root() {
         .unwrap();
     let got = run(&options, "cell_get", json!({"id": pending}), &root_owner).await;
     assert_eq!(status_of(&got), 404, "tombstoned root: get");
-    let listed = ok_value(
+    let listed = assert_rpc_ok(
         run(
             &options,
             "cell_list",
@@ -1556,7 +1500,7 @@ fn not_held(result: &Result<fuz_actions::ActionOutput, JsonrpcError>) -> bool {
 
 #[tokio::test]
 async fn create_admits_a_new_ref_only_for_a_holder() {
-    let pool = fresh_test_db(DB_WITH_FACTS).await;
+    let pool = DB_WITH_FACTS.open().await;
     let options = options_with(&pool, None);
     let (alice, alice_actor) = seed(&pool, "alice").await;
     let (bob, bob_actor) = seed(&pool, "bob").await;
@@ -1598,7 +1542,7 @@ async fn create_admits_a_new_ref_only_for_a_holder() {
     assert_eq!(count_cells(&pool).await, before, "nothing was written");
 
     // The uploader holds it.
-    let created = ok_value(
+    let created = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -1614,7 +1558,7 @@ async fn create_admits_a_new_ref_only_for_a_holder() {
         put_fact(&pool, b"alice's photo", Some(bob_actor)).await,
         uploaded
     );
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -1625,7 +1569,7 @@ async fn create_admits_a_new_ref_only_for_a_holder() {
     );
 
     // A hash inside prose is not a ref, so it needs no holding.
-    let prose = ok_value(
+    let prose = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -1669,7 +1613,7 @@ async fn a_sweep_between_a_reupload_and_its_cell_write_keeps_the_fact() {
     // `created_at`) must survive a sweep that runs before the cell write
     // naming it — else the sweep cascades the fresh holder row away and the
     // write is refused as unheld.
-    let pool = fresh_test_db(DB_WITH_FACTS).await;
+    let pool = DB_WITH_FACTS.open().await;
     let options = options_with(&pool, None);
     let (alice, alice_actor) = seed(&pool, "alice").await;
     let (bob, bob_actor) = seed(&pool, "bob").await;
@@ -1699,7 +1643,7 @@ async fn a_sweep_between_a_reupload_and_its_cell_write_keeps_the_fact() {
     assert_eq!(sweep_orphans_past_an_hour(&pool).await, vec![stale.clone()]);
 
     // Both writes land after the sweep.
-    let bobs = ok_value(
+    let bobs = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -1709,7 +1653,7 @@ async fn a_sweep_between_a_reupload_and_its_cell_write_keeps_the_fact() {
         .await,
     );
     assert_eq!(bobs["cell"]["refs"], json!([photo]));
-    let alices = ok_value(
+    let alices = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -1732,7 +1676,7 @@ async fn a_sweep_between_a_reupload_and_its_cell_write_keeps_the_fact() {
 
 #[tokio::test]
 async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
-    let pool = fresh_test_db(DB_WITH_FACTS).await;
+    let pool = DB_WITH_FACTS.open().await;
     let options = options_with(&pool, None);
     let (bob, bob_actor) = seed(&pool, "bob").await;
     let (_, alice_actor) = seed(&pool, "alice").await;
@@ -1749,7 +1693,7 @@ async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
     .await;
 
     // Keeping it — beside an edit, beside a ref he does hold — is admitted.
-    let kept = ok_value(
+    let kept = assert_rpc_ok(
         run(
             &options,
             "cell_update",
@@ -1775,7 +1719,7 @@ async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
     }
     // Dropping a ref and adding it back is a new ref — the base is what the
     // cell carries now.
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_update",
@@ -1793,7 +1737,7 @@ async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
     .await;
     assert!(not_held(&restored));
     // A visibility-only update writes no data and reads no holders.
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_update",
@@ -1806,7 +1750,7 @@ async fn update_keeps_existing_refs_and_refuses_new_unheld_ones() {
 
 #[tokio::test]
 async fn clone_carries_source_refs_per_row_without_holding() {
-    let pool = fresh_test_db(DB_WITH_FACTS).await;
+    let pool = DB_WITH_FACTS.open().await;
     let options = options_with(&pool, None);
     let (_, alice_actor) = seed(&pool, "alice").await;
     let (bob, bob_actor) = seed(&pool, "bob").await;
@@ -1831,7 +1775,7 @@ async fn clone_carries_source_refs_per_row_without_holding() {
         .expect("attach child");
 
     // Shallow: the root row carries the source's ref.
-    ok_value(run(&options, "cell_clone", json!({"source_id": source}), &bob).await);
+    assert_rpc_ok(run(&options, "cell_clone", json!({"source_id": source}), &bob).await);
     assert_eq!(
         refs_created_by(&pool, bob_actor).await,
         vec![vec![cover.clone()]]
@@ -1839,7 +1783,7 @@ async fn clone_carries_source_refs_per_row_without_holding() {
 
     // Deep: each child row is checked against its own source row, so the
     // child's ref — not on the root — is carried too.
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_clone",
@@ -1884,7 +1828,7 @@ async fn clone_carries_source_refs_per_row_without_holding() {
 
 #[tokio::test]
 async fn a_global_admin_is_not_gated_on_refs() {
-    let pool = fresh_test_db(DB_WITH_FACTS).await;
+    let pool = DB_WITH_FACTS.open().await;
     let options = options_with(&pool, None);
     let (admin, admin_actor) = seed(&pool, "admin").await;
     grant_role(&pool, admin_actor, ROLE_ADMIN).await;
@@ -1893,7 +1837,7 @@ async fn a_global_admin_is_not_gated_on_refs() {
     grant_scoped_role(&pool, scoped_actor, ROLE_ADMIN, "space", space).await;
     let seeded = put_fact(&pool, b"seeded bytes", None).await;
 
-    let created = ok_value(
+    let created = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -1918,7 +1862,7 @@ async fn a_global_admin_is_not_gated_on_refs() {
 async fn a_new_ref_is_refused_without_the_fact_chain() {
     // The auth + cell chains alone: no `fact_holder` table, so nobody holds
     // anything — refused as unheld, not a failed query.
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options_with(&pool, None);
     let (bob, _) = seed(&pool, "bob").await;
     let refused = run(
@@ -1930,7 +1874,7 @@ async fn a_new_ref_is_refused_without_the_fact_chain() {
     .await;
     assert!(not_held(&refused), "{:?}", refusal(&refused));
     // A write with no refs is untouched.
-    ok_value(run(&options, "cell_create", json!({"data": {"n": 1}}), &bob).await);
+    assert_rpc_ok(run(&options, "cell_create", json!({"data": {"n": 1}}), &bob).await);
 }
 
 #[tokio::test]
@@ -1938,7 +1882,7 @@ async fn ref_refusal_answers_after_the_masks_and_the_create_policy() {
     // Admission is the last gate: a hidden cell answers its 404 mask whatever
     // `data` names (so the refusal says nothing about a hidden cell's refs),
     // and the create policy answers ahead of it.
-    let pool = fresh_test_db(DB_WITH_FACTS).await;
+    let pool = DB_WITH_FACTS.open().await;
     let options = options(&pool);
     let (_, alice_actor) = seed(&pool, "alice").await;
     let (bob, _) = seed(&pool, "bob").await;
@@ -2069,7 +2013,7 @@ async fn policy_set_audit_metadata(pool: &Pool) -> Vec<Value> {
 /// otherwise. Clearing a policy needs no authorizer.
 #[tokio::test]
 async fn policy_writes_need_an_authorizer_that_accepts_them() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let root = seed_cell(&pool, "forum", CellVisibility::Public, owner_actor).await;
     let policy = json!({"post": {"moderation_required": true}});
@@ -2095,7 +2039,7 @@ async fn policy_writes_need_an_authorizer_that_accepts_them() {
         )
         .await;
         assert_eq!(refusal(&set), unsupported, "{label}: set");
-        let cleared = ok_value(
+        let cleared = assert_rpc_ok(
             run(
                 &options,
                 "cell_policy_set",
@@ -2106,7 +2050,7 @@ async fn policy_writes_need_an_authorizer_that_accepts_them() {
         );
         assert_eq!(cleared["cell"]["policy"], Value::Null, "{label}: clear");
         // An explicit null on create is no policy.
-        ok_value(
+        assert_rpc_ok(
             run(
                 &options,
                 "cell_create",
@@ -2166,7 +2110,7 @@ async fn policy_writes_need_an_authorizer_that_accepts_them() {
         }
         Ok(_) => panic!("an absent policy was read as a clear"),
     }
-    let created = ok_value(
+    let created = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -2185,14 +2129,14 @@ async fn policy_writes_need_an_authorizer_that_accepts_them() {
 /// column — an editor rewriting the root's `data.policy` loosens nothing.
 #[tokio::test]
 async fn the_root_policy_is_the_managers_alone() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let options = options_with(&pool, Some(Arc::new(ReadsRootPolicy)));
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (editor, editor_actor) = seed(&pool, "editor").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let (author, _) = seed(&pool, "author").await;
     let moderated = json!({"post": {"moderation_required": true}});
-    let root = ok_value(
+    let root = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -2206,7 +2150,7 @@ async fn the_root_policy_is_the_managers_alone() {
         .parse::<Uuid>()
         .unwrap();
     let hidden_root = seed_cell(&pool, "forum", CellVisibility::Private, owner_actor).await;
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_create",
@@ -2233,7 +2177,7 @@ async fn the_root_policy_is_the_managers_alone() {
         refusal(&refused),
         (403, "cell_policy_manage_only".to_owned())
     );
-    let edited = ok_value(
+    let edited = assert_rpc_ok(
         run(
             &options,
             "cell_update",
@@ -2247,7 +2191,7 @@ async fn the_root_policy_is_the_managers_alone() {
         "a data write leaves the policy"
     );
     // A contribution still reads the column: born pending.
-    let post = ok_value(
+    let post = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -2301,7 +2245,7 @@ async fn the_root_policy_is_the_managers_alone() {
     );
 
     // The owner sets it; the row and the audit agree.
-    let set = ok_value(
+    let set = assert_rpc_ok(
         run(
             &options,
             "cell_policy_set",
@@ -2311,7 +2255,7 @@ async fn the_root_policy_is_the_managers_alone() {
         .await,
     );
     assert_eq!(set["cell"]["policy"], open);
-    let live = ok_value(
+    let live = assert_rpc_ok(
         run(
             &options,
             "cell_create",
@@ -2324,7 +2268,7 @@ async fn the_root_policy_is_the_managers_alone() {
         live["cell"]["moderation"], "approved",
         "the new policy governs"
     );
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_policy_set",
@@ -2354,7 +2298,7 @@ async fn the_root_policy_is_the_managers_alone() {
     );
 
     // A clone of a root with a policy is born without one.
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_policy_set",
@@ -2363,7 +2307,7 @@ async fn the_root_policy_is_the_managers_alone() {
         )
         .await,
     );
-    let clone = ok_value(
+    let clone = assert_rpc_ok(
         run(
             &options,
             "cell_clone",
@@ -2422,7 +2366,7 @@ async fn count_grant_rows(pool: &Pool) -> (i64, i64) {
 /// refusal writes nothing.
 #[tokio::test]
 async fn the_grant_authorizer_gates_a_manager_after_the_spine_gates() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let (_, target) = seed(&pool, "target").await;
@@ -2473,7 +2417,7 @@ async fn the_grant_authorizer_gates_a_manager_after_the_spine_gates() {
 
     // No authorizer: today's behavior.
     let open = options_full(&pool, None, None);
-    ok_value(run(&open, "cell_grant_create", grant("viewer"), &owner).await);
+    assert_rpc_ok(run(&open, "cell_grant_create", grant("viewer"), &owner).await);
     assert_eq!(count_grant_rows(&pool).await, (1, 1));
 
     // A level change goes through it too.
@@ -2488,7 +2432,8 @@ async fn the_grant_authorizer_gates_a_manager_after_the_spine_gates() {
     });
     let allow_dyn: Arc<dyn CellGrantCreateAuthorize> = Arc::<CountingGrantAuthorize>::clone(&allow);
     let allowing = options_full(&pool, None, Some(allow_dyn));
-    let upserted = ok_value(run(&allowing, "cell_grant_create", grant("editor"), &owner).await);
+    let upserted =
+        assert_rpc_ok(run(&allowing, "cell_grant_create", grant("editor"), &owner).await);
     assert_eq!(upserted["grant"]["level"], "editor");
     assert_eq!(allow.calls.load(Ordering::SeqCst), 1);
     assert_eq!(count_grant_rows(&pool).await, (1, 2));
@@ -2567,7 +2512,7 @@ async fn create_grant(
     cell: Uuid,
     principal: Value,
 ) -> Value {
-    ok_value(
+    assert_rpc_ok(
         run(
             options,
             "cell_grant_create",
@@ -2584,7 +2529,7 @@ async fn create_grant(
 /// `steward: true` — after being asked with the grant's own fields.
 #[tokio::test]
 async fn the_revoke_authorizer_admits_a_scope_steward() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (steward, _) = seed(&pool, "steward").await;
     let scope = Uuid::new_v4();
@@ -2607,7 +2552,7 @@ async fn the_revoke_authorizer_admits_a_scope_steward() {
     assert!(grant_exists(&pool, &grant_id).await);
 
     let allow = RecordingRevokeAuthorize::new(true);
-    let revoked = ok_value(
+    let revoked = assert_rpc_ok(
         run(
             &revoke_options(&pool, &allow),
             "cell_grant_revoke",
@@ -2639,7 +2584,7 @@ async fn the_revoke_authorizer_admits_a_scope_steward() {
 /// kept.
 #[tokio::test]
 async fn a_revoke_authorizer_refusal_is_the_404_mask() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let cell = seed_cell(&pool, "note", CellVisibility::Public, owner_actor).await;
@@ -2702,7 +2647,7 @@ impl CellGrantRevokeAuthorize for LevelRaceRevokeAuthorize {
 /// steward gets the 404 mask, no audit row — the grant kept at its old level.
 #[tokio::test]
 async fn a_steward_revoke_fences_the_delete_to_the_judged_level() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (steward, _) = seed(&pool, "steward").await;
     let cell = seed_cell(&pool, "note", CellVisibility::Private, owner_actor).await;
@@ -2748,7 +2693,7 @@ async fn a_steward_revoke_fences_the_delete_to_the_judged_level() {
 /// an allowing one.
 #[tokio::test]
 async fn the_revoke_authorizer_is_fenced_to_scoped_role_grants_of_non_managers() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let (owner, owner_actor) = seed(&pool, "owner").await;
     let (stranger, _) = seed(&pool, "stranger").await;
     let (holder, holder_actor) = seed(&pool, "holder").await;
@@ -2783,7 +2728,7 @@ async fn the_revoke_authorizer_is_fenced_to_scoped_role_grants_of_non_managers()
     assert_eq!(allow.calls(), 0, "neither grant shape reaches the hook");
 
     // self-revoke and a manager's revoke take their own paths
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_revoke",
@@ -2799,7 +2744,7 @@ async fn the_revoke_authorizer_is_fenced_to_scoped_role_grants_of_non_managers()
         json!({"kind": "role", "role": ROLE_MEMBER, "scope_id": Uuid::new_v4()}),
     )
     .await;
-    ok_value(
+    assert_rpc_ok(
         run(
             &options,
             "cell_grant_revoke",
@@ -2828,7 +2773,7 @@ async fn the_revoke_authorizer_is_fenced_to_scoped_role_grants_of_non_managers()
         json!({"kind": "role", "role": ROLE_MEMBER, "scope_id": Uuid::new_v4()}),
     )
     .await;
-    ok_value(run(&options, "cell_delete", json!({"cell_id": cell}), &owner).await);
+    assert_rpc_ok(run(&options, "cell_delete", json!({"cell_id": cell}), &owner).await);
     let gone = run(
         &options,
         "cell_grant_revoke",

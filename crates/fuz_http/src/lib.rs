@@ -181,6 +181,8 @@ pub use simple_request::{
     UNSUPPORTED_CONTENT_TYPE_REASON, is_cors_simple_content_type, is_json_content_type,
     simple_request_layer, unsupported_content_type_response,
 };
+#[cfg(any(test, feature = "test_router_access"))]
+pub use stack::TEST_PEER;
 pub use stack::{BodyCap, GatedRouter, OriginScope, RouteGroup, StackOptions, compose_stack};
 pub use strict_params::{parse_strict_params, parse_strict_params_allowing_null};
 pub use tracing_layer::request_tracing_layer;

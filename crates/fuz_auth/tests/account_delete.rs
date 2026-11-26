@@ -26,12 +26,12 @@ use fuz_auth::role::{ROLE_ADMIN, ROLE_KEEPER};
 use fuz_auth::role_grant_schema::RoleGrantRow;
 use fuz_auth::{CredentialGate, CredentialType, credential_type_required};
 use fuz_http::JsonrpcErrorCode;
+use fuz_testing::{backend_pid, seed_account_actor, seed_extra_actor, until_blocked_by_or};
 use serde_json::{Value, json};
 
 mod common;
 use common::{
-    build_audit, closer, ctx, fresh_db, seed_account_actor, seed_admin, seed_extra_actor,
-    seed_role_grant_direct,
+    build_audit, closer, ctx, fresh_db, fresh_postgres_db, seed_admin, seed_role_grant_direct,
 };
 
 /// Give a seeded context an active admin role grant — `account_delete`
@@ -1292,8 +1292,9 @@ async fn query_invite_delete_unclaimed_by_creators_deletes_only_those() {
 /// counts one — so two removals racing for the last two admins can't both
 /// pass.
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn the_admin_count_locks_what_it_counted() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let (_a1, a1_actor) = seed_account_actor(&pool, "racing_admin_one").await;
     seed_role_grant_direct(&pool, a1_actor, ROLE_ADMIN, None).await;
     let (a2, a2_actor) = seed_account_actor(&pool, "racing_admin_two").await;
@@ -1326,9 +1327,15 @@ async fn the_admin_count_locks_what_it_counted() {
             count
         }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let waited = until_blocked_by_or(
+        &pool,
+        backend_pid(&first).await,
+        || second.is_finished(),
+        "the second count waits on the rows the first locked",
+    )
+    .await;
     assert!(
-        !second.is_finished(),
+        waited,
         "the second count waits on the rows the first locked"
     );
     first.commit().await.expect("commit");

@@ -11,9 +11,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use fuz_db::create_pool;
 use fuz_http::{ReadyRouteState, ready_router};
-use fuz_testing::{TestEngine, TestingDbOptions, fresh_test_db};
+use fuz_testing::{TestEngine, TestingDbOptions};
 use http_body_util::BodyExt;
 use tower::ServiceExt; // for `oneshot`
 
@@ -56,11 +55,7 @@ fn ready_router_rejects_empty_expected() {
     // Boot-time fail-loud (twin of the TS factory throw): an empty expected map
     // would answer 200 for any live DB. The pool is never used — the assert
     // fires at router construction — so this needs no database.
-    let pool = create_pool(
-        "postgres://never-connected.invalid/none",
-        &fuz_db::PoolOptions::default(),
-    )
-    .unwrap();
+    let pool = fuz_testing::unreachable_pool();
     let _ = ready_router(ReadyRouteState {
         pool,
         expected: Arc::new(BTreeMap::new()),
@@ -69,7 +64,7 @@ fn ready_router_rejects_empty_expected() {
 
 #[tokio::test]
 async fn ready_returns_200_on_match_and_503_on_drift() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     // Live schema covers the expected columns → 200 {ready: true}.
     let (status, body) = get_ready(ReadyRouteState {

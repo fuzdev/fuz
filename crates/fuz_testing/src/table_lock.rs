@@ -1,19 +1,7 @@
 //! Stall a handler at one of its database reads — the fixture for a race
 //! between two reads of the same request.
 //!
-//! Some handlers read state, do something else, then act on what they read:
-//! a WebSocket upgrade resolves its credential, runs its role gate, and only
-//! then registers the socket. Whether a change landing in between is handled
-//! is invisible to a test that can only run the handler start to finish.
-//! [`TestingTableLock`] makes the gap addressable: take an `ACCESS EXCLUSIVE`
-//! lock on a table the handler reads *in between* (and reads nowhere earlier),
-//! start the request, wait until it is queued behind the lock
-//! ([`TestingTableLock::wait_for_waiter`]), make the change, and release. The
-//! handler then resumes from a known point with the change already committed.
-//!
-//! Sibling of [`crate::seed`] and [`crate::credentials`]: shared by the
-//! `fuz_actions` and `fuz_realtime` suites that pin the connection-admission
-//! re-check.
+//! The overview is on [`TestingTableLock`].
 
 #![expect(
     clippy::expect_used,
@@ -29,12 +17,25 @@ use fuz_db::Pool;
 const WAITER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// An `ACCESS EXCLUSIVE` lock on one table, held in an open transaction on a
-/// pooled client until [`Self::release`]. See the module doc.
+/// pooled client until [`Self::release`].
 ///
 /// Dropped without `release` — a test that panicked while holding it — the
 /// client is taken out of the pool and its connection closed, which ends the
 /// transaction and frees the lock; an open transaction is never handed back
 /// to the pool.
+///
+/// Some handlers read state, do something else, then act on what they read:
+/// a WebSocket upgrade resolves its credential, runs its role gate, and only
+/// then registers the socket. Whether a change landing in between is handled
+/// is invisible to a test that can only run the handler start to finish.
+/// [`TestingTableLock`] makes the gap addressable: take an `ACCESS EXCLUSIVE`
+/// lock on a table the handler reads *in between* (and reads nowhere earlier),
+/// start the request, wait until it is queued behind the lock
+/// ([`TestingTableLock::wait_for_waiter`]), make the change, and release. The
+/// handler then resumes from a known point with the change already committed.
+///
+/// Shared by the `fuz_actions` and `fuz_realtime` suites that pin the
+/// connection-admission re-check.
 pub struct TestingTableLock {
     /// `Some` until [`Self::release`] or drop takes it.
     client: Option<deadpool_postgres::Object>,

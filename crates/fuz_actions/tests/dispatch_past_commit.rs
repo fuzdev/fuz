@@ -20,8 +20,8 @@
 )]
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fuz_actions::{ActionHandler, ActionRegistry, ActionSpec, WsRouteState, register_action_ws};
@@ -33,8 +33,8 @@ use fuz_db::{ActionDb, Pool};
 use fuz_http::{BackgroundWrites, CancellationToken, InputShape, ServeShutdown};
 use fuz_realtime::ConnectionRegistry;
 use fuz_testing::{
-    TestEngine, TestingDbOptions, fresh_test_db, mint_session_cookie, seed_account_actor,
-    testing_keyring,
+    RecordingConnectionCloser, TestEngine, TestingDbOptions, mint_session_cookie,
+    seed_account_actor, testing_keyring,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -358,7 +358,7 @@ async fn send_rpc_request(addr: SocketAddr, method: &str) -> TcpStream {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_ws_dispatch_dropped_mid_commit_still_runs_its_effects() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let mut stream = ws_socket(&pool, &probe, &writes).await;
@@ -376,7 +376,7 @@ async fn a_ws_dispatch_dropped_mid_commit_still_runs_its_effects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_ws_dispatch_dropped_in_its_handler_rolls_back() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let mut stream = ws_socket(&pool, &probe, &writes).await;
@@ -395,7 +395,7 @@ async fn a_ws_dispatch_dropped_in_its_handler_rolls_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn the_shutdown_waits_for_a_ws_dispatch_past_its_commit() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -439,7 +439,7 @@ async fn the_shutdown_waits_for_a_ws_dispatch_past_its_commit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn an_rpc_dispatch_dropped_mid_commit_still_runs_its_effects() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -467,7 +467,7 @@ async fn an_rpc_dispatch_dropped_mid_commit_still_runs_its_effects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn an_rpc_dispatch_dropped_in_its_handler_rolls_back() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -508,7 +508,7 @@ async fn drain_after(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_drain_inside_a_handed_off_request_does_not_wait_on_itself() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let probe = Arc::new(Probe::default());
     let writes = Arc::new(BackgroundWrites::default());
     let connections = Arc::new(ConnectionRegistry::new());
@@ -535,39 +535,17 @@ async fn a_drain_inside_a_handed_off_request_does_not_wait_on_itself() {
     assert_finished(&pool, &probe, &writes).await;
 }
 
-/// The connection closes a closer was asked for.
-#[derive(Default)]
-struct RecordingCloser {
-    closed: Mutex<Vec<ConnectionCloseTarget>>,
-}
-
-impl fuz_http::ShutdownCloser for RecordingCloser {
-    fn close_all_connections(&self) -> usize {
-        0
-    }
-
-    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
-        Box::pin(std::future::ready(()))
-    }
-}
-
-impl ConnectionCloser for RecordingCloser {
-    fn close_connections(&self, target: &ConnectionCloseTarget) -> usize {
-        self.closed.lock().unwrap().push(target.clone());
-        0
-    }
-}
-
 /// `POST /logout` dropped by its client while its commit is in flight: the
 /// request finishes on the tracker, so the ended session's connections are
 /// still closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "postgres-only: a plpgsql trigger"]
 async fn a_logout_dropped_mid_commit_still_closes_the_session() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let writes = Arc::new(BackgroundWrites::default());
-    let closer = Arc::new(RecordingCloser::default());
-    let connection_closer: Arc<dyn ConnectionCloser> = Arc::<RecordingCloser>::clone(&closer);
+    let closer = Arc::new(RecordingConnectionCloser::default());
+    let connection_closer: Arc<dyn ConnectionCloser> =
+        Arc::<RecordingConnectionCloser>::clone(&closer);
     let state = AccountRouteState {
         gate: gate(&pool, &writes),
         password_hasher: Arc::new(fuz_auth::Argon2idHasher::new()),
@@ -604,9 +582,7 @@ async fn a_logout_dropped_mid_commit_still_closes_the_session() {
 
     until("the logout closed its session's connections", || {
         closer
-            .closed
-            .lock()
-            .unwrap()
+            .closed()
             .iter()
             .any(|target| matches!(target, ConnectionCloseTarget::Session(_)))
     })

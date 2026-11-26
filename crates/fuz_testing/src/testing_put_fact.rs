@@ -1,30 +1,6 @@
 //! `_testing_put_fact` action spec.
 //!
-//! Test binaries register this on their `ActionRegistry` alongside
-//! `_testing_reset` / `_testing_mint_session`. It seeds an **embedded** fact
-//! (`fact.bytes`), or an external row when `external_url` is given, so the
-//! cross-process fact-serving suite can store facts without a DB handle — the
-//! cross-process driver runs over real HTTP and has no `PgFactStore` to call.
-//! The referencing cell is seeded separately via the `cell_create` RPC; this
-//! action only puts the fact row.
-//!
-//! Reads `{content: string, content_type?: string, holder?: uuid,
-//! external_url?: string}`, hashes the UTF-8 bytes (blake3 via
-//! [`fuz_crypto::ContentHash`] — the workspace's single hashing home, matching
-//! the TS `fact_hash_bytes`), inserts the row idempotently, and returns
-//! `{hash: "blake3:<hex>"}`. `holder` names the actor the put is on behalf of
-//! — recorded in `fact_holder` (deduplicated puts included), as a real upload
-//! records its uploader, so the suite can drive cell ref admission; absent,
-//! the put is a system put with no holder. Embedded is enough for the authz
-//! assertions the suite proves (cell-scoped admit, cross-owner-no-leak,
-//! 404-mask, bare-hash admin-only); external / X-Accel parity is covered by a
-//! consumer's own gate, outside this workspace. `external_url`, when given,
-//! writes the row the way a writer past the store could — no bytes, that URL
-//! verbatim, unvalidated — so the suite can prove a serve refuses a URL that
-//! is not its hash's own address. Mirrors `fuz_app`'s TS `_testing_put_fact`.
-//!
-//! Gated on the daemon-token credential — effectively keeper-only without
-//! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
+//! The overview is on [`create_testing_put_fact_action_spec`].
 
 use std::sync::Arc;
 
@@ -44,6 +20,32 @@ const TESTING_PUT_FACT_NON_NULLABLE: &[&str] = &["content_type", "holder", "exte
 /// Build the `_testing_put_fact` action spec.
 ///
 /// `side_effects: true` so the dispatcher wraps the insert in a transaction.
+///
+/// Test binaries register this on their `ActionRegistry` alongside
+/// `_testing_reset` / `_testing_mint_session`. It seeds an **embedded** fact
+/// (`fact.bytes`), or an external row when `external_url` is given, so the
+/// cross-process fact-serving suite can store facts without a DB handle — the
+/// cross-process driver runs over real HTTP and has no `PgFactStore` to call.
+/// The referencing cell is seeded separately via the `cell_create` RPC; this
+/// action only puts the fact row.
+///
+/// Reads `{content: string, content_type?: string, holder?: uuid,
+/// external_url?: string}`, hashes the UTF-8 bytes (blake3 via
+/// [`fuz_crypto::ContentHash`] — the workspace's single hashing home, matching
+/// the TS `fact_hash_bytes`), inserts the row idempotently, and returns
+/// `{hash: "blake3:<hex>"}`. `holder` names the actor the put is on behalf of
+/// — recorded in `fact_holder` (deduplicated puts included), as a real upload
+/// records its uploader, so the suite can drive cell ref admission; absent,
+/// the put is a system put with no holder. Embedded is enough for the authz
+/// assertions the suite proves (cell-scoped admit, cross-owner-no-leak,
+/// 404-mask, bare-hash admin-only); external / X-Accel parity is covered by a
+/// consumer's own gate, outside this workspace. `external_url`, when given,
+/// writes the row the way a writer past the store could — no bytes, that URL
+/// verbatim, unvalidated — so the suite can prove a serve refuses a URL that
+/// is not its hash's own address. Mirrors `fuz_app`'s TS `_testing_put_fact`.
+///
+/// Gated on the daemon-token credential — effectively keeper-only without
+/// forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
 #[must_use]
 pub fn create_testing_put_fact_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |params: Value, ctx: ActionContext<'_>| {

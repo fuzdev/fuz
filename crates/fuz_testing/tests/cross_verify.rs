@@ -11,7 +11,7 @@
 use argon2::password_hash::PasswordHash;
 
 use fuz_auth::{Argon2idHasher, PasswordHasher};
-use fuz_testing::{TestingArgon2idHasher, password_argon2::TESTING_DUMMY_HASH};
+use fuz_testing::{TESTING_DUMMY_HASH, TestingArgon2idHasher};
 
 const PASSWORD: &str = "correct-horse-battery-staple";
 const WRONG_PASSWORD: &str = "tr0ub4dor&3";
@@ -40,7 +40,7 @@ async fn testing_mints_prod_verifies() {
 }
 
 /// An unparseable stored hash verifies `false`, never errors — the contract
-/// `fuz_testing::seed`'s `'x'` fixture literal leans on to keep seeded
+/// `fuz_testing::seed_account_actor`'s `'x'` fixture literal leans on to keep seeded
 /// accounts un-loginable. Pins the parse-error leg on both hashers (the
 /// dummy-hash tests only exercise the parseable-mismatch leg).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

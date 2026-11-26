@@ -34,8 +34,7 @@ use fuz_realtime::{
     RoomRegistryOptions, RoomScope,
 };
 use fuz_testing::{
-    TestEngine, TestingDbOptions, fresh_test_db, mint_session_cookie, seed_account_actor,
-    testing_keyring,
+    TestEngine, TestingDbOptions, mint_session_cookie, seed_account_actor, testing_keyring,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -362,7 +361,7 @@ fn reason(error: &Value) -> &str {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn members_join_relay_set_state_and_leave_over_the_socket() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_a").await;
     let mut b = Socket::open(&pool, server.addr, "rooms_b").await;
@@ -443,7 +442,7 @@ async fn members_join_relay_set_state_and_leave_over_the_socket() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refusals_answer_their_reasons() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_refusals").await;
 
@@ -512,7 +511,7 @@ async fn refusals_answer_their_reasons() {
 /// reason `disconnected`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_closed_socket_leaves_its_rooms() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_stays").await;
     let mut b = Socket::open(&pool, server.addr, "rooms_goes").await;
@@ -532,7 +531,7 @@ async fn a_closed_socket_leaves_its_rooms() {
 /// eviction ends it; a member's eviction tells it its seat is lost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn watches_and_evictions_over_the_socket() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut watcher = Socket::open(&pool, server.addr, "rooms_watcher").await;
     let mut member = Socket::open(&pool, server.addr, "rooms_member").await;
@@ -578,7 +577,7 @@ async fn watches_and_evictions_over_the_socket() {
 /// `request_cancelled`, seating no one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_join_is_not_seated() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_cancel").await;
     let room = "gate:cancel";
@@ -609,7 +608,7 @@ async fn a_cancelled_join_is_not_seated() {
 /// authorizer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_leave_supersedes_a_join_in_flight() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut a = Socket::open(&pool, server.addr, "rooms_superseded").await;
     let room = "gate:superseded";
@@ -632,7 +631,7 @@ async fn a_leave_supersedes_a_join_in_flight() {
 /// and a leave cost it nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_limiter_refuses_past_its_budget() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(
         &pool,
         Limits {
@@ -677,7 +676,7 @@ async fn the_limiter_refuses_past_its_budget() {
 /// every socket of the account; sends and state sets don't.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn joins_and_watches_share_the_account_budget() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(
         &pool,
         Limits {
@@ -719,7 +718,7 @@ async fn joins_and_watches_share_the_account_budget() {
 /// this is the window's state. The live read denies.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_revoke_before_the_authorizer_reads_leaves_no_seat() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let (account_id, actor_id) = seed_account_actor(&pool, "rooms_revoked").await;
     {
@@ -780,7 +779,7 @@ async fn a_revoke_before_the_authorizer_reads_leaves_no_seat() {
 /// authorizer is released.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_socket_closed_mid_authorizer_leaves_no_seat() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let server = serve(&pool, Limits::default()).await;
     let mut watcher = Socket::open(&pool, server.addr, "rooms_drop_watcher").await;
     let mut a = Socket::open(&pool, server.addr, "rooms_drop").await;

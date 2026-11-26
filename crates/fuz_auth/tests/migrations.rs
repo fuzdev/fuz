@@ -3,7 +3,7 @@
 
 use fuz_auth::AUTH_MIGRATIONS;
 use fuz_db::{MigrationNamespace, run_migrations};
-use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
+use fuz_testing::{TestEngine, TestingDbOptions};
 
 /// This suite's database: an **empty** migration list — the tests below drive
 /// `run_migrations` themselves and assert on what it applies, so the fixture
@@ -15,16 +15,9 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
     engine: TestEngine::Any,
 };
 
-/// Tear down any previous state for a clean re-migration. Resetting the whole
-/// `public` schema wipes every table, type, and sequence — immune to the drift
-/// a hand-maintained drop list invites.
-async fn fresh_db() -> TestDb {
-    fresh_test_db(DB).await
-}
-
 #[tokio::test]
 async fn migrations_run_once() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
 
     let results = run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
@@ -54,7 +47,7 @@ async fn migrations_run_once() {
 
 #[tokio::test]
 async fn migrations_idempotent_on_second_run() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
 
     run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
@@ -70,7 +63,7 @@ async fn migrations_idempotent_on_second_run() {
 
 #[tokio::test]
 async fn auth_tables_exist_after_migration() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     run_migrations(&pool, &[AUTH_MIGRATIONS])
         .await
         .expect("migration run");
@@ -125,7 +118,7 @@ async fn auth_tables_exist_after_migration() {
 async fn api_token_scope_migration_grandfathers_existing_tokens() {
     use fuz_auth::token_scope::{TokenScope, TokenScopeDocument};
 
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
 
     // Bring the DB to the state *before* token scoping by running only the
     // chain **prefix** — a faithful stand-in for a deployment that
@@ -236,7 +229,7 @@ async fn api_token_scope_migration_grandfathers_existing_tokens() {
 /// and the CHECK refuses a mixed-case insert from then on.
 #[tokio::test]
 async fn account_username_lowercase_migration_refuses_a_mixed_case_row() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
 
     // the chain before the migration under test, its tail derived from the data
     let idx = AUTH_MIGRATIONS
@@ -347,7 +340,7 @@ async fn identity_foreign_keys(pool: &fuz_db::Pool) -> Vec<(String, String, Stri
 /// stamp's value, and a stamp then names an actor no row holds.
 #[tokio::test]
 async fn drop_provenance_stamp_foreign_keys_drops_only_the_stamps() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let idx = AUTH_MIGRATIONS
         .migrations
         .iter()

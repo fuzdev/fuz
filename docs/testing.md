@@ -74,7 +74,8 @@ independent of the developer's `~/.fuz/`.
 
 ## Postgres suites
 
-Every DB test opens its database with `fuz_testing::fresh_test_db`, which
+Every DB test opens its database with `fuz_testing::fresh_test_db` (a suite's
+const as `DB.open()`), which
 hands the test a pglet server of its own, in-process on a loopback port, and
 stops it when the returned `TestDb` drops. The server is a copy-on-write fork
 of a base the process migrated once for that migration set (the namespaces,
@@ -124,13 +125,17 @@ and the other way round. Its doc has the detection rule. `tests/pglet_pin.rs`
 holds `cross-contract.yml`'s pglet checkout to `check.yml`'s `PGLET_REF`.
 
 Each suite's purpose is in its file's `//!` doc. `fuz_auth`'s `tests/common/`
-(seeding over `fuz_testing::seed`) and `tests/signup.rs` are the template for
-a new per-handler suite.
+(seeding over `fuz_testing::seed_account_actor`) and `tests/signup.rs` are the
+template for a new per-handler suite.
 
 `fuz_auth`'s `credential_mint_race` and `account_delete_races` play two
 transactions against each other; only PostgreSQL shows a lock wait or a lock
 order, so their racing tests are Postgres-only, and a change to a row lock, a
-locking read or a `RETURNING` order runs the PostgreSQL leg.
+locking read or a `RETURNING` order runs the PostgreSQL leg. A test that needs
+a call to be waiting on a lock observes the wait with `fuz_testing`'s
+`until_lock_waiters` or `until_blocked_by` (pglet answers neither
+`pg_stat_activity` nor `pg_blocking_pids`), never with a sleep and
+`!is_finished()`.
 
 ## Cross-backend suite
 

@@ -1,5 +1,5 @@
 //! Positive controls for the request-reads census's method disallows (the
-//! workspace `clippy.toml`; the census is `fuz_testing::request_reads_census`,
+//! workspace `clippy.toml`; the census is `fuz_testing`'s,
 //! run by `fuz_testing`'s `tests/request_reads_census.rs`). Each uses one
 //! disallowed method under an `#[expect]`, fulfilled only while clippy
 //! resolves that entry, so a path that stops resolving fails `-D warnings`.

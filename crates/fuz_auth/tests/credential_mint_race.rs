@@ -57,11 +57,12 @@ use fuz_auth::{
     password_handler,
 };
 use fuz_db::Pool;
+use fuz_testing::{backend_pid, seed_account_actor, until_blocked_by};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 mod common;
-use common::{blocked_by, fresh_db, fresh_postgres_db, seed_account_actor, seed_admin};
+use common::{fresh_db, fresh_postgres_db, seed_admin};
 
 const OLD_PASSWORD: &str = "old-password-race-1";
 const NEW_PASSWORD: &str = "new-password-race-2";
@@ -900,25 +901,14 @@ async fn a_password_change_waiting_on_the_account_row_across_a_logout_of_its_ses
         )
         .await
         .unwrap();
-    let holder_pid: i32 = holder
-        .query_one("SELECT pg_backend_pid()", &[])
-        .await
-        .unwrap()
-        .get(0);
+    let holder_pid = backend_pid(&holder).await;
 
     let raced = tokio::spawn({
         let state = state.clone();
         let cookie = first.cookie();
         async move { change_password(&state, &cookie).await }
     });
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while blocked_by(&pool, holder_pid).await < 1 {
-        assert!(
-            Instant::now() < deadline,
-            "the change never waited on the held row"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    until_blocked_by(&pool, holder_pid, "the change waits on the held row").await;
     assert_eq!(
         logout(&state, &first.cookie()).await.status,
         StatusCode::OK,

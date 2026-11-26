@@ -35,13 +35,11 @@ use fuz_auth::{
 };
 use fuz_db::{ActionDb, Pool};
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
+use fuz_testing::{in_tx, race};
 use serde_json::{Value, json};
 
 mod common;
-use common::{
-    fresh_db, fresh_postgres_db, in_tx, race, seed_actor_context, seed_admin,
-    seed_role_grant_direct,
-};
+use common::{fresh_db, fresh_postgres_db, seed_actor_context, seed_admin, seed_role_grant_direct};
 
 /// The self-service-eligible role the caller toggles.
 const ROLE: &str = "race_self_role";

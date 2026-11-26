@@ -17,10 +17,10 @@ use std::collections::BTreeMap;
 use fuz_db::{
     DbError, Divergence, Migration, MigrationError, MigrationNamespace, PgErrorKind, Pool,
     RESERVED_NAMESPACES, assert_valid_sql_identifier, baseline, check_schema_drift,
-    classify_pg_error, commit_checked, create_pool, format_db_status, is_pg_unique_violation,
-    query_db_status, query_ready_columns, query_schema_snapshot, run_migrations, sqlstate_in_chain,
+    classify_pg_error, commit_checked, format_db_status, is_pg_unique_violation, query_db_status,
+    query_ready_columns, query_schema_snapshot, run_migrations, sqlstate_in_chain,
 };
-use fuz_testing::{TestEngine, TestingDbOptions, fresh_test_db};
+use fuz_testing::{TestEngine, TestingDbOptions};
 
 /// A bare database: no migration chain, no tracker.
 const DB: TestingDbOptions<'static> = TestingDbOptions {
@@ -32,7 +32,7 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
 
 #[tokio::test]
 async fn pool_acquire_works() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let client = pool.get().await.expect("pool get");
     let row = client.query_one("SELECT 42::int4 as v", &[]).await.unwrap();
     let v: i32 = row.get("v");
@@ -41,7 +41,7 @@ async fn pool_acquire_works() {
 
 #[tokio::test]
 async fn commit_checked_commits_a_healthy_transaction() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -72,7 +72,7 @@ async fn commit_checked_commits_a_healthy_transaction() {
 
 #[tokio::test]
 async fn transaction_rolls_back_when_an_error_drops_it() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -113,7 +113,7 @@ async fn transaction_rolls_back_when_an_error_drops_it() {
 async fn a_healthy_transaction_dropped_before_commit_rolls_back() {
     // An early return on a non-database error leaves the transaction healthy,
     // so only the drop's rollback keeps the insert from persisting.
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -151,7 +151,7 @@ async fn commit_checked_refuses_a_transaction_a_swallowed_error_aborted() {
     // Code that drops a failed statement's error and carries on leaves the
     // transaction aborted. `COMMIT` would roll it back without an error;
     // the checked commit reports it instead, and nothing persists.
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -195,7 +195,7 @@ async fn commit_checked_reports_a_commit_time_constraint_failure() {
     // A deferred constraint passes the probe (the transaction is healthy) and
     // fails at `COMMIT` itself, which PostgreSQL reports as an error — the
     // checked commit surfaces it as `DbError::Postgres`, never `Ok`.
-    let pool = fresh_test_db(DB.postgres_only()).await;
+    let pool = DB.postgres_only().open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -250,7 +250,7 @@ async fn migration_runner_applies_two_namespaces() {
         sql: "CREATE TABLE m_apply_beta (id UUID PRIMARY KEY DEFAULT gen_random_uuid())",
     }];
 
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let namespaces = [
         MigrationNamespace::new("fuz_db_test_apply_alpha", MIGRATIONS_A),
@@ -308,7 +308,7 @@ async fn query_ready_columns_reports_columns_and_drift() {
         },
     ];
 
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     run_migrations(
         &pool,
@@ -376,7 +376,7 @@ async fn migration_runner_detects_name_divergence() {
         sql: "CREATE TABLE m_diverge (id SERIAL)",
     }];
 
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     // Apply the canonical chain.
     run_migrations(
@@ -425,7 +425,7 @@ async fn migration_runner_detects_binary_older_than_db() {
         sql: "CREATE TABLE m_older (id SERIAL PRIMARY KEY)",
     }];
 
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     // Apply the full chain.
     run_migrations(&pool, &[MigrationNamespace::new("fuz_db_test_older", FULL)])
@@ -459,7 +459,7 @@ async fn migration_runner_detects_binary_older_than_db() {
 
 #[tokio::test]
 async fn baseline_records_names_without_executing() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     const MIGRATIONS_C: &[Migration] = &[
         Migration {
@@ -513,7 +513,7 @@ async fn advisory_lock_two_concurrent_boots_both_succeed() {
     // the second waits for the first's commit, reads the migration applied,
     // and succeeds with nothing to do. Without the lock both chains run the
     // `CREATE TABLE` and the loser fails on the catalog's unique index.
-    let pool = fresh_test_db(DB.postgres_only()).await;
+    let pool = DB.postgres_only().open().await;
 
     const MIGRATIONS_D: &[Migration] = &[Migration {
         name: "create_delta",
@@ -555,7 +555,7 @@ async fn migration_waits_on_the_ts_twins_namespace_lock() {
     // djb2 of the namespace, sign-extended (`namespace_lock_key`).
     const NAMESPACE: &str = "fuz_db_test_lock_wait";
     const KEY: i64 = -1_425_090_598;
-    let pool = fresh_test_db(DB.postgres_only()).await;
+    let pool = DB.postgres_only().open().await;
 
     let mut holder = pool.get().await.expect("holder: pool get");
     let tx = holder.transaction().await.expect("holder: begin");
@@ -628,7 +628,7 @@ async fn a_failed_namespace_lock_names_the_namespace_and_keeps_its_sqlstate() {
     const NAMESPACE: &str = "fuz_db_test_lock_fail";
     // djb2 of the namespace, sign-extended (`namespace_lock_key`).
     const KEY: i64 = -1_425_701_535;
-    let pool = fresh_test_db(DB.postgres_only()).await;
+    let pool = DB.postgres_only().open().await;
 
     let mut holder = pool.get().await.expect("holder: pool get");
     let tx = holder.transaction().await.expect("holder: begin");
@@ -716,7 +716,7 @@ async fn a_failed_namespace_lock_names_the_namespace_and_keeps_its_sqlstate() {
 
 #[tokio::test]
 async fn pg_error_classification_unique_violation() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -743,7 +743,7 @@ async fn pg_error_classification_unique_violation() {
 
 #[tokio::test]
 async fn pg_error_classification_foreign_key_violation() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -772,7 +772,7 @@ async fn pg_error_classification_foreign_key_violation() {
 
 #[tokio::test]
 async fn pg_error_classification_restrict_violation() {
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     let client = pool.get().await.unwrap();
     client
@@ -831,11 +831,7 @@ fn sql_identifier_rejects_injection_attempts() {
 #[tokio::test]
 async fn reserved_namespace_rejection() {
     assert_eq!(RESERVED_NAMESPACES, ["fuz_auth", "fuz_cell", "fuz_facts"]);
-    let pool = create_pool(
-        "postgres://nobody@127.0.0.1:1/never",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("lazy pool");
+    let pool = fuz_testing::unreachable_pool();
     for name in RESERVED_NAMESPACES {
         let consumer_list = [
             MigrationNamespace::new("my_app", &[]),
@@ -887,7 +883,7 @@ async fn schema_snapshot_is_deterministic_and_shaped() {
         },
     ];
 
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     run_migrations(
         &pool,
         &[MigrationNamespace::new("fuz_db_test_snapshot", MIGRATIONS)],
@@ -1000,7 +996,7 @@ async fn query_db_status_reads_each_namespace_from_the_tracker() {
         "fuz_db_test_status_older",
     ];
 
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
 
     // The clean namespace migrates for real, which also creates the tracker.
     let clean_ns = MigrationNamespace::new("fuz_db_test_status_clean", CLEAN);
@@ -1106,7 +1102,7 @@ async fn query_db_status_without_a_tracker_pends_every_namespace() {
             sql: "",
         },
     ];
-    let pool = fresh_test_db(DB).await;
+    let pool = DB.open().await;
     let status = query_db_status(&pool, &[MigrationNamespace::new("fresh", FRESH)]).await;
     let status = status.unwrap();
 

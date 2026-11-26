@@ -1,33 +1,6 @@
 //! `_testing_mint_session` action spec.
 //!
-//! Test binaries register this on their `ActionRegistry` alongside
-//! `_testing_reset` / `_testing_drain_effects`. It mints an
-//! *expired-by-construction* server-side session for an existing account
-//! and returns its signed cookie value — a dead session no wire path leaves
-//! (the cross-backend database-invariant check forges one on a deleted
-//! account). A session that lived and then expired, the `expired_session`
-//! conformance principal, is `_testing_shorten_credential_expiry`'s.
-//!
-//! `expires_in_seconds` is **constrained negative** (the handler refuses
-//! anything but a negative safe integer with `invalid_params`, mirroring the TS
-//! spec's `pipe(number, safe_integer, max_value(-1))`): the action is structurally incapable of
-//! minting a *usable* session — only an already-backdated, already-dead row.
-//! The daemon-token gate (a credential only a test binary mounts) and the test
-//! binary's default loopback bind already fence the backdoor — the bind is a
-//! default, and nothing checks the peer address; the negative constraint is
-//! the make-impossible-states floor so even a misuse can't forge a valid
-//! session for an arbitrary `account_id`.
-//!
-//! The minted `auth_session` row's `expires_at` is offset from `NOW()` by
-//! the caller's `expires_in_seconds` (negative → backdated), while the
-//! returned cookie's own signed payload stays valid (future). Auth
-//! resolution therefore clears the cookie-payload gate
-//! (`parse_session_from_cookies`) and is refused by the DB-row gate
-//! (`query_session_get_valid` — `WHERE expires_at > NOW()`).
-//!
-//! Gated on the daemon-token credential — effectively keeper-only without
-//! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
-//! Mirrors `fuz_app`'s TS `_testing_mint_session`.
+//! The overview is on [`create_testing_mint_session_action_spec`].
 
 use std::sync::Arc;
 
@@ -102,6 +75,35 @@ fn parse_mint_session_params(params: &Value) -> Result<(uuid::Uuid, f64), Jsonrp
 /// `{session_cookie: string}` — the signed cookie VALUE (name + attributes
 /// stripped, matching `_testing_reset`'s seeded-account shape) for the
 /// caller's cookie jar.
+///
+/// Test binaries register this on their `ActionRegistry` alongside
+/// `_testing_reset` / `_testing_drain_effects`. It mints an
+/// *expired-by-construction* server-side session for an existing account
+/// and returns its signed cookie value — a dead session no wire path leaves
+/// (the cross-backend database-invariant check forges one on a deleted
+/// account). A session that lived and then expired, the `expired_session`
+/// conformance principal, is `_testing_shorten_credential_expiry`'s.
+///
+/// `expires_in_seconds` is **constrained negative** (the handler refuses
+/// anything but a negative safe integer with `invalid_params`, mirroring the TS
+/// spec's `pipe(number, safe_integer, max_value(-1))`): the action is structurally incapable of
+/// minting a *usable* session — only an already-backdated, already-dead row.
+/// The daemon-token gate (a credential only a test binary mounts) and the test
+/// binary's default loopback bind already fence the backdoor — the bind is a
+/// default, and nothing checks the peer address; the negative constraint is
+/// the make-impossible-states floor so even a misuse can't forge a valid
+/// session for an arbitrary `account_id`.
+///
+/// The minted `auth_session` row's `expires_at` is offset from `NOW()` by
+/// the caller's `expires_in_seconds` (negative → backdated), while the
+/// returned cookie's own signed payload stays valid (future). Auth
+/// resolution therefore clears the cookie-payload gate
+/// (`parse_session_from_cookies`) and is refused by the DB-row gate
+/// (`query_session_get_valid` — `WHERE expires_at > NOW()`).
+///
+/// Gated on the daemon-token credential — effectively keeper-only without
+/// forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
+/// Mirrors `fuz_app`'s TS `_testing_mint_session`.
 #[must_use]
 pub fn create_testing_mint_session_action_spec(
     keyring: Arc<Keyring>,

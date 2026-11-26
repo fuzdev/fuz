@@ -1,31 +1,6 @@
 //! `_testing_credential_read` action spec.
 //!
-//! Reads the three credentials — the session cookie, the bearer token, the
-//! daemon token — out of a list of header lines with the readers the
-//! credential walk calls ([`fuz_auth::parse_session_from_cookies`],
-//! [`fuz_auth::read_bearer_token`], [`fuz_auth::read_daemon_token`]), so the
-//! shared credential conformance table checks this spine's header grammar row
-//! by row, over the wire and in this crate's own unit test. Pure: no database
-//! read, no state beyond the server's keyring and cookie name.
-//!
-//! Reads `{lines: string[]}`: the request's header lines, each `Name: value`,
-//! in the order sent — a name may repeat. Every character is one byte, as the
-//! TS twin's runtime hands it a header's bytes: U+00E9 is the byte `0xE9`.
-//! Answers `{session_cookie: "absent" | "invalid" | "valid", bearer_token:
-//! string | null, daemon_token: string | null}` — each leg's reading before
-//! any database work. Mirrors `fuz_app`'s TS `_testing_credential_read`.
-//!
-//! Every refusal of `lines` is `invalid_params` with the reason
-//! [`ERROR_TESTING_CREDENTIAL_READ_LINE`]: a value that is no list of
-//! strings, a list over [`TESTING_CREDENTIAL_READ_LINES_MAX`] lines or a line
-//! over [`TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX`] characters (the TS twin's
-//! input schema states the same caps — without them this side would refuse a
-//! name `HeaderName` cannot hold, and the twin would read it), and a line
-//! that is no header line — no `:`, a name that is no HTTP token, or a
-//! character no field value holds (above U+00FF, or a control character other
-//! than HTAB).
-//!
-//! Gated on the daemon-token credential, matching `_testing_reset`.
+//! The overview is on [`create_testing_credential_read_action_spec`].
 
 use std::sync::Arc;
 
@@ -37,16 +12,16 @@ use serde_json::{Value, json};
 
 /// The `data.reason` of every refusal of `lines`: no list of strings, over a
 /// cap, or holding a line that is no header line.
-pub const ERROR_TESTING_CREDENTIAL_READ_LINE: &str = "invalid_header_line";
+const ERROR_TESTING_CREDENTIAL_READ_LINE: &str = "invalid_header_line";
 
 /// The longest header line the action reads, in UTF-16 code units — what the
 /// TS twin's `TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX` bounds, one a byte for
 /// every character a line may hold.
-pub const TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX: usize = 1024;
+const TESTING_CREDENTIAL_READ_LINE_LENGTH_MAX: usize = 1024;
 
 /// The most header lines the action reads — the TS twin's
 /// `TESTING_CREDENTIAL_READ_LINES_MAX`.
-pub const TESTING_CREDENTIAL_READ_LINES_MAX: usize = 32;
+const TESTING_CREDENTIAL_READ_LINES_MAX: usize = 32;
 
 /// The refusal's message — the TS twin's.
 const INVALID_HEADER_LINE_MESSAGE: &str = "a header line must be `Name: value` in bytes";
@@ -100,7 +75,7 @@ fn parse_testing_header_lines<'l>(lines: impl IntoIterator<Item = &'l str>) -> O
 /// `invalid_params` with reason [`ERROR_TESTING_CREDENTIAL_READ_LINE`] for a
 /// line that is no header line, and for more lines than a `HeaderMap` holds
 /// — this function applies no cap of its own (the action's input parse does).
-pub fn run_testing_credential_read<'l>(
+fn run_testing_credential_read<'l>(
     lines: impl IntoIterator<Item = &'l str>,
     keyring: &Keyring,
     cookie_name: &str,
@@ -157,6 +132,32 @@ fn parse_testing_credential_read_input(params: &Value) -> Result<Vec<&str>, Json
 
 /// Build the `_testing_credential_read` action spec over the server's cookie
 /// keyring and session cookie name.
+///
+/// Reads the three credentials — the session cookie, the bearer token, the
+/// daemon token — out of a list of header lines with the readers the
+/// credential walk calls ([`fuz_auth::parse_session_from_cookies`],
+/// [`fuz_auth::read_bearer_token`], [`fuz_auth::read_daemon_token`]), so the
+/// shared credential conformance table checks this spine's header grammar row
+/// by row, over the wire and in this crate's own unit test. Pure: no database
+/// read, no state beyond the server's keyring and cookie name.
+///
+/// Reads `{lines: string[]}`: the request's header lines, each `Name: value`,
+/// in the order sent — a name may repeat. Every character is one byte, as the
+/// TS twin's runtime hands it a header's bytes: U+00E9 is the byte `0xE9`.
+/// Answers `{session_cookie: "absent" | "invalid" | "valid", bearer_token:
+/// string | null, daemon_token: string | null}` — each leg's reading before
+/// any database work. Mirrors `fuz_app`'s TS `_testing_credential_read`.
+///
+/// Every refusal of `lines` is `invalid_params` with the reason
+/// `invalid_header_line`: a value that is no list of strings, a list over 32
+/// lines or a line over 1024 characters (the TS twin's
+/// input schema states the same caps — without them this side would refuse a
+/// name `HeaderName` cannot hold, and the twin would read it), and a line
+/// that is no header line — no `:`, a name that is no HTTP token, or a
+/// character no field value holds (above U+00FF, or a control character other
+/// than HTAB).
+///
+/// Gated on the daemon-token credential, matching `_testing_reset`.
 #[must_use]
 pub fn create_testing_credential_read_action_spec(
     keyring: Arc<Keyring>,

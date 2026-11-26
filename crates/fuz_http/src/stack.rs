@@ -383,7 +383,56 @@ impl GatedRouter {
     pub fn into_router_for_testing(self) -> Router {
         self.router
     }
+
+    /// Send one request through the composed router in-process, from `peer`
+    /// as the TCP peer, and return the response with its body read whole.
+    ///
+    /// `serve_with_shutdown` puts the peer on every request (`ConnectInfo`),
+    /// which the client-IP layer reads; a `oneshot` has no connection, so this
+    /// supplies it — [`TEST_PEER`] unless a test varies the peer. Takes
+    /// `&self`, so one router answers many requests.
+    ///
+    /// Present only under the test-only `test_router_access` feature, as
+    /// [`Self::into_router_for_testing`] is.
+    ///
+    /// # Panics
+    ///
+    /// When the response body fails to read.
+    #[cfg(any(test, feature = "test_router_access"))]
+    #[expect(
+        clippy::expect_used,
+        reason = "a test helper: a body that fails to read is a test fault"
+    )]
+    pub async fn send_for_testing(
+        &self,
+        mut request: axum::http::Request<axum::body::Body>,
+        peer: std::net::SocketAddr,
+    ) -> axum::http::Response<axum::body::Bytes> {
+        use tower::ServiceExt as _;
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
+        let response = match self.router.clone().oneshot(request).await {
+            Ok(response) => response,
+            Err(never) => match never {},
+        };
+        let (parts, body) = response.into_parts();
+        let bytes = axum::body::to_bytes(body, usize::MAX)
+            .await
+            .expect("the response body reads");
+        axum::http::Response::from_parts(parts, bytes)
+    }
 }
+
+/// The TCP peer [`GatedRouter::send_for_testing`]'s callers send from:
+/// loopback, so it is never a real client's, on a fixed ephemeral port.
+///
+/// Present only under the test-only `test_router_access` feature.
+#[cfg(any(test, feature = "test_router_access"))]
+pub const TEST_PEER: std::net::SocketAddr = std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+    std::net::Ipv4Addr::LOCALHOST,
+    40000,
+));
 
 /// Compose a server's router: each group gated in the fixed order (module doc
 /// § The order), the fallback group gated the same way, and the optional

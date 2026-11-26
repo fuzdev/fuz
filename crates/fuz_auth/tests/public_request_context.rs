@@ -40,11 +40,11 @@ use fuz_auth::{
 use fuz_db::Pool;
 use fuz_testing::{
     TESTING_DAEMON_TOKEN, daemon_token_state, mint_api_token, mint_session_cookie, narrowed_scope,
-    testing_keyring,
+    seed_account_actor, seed_extra_actor, testing_keyring,
 };
 
 mod common;
-use common::{fresh_db, seed_account_actor, seed_extra_actor};
+use common::fresh_db;
 
 /// Resolve with no daemon-token state and no client IP — the shape every
 /// cookie / bearer case below wants.

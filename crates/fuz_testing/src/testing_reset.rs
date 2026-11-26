@@ -1,66 +1,6 @@
 //! `_testing_reset` action — full DB wipe + keeper re-seed.
 //!
-//! The cross-backend test binaries — `testing_spine_stub` and the spine
-//! consumers' `testing_*` servers — register the action returned by
-//! [`create_testing_reset_action_spec`] on their `ActionRegistry`.
-//! Every cross-process per-test setup fires `_testing_reset` over the
-//! keeper's daemon-token credential before the test body runs — this
-//! converges in-process and cross-process keeper lifetimes so the
-//! standard integration suites work uniformly across both transports.
-//!
-//! Reset semantics:
-//!
-//! 1. Fire the consumer-supplied `reset_state` callback for domain-state
-//!    reset (zzz clears workspaces + terminals + scoped FS; the DB consumers
-//!    empty their cell, fact, and domain tables). It runs first, while the
-//!    previous test's accounts and actors still exist: domain rows depend on
-//!    auth rows, so a domain table with a restricting FK to `actor` or
-//!    `account` (no `ON DELETE` action) is emptied before the auth wipe
-//!    deletes the rows it references.
-//! 2. Wipe every auth-namespace row (no keeper-preserve filter).
-//!    Mutation-cascade tests (password change, revoke-all) + hardcoded-
-//!    username signup-uniqueness tests can't pollute siblings.
-//! 3. Reset `app_settings` singleton row to production defaults.
-//! 4. Flip `bootstrap_lock.bootstrapped = true` (final post-bootstrap state).
-//! 5. Inline-seed the fresh keeper: account + actor + `role_grants`
-//!    (`[ROLE_KEEPER, ROLE_ADMIN, ...extra_keeper_roles]`) + `api_token` +
-//!    signed session cookie. Mirrors the production `bootstrap_handler`
-//!    write set in `fuz_auth::bootstrap`.
-//! 6. Queue the `DaemonTokenState.keeper_account_id` refresh as a
-//!    post-commit effect, as soon as the keeper exists, so daemon-token auth
-//!    resolves the freshly seeded keeper on subsequent calls once the reset
-//!    commits — and a reset that rolls back at any later point (a failing
-//!    extra seed, a failed `COMMIT`) leaves the previous (still present)
-//!    keeper cached.
-//! 7. Inline-seed any caller-requested `extra_accounts` (used by tests
-//!    probing the keeper-vs-admin separation that need a non-admin
-//!    keeper-only account — `ROLE_KEEPER`'s `grant_paths` is
-//!    bootstrap-only, so the only way to grant it to a non-bootstrap
-//!    account is at this same setup step).
-//! 8. Inline-seed any caller-requested `extra_actors` on the keeper
-//!    account, beyond its single bootstrap actor, in order. No
-//!    production wire path mints a second actor, so this bootstrap-
-//!    cradle insert is the only way into the multi-actor `acting`
-//!    branches (omitted `acting` + >1 actor ⇒ `actor_required`). Same
-//!    rationale as `extra_accounts`.
-//!
-//! Mirrors `fuz_app`'s `testing/cross_backend/testing_reset_actions.ts`.
-//! Both spines run against a freshly bootstrapped keeper per test.
-//!
-//! **No free-form runtime bypass.** Earlier drafts considered a separate
-//! `_testing_seed_role_grant` action for arbitrary direct grants; that
-//! was rejected because a runtime bypass would let tests skip the
-//! production consent flow's side-effects (audit emit, WS fan-out) and
-//! silently mask bugs in those paths. The bypass that does exist —
-//! `extra_accounts` — is framed as bootstrap-time seeding, the same
-//! shape `bootstrap_handler` itself uses to grant the initial
-//! `KEEPER` + `ADMIN` pair. Tests that want a role on a *post-bootstrap*
-//! account route through `role_grant_offer_create` +
-//! `role_grant_offer_accept` (the production path).
-//!
-//! Production safety: this module lives in `fuz_testing`, which
-//! `cargo xtask check-release` blocks from entering production dep
-//! graphs.
+//! The overview is on [`create_testing_reset_action_spec`].
 
 use std::future::Future;
 use std::pin::Pin;
@@ -170,6 +110,68 @@ pub struct TestingResetOptions {
 /// The returned spec has `side_effects: true` so the dispatcher wraps
 /// the handler in a transaction; the wipe + re-seed commits or rolls
 /// back together, ruling out partial-reset states under failure.
+///
+/// The cross-backend test binaries — `testing_spine_stub` and the spine
+/// consumers' `testing_*` servers — register the action returned by
+/// [`create_testing_reset_action_spec`] on their `ActionRegistry`.
+/// Every cross-process per-test setup fires `_testing_reset` over the
+/// keeper's daemon-token credential before the test body runs — this
+/// converges in-process and cross-process keeper lifetimes so the
+/// standard integration suites work uniformly across both transports.
+///
+/// Reset semantics:
+///
+/// 1. Fire the consumer-supplied `reset_state` callback for domain-state
+///    reset (zzz clears workspaces + terminals + scoped FS; the DB consumers
+///    empty their cell, fact, and domain tables). It runs first, while the
+///    previous test's accounts and actors still exist: domain rows depend on
+///    auth rows, so a domain table with a restricting FK to `actor` or
+///    `account` (no `ON DELETE` action) is emptied before the auth wipe
+///    deletes the rows it references.
+/// 2. Wipe every auth-namespace row (no keeper-preserve filter).
+///    Mutation-cascade tests (password change, revoke-all) + hardcoded-
+///    username signup-uniqueness tests can't pollute siblings.
+/// 3. Reset `app_settings` singleton row to production defaults.
+/// 4. Flip `bootstrap_lock.bootstrapped = true` (final post-bootstrap state).
+/// 5. Inline-seed the fresh keeper: account + actor + `role_grants`
+///    (`[ROLE_KEEPER, ROLE_ADMIN, ...extra_keeper_roles]`) + `api_token` +
+///    signed session cookie. Mirrors the production `bootstrap_handler`
+///    write set in `fuz_auth::bootstrap`.
+/// 6. Queue the `DaemonTokenState.keeper_account_id` refresh as a
+///    post-commit effect, as soon as the keeper exists, so daemon-token auth
+///    resolves the freshly seeded keeper on subsequent calls once the reset
+///    commits — and a reset that rolls back at any later point (a failing
+///    extra seed, a failed `COMMIT`) leaves the previous (still present)
+///    keeper cached.
+/// 7. Inline-seed any caller-requested `extra_accounts` (used by tests
+///    probing the keeper-vs-admin separation that need a non-admin
+///    keeper-only account — `ROLE_KEEPER`'s `grant_paths` is
+///    bootstrap-only, so the only way to grant it to a non-bootstrap
+///    account is at this same setup step).
+/// 8. Inline-seed any caller-requested `extra_actors` on the keeper
+///    account, beyond its single bootstrap actor, in order. No
+///    production wire path mints a second actor, so this bootstrap-
+///    cradle insert is the only way into the multi-actor `acting`
+///    branches (omitted `acting` + >1 actor ⇒ `actor_required`). Same
+///    rationale as `extra_accounts`.
+///
+/// Mirrors `fuz_app`'s `testing/cross_backend/testing_reset_actions.ts`.
+/// Both spines run against a freshly bootstrapped keeper per test.
+///
+/// **No free-form runtime bypass.** Earlier drafts considered a separate
+/// `_testing_seed_role_grant` action for arbitrary direct grants; that
+/// was rejected because a runtime bypass would let tests skip the
+/// production consent flow's side-effects (audit emit, WS fan-out) and
+/// silently mask bugs in those paths. The bypass that does exist —
+/// `extra_accounts` — is framed as bootstrap-time seeding, the same
+/// shape `bootstrap_handler` itself uses to grant the initial
+/// `KEEPER` + `ADMIN` pair. Tests that want a role on a *post-bootstrap*
+/// account route through `role_grant_offer_create` +
+/// `role_grant_offer_accept` (the production path).
+///
+/// Production safety: this spec lives in `fuz_testing`, which
+/// `cargo xtask check-release` blocks from entering production dep
+/// graphs.
 #[must_use]
 pub fn create_testing_reset_action_spec(options: TestingResetOptions) -> ActionSpec {
     let TestingResetOptions {

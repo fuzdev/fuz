@@ -132,16 +132,87 @@ pub fn truncate_reset_state(tables: &[&str]) -> ResetStateFn {
     })
 }
 
-/// A spine core over inert handles, for a test without a database.
-///
-/// A lazy pool at an unreachable address that never connects, limiters
-/// disabled, no daemon token — for a test that composes a server's routers or
-/// reads its spec table.
+/// What [`test_app_backend`] builds a spine core over — the inputs an
+/// in-process router test varies, each defaulting to the inert core through
+/// [`Self::inert`].
+#[derive(Debug, Clone)]
+pub struct TestAppBackendOptions<'a> {
+    /// The origin allowlist the core's gates enforce.
+    pub allowed_origins: fuz_http::AllowedOrigins,
+    /// The database the core's lazy pool points at:
+    /// [`crate::UNREACHABLE_DATABASE_URL`] for a test without one, a
+    /// [`crate::TestDb::url`] for one with a database.
+    pub database_url: &'a str,
+    /// The spine limiters: disabled by default, enforced for a test of a
+    /// limiter.
+    pub rate_limiters: fuz_auth::RateLimiterMode,
+    /// The bootstrap token file, for a test of the bootstrap surface; `None`
+    /// mounts none.
+    pub bootstrap_token_path: Option<std::path::PathBuf>,
+}
+
+impl TestAppBackendOptions<'static> {
+    /// The inert core over `allowed_origins`: the unreachable database, the
+    /// limiters disabled, no bootstrap token.
+    #[must_use]
+    pub const fn inert(allowed_origins: fuz_http::AllowedOrigins) -> Self {
+        Self {
+            allowed_origins,
+            database_url: crate::UNREACHABLE_DATABASE_URL,
+            rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
+            bootstrap_token_path: None,
+        }
+    }
+}
+
+/// A spine core for an in-process router test, built without booting.
 ///
 /// Built through the production `build_app_backend` over `spec`, so the
-/// fields are the ones a server boots with. Anything that touches the
-/// database fails; a gate that refuses first (origin, cap) answers as in
-/// production.
+/// fields are the ones a server boots with, on [`crate::TestingArgon2idHasher`],
+/// no daemon token, no auth cleanup, no trusted proxy (the test peer is the
+/// client), and a fixture cookie key. The pool is lazy: nothing connects until
+/// a request checks a connection out, so over the unreachable database
+/// anything that touches it fails, while a gate that refuses first (origin,
+/// cap) answers as in production.
+///
+/// # Panics
+///
+/// When the core doesn't build (a spec the toolkit refuses).
+#[expect(clippy::expect_used, reason = "a core that won't build is a test bug")]
+#[must_use]
+pub fn test_app_backend(spec: &AppBackendSpec, options: TestAppBackendOptions<'_>) -> AppBackend {
+    let env = fuz_http::BaseServerEnv {
+        database_url: Some(options.database_url.to_owned()),
+        cookie_keys: Some("k".repeat(fuz_auth::keyring::MIN_KEY_LENGTH)),
+        host: None,
+        port: None,
+        allowed_origins: options.allowed_origins,
+        allow_origin_wildcards: false,
+        trusted_proxies: Vec::new(),
+        bootstrap_token_path: options.bootstrap_token_path,
+        db_checkout_timeout: fuz_db::DEFAULT_CHECKOUT_TIMEOUT,
+        db_audit_checkout_timeout: fuz_db::DEFAULT_AUDIT_CHECKOUT_TIMEOUT,
+    };
+    build_app_backend(
+        &env,
+        spec,
+        &SpineBackendOptions {
+            rate_limiters: options.rate_limiters,
+            // never served on a schedule: nothing to sweep beside
+            ..SpineBackendOptions::production(
+                Arc::new(crate::TestingArgon2idHasher::new()),
+                fuz_auth::AuthCleanupSchedule::Off,
+            )
+        },
+    )
+    .expect("a test core builds without connecting")
+}
+
+/// A spine core over inert handles, for a test without a database:
+/// [`test_app_backend`] over [`TestAppBackendOptions::inert`], with
+/// `allowed_origins` parsed as `FUZ_ALLOWED_ORIGINS` is.
+///
+/// For a test that composes a server's routers or reads its spec table.
 ///
 /// # Panics
 ///
@@ -152,32 +223,56 @@ pub fn truncate_reset_state(tables: &[&str]) -> ResetStateFn {
 )]
 #[must_use]
 pub fn inert_app_backend(spec: &AppBackendSpec, allowed_origins: &str) -> AppBackend {
-    let env = fuz_http::BaseServerEnv::from_vars(
-        &|key| match key {
-            "DATABASE_URL" => Some("postgres://inert@127.0.0.1:1/inert_app_backend".to_owned()),
-            "SECRET_FUZ_COOKIE_KEYS" => Some("k".repeat(fuz_auth::keyring::MIN_KEY_LENGTH)),
-            "FUZ_ALLOWED_ORIGINS" => Some(allowed_origins.to_owned()),
-            "FUZ_INERT_APP_BACKEND_TRUSTED_PROXIES" => Some(",".to_owned()),
-            _ => None,
-        },
-        fuz_http::ServerEnvOptions {
-            trusted_proxies_var: "FUZ_INERT_APP_BACKEND_TRUSTED_PROXIES",
-        },
-    )
-    .expect("the test allowlist parses");
-    build_app_backend(
-        &env,
+    test_app_backend(
         spec,
-        &SpineBackendOptions {
-            rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
-            // never served: nothing to sweep beside
-            ..SpineBackendOptions::production(
-                Arc::new(crate::TestingArgon2idHasher::new()),
-                fuz_auth::AuthCleanupSchedule::Off,
-            )
-        },
+        TestAppBackendOptions::inert(
+            fuz_http::AllowedOrigins::parse(allowed_origins).expect("the test allowlist parses"),
+        ),
     )
-    .expect("an inert core builds")
+}
+
+/// Assert a `testing_*` server binary keeps the strict server command line.
+///
+/// Runs the real binary at `bin_path` with an empty environment: `--help`
+/// and `-h` exit `0` with usage naming `name` on stdout, and an unknown
+/// command, a flag, or an extra argument exits `2` with that usage on stderr,
+/// before the env is read and before the startup sentinel (`starting`).
+///
+/// `name` is the binary's name as its usage line prints it; call it with
+/// `env!("CARGO_BIN_EXE_<name>")`.
+///
+/// # Panics
+///
+/// When the binary can't be spawned, or any of the above doesn't hold.
+#[expect(
+    clippy::expect_used,
+    reason = "a test harness: a spawn fault panics loudly naming the binary"
+)]
+pub fn assert_strict_server_argv(bin_path: &str, name: &str) {
+    let run = |args: &[&str]| {
+        std::process::Command::new(bin_path)
+            .args(args)
+            .env_clear()
+            .output()
+            .expect("spawn the testing binary")
+    };
+    let usage = format!("Usage: {name} [command]");
+    for flag in ["--help", "-h"] {
+        let out = run(&[flag]);
+        assert_eq!(out.status.code(), Some(0), "{name} {flag}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.starts_with(&usage), "{name} {flag}: {stdout}");
+    }
+    for args in [&["strat"][..], &["--port", "1"], &["start", "extra"]] {
+        let out = run(args);
+        assert_eq!(out.status.code(), Some(2), "{name} {args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(&usage), "{name} {args:?}: {stderr}");
+        assert!(
+            !stderr.contains("starting"),
+            "{name} {args:?}: refused before the startup sentinel: {stderr}"
+        );
+    }
 }
 
 #[cfg(test)]

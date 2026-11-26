@@ -33,7 +33,6 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::panic,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
@@ -43,25 +42,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::http::StatusCode;
 use futures::StreamExt;
-use fuz_actions::perform_action::{PerformActionInput, PerformActionOptions, perform_action};
+use fuz_actions::perform_action::PerformActionOptions;
 use fuz_actions::{
-    ActionHandler, ActionOutput, ActionOutputHandler, ActionRegistry, ActionSpec,
-    write_success_response,
+    ActionHandler, ActionOutput, ActionOutputHandler, ActionSpec, write_success_response,
 };
 use fuz_auth::ConnectionCloseTarget;
 use fuz_auth::{
     AUTH_MIGRATIONS, AccountRow, AuditEmitter, AuditEventType, AuditLogInput, AuthSpec,
-    CredentialGate, CredentialType, NoopConnectionCloser, NoopNotificationSender, ROLE_ADMIN,
-    RateLimitClass, RateLimiter, RateLimiterOptions,
+    CredentialGate, CredentialType, NoopConnectionCloser, ROLE_ADMIN, RateLimitClass, RateLimiter,
+    RateLimiterOptions,
 };
 use fuz_db::ActionDb;
 use fuz_db::Pool;
 use fuz_http::InputShape;
 use fuz_realtime::ConnectionIdentity;
-use fuz_realtime::SignalToken;
 use fuz_testing::{
-    TestDb, TestEngine, TestingDbOptions, fresh_test_db, grant_role, grant_scoped_role,
-    refuse_audit_rows, seed_account_actor,
+    TestDb, TestEngine, TestingDbOptions, dispatch_options, grant_role, grant_scoped_role,
+    perform_as, perform_with_auth, refuse_audit_rows, rpc_refusal, seed_account_actor,
 };
 use serde_json::{Value, json};
 
@@ -77,11 +74,6 @@ const DB: TestingDbOptions<'static> = TestingDbOptions {
     engine: TestEngine::Any,
 };
 
-/// A fresh database with the auth chain and the scratch `probe` table.
-async fn fresh_db() -> TestDb {
-    fresh_test_db(DB).await
-}
-
 /// Test harness: the dispatcher options + the pool + a flag the `probe`
 /// handler's queued post-commit effect flips when it runs.
 struct Harness {
@@ -90,7 +82,7 @@ struct Harness {
     effect_fired: Arc<AtomicBool>,
 }
 
-/// Build the registry of test specs:
+/// Build the test specs:
 /// - `probe` (public, side-effecting): writes a `probe` row, emits an in-tx
 ///   audit row (`cell_create` → `InTx` routing), queues a post-commit effect
 ///   that flips `effect_fired`, then fails iff `params.fail == true`.
@@ -116,7 +108,7 @@ struct Harness {
 /// - `typed_output` (public, read-only, [`ActionSpec::new_output`]): queues the
 ///   same effect and returns a typed [`ActionOutput`] — for the output-handler
 ///   arm of the dispatcher.
-fn build_registry(effect_fired: &Arc<AtomicBool>) -> ActionRegistry {
+fn build_specs(effect_fired: &Arc<AtomicBool>) -> Vec<ActionSpec> {
     let probe_handler: ActionHandler = {
         let effect_fired = Arc::clone(effect_fired);
         Arc::new(move |params, ctx| {
@@ -240,7 +232,7 @@ fn build_registry(effect_fired: &Arc<AtomicBool>) -> ActionRegistry {
         })
     };
 
-    ActionRegistry::compile(vec![
+    vec![
         ActionSpec::with_side_effects(
             "probe",
             AuthSpec::public(),
@@ -304,8 +296,7 @@ fn build_registry(effect_fired: &Arc<AtomicBool>) -> ActionRegistry {
             false,
             typed_output_handler,
         ),
-    ])
-    .expect("compile registry")
+    ]
 }
 
 /// The `typed_output` handler's result.
@@ -323,7 +314,7 @@ async fn setup() -> Harness {
 /// ordering case. `Some(n)` wires a limiter of `n` attempts over a window long
 /// enough that nothing expires mid-test; `None` leaves both axes unlimited.
 async fn setup_with_account_budget(max_attempts: Option<u32>) -> Harness {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let effect_fired = Arc::new(AtomicBool::new(false));
     let account_rate_limiter = max_attempts.map(|max_attempts| {
         Arc::new(RateLimiter::new(RateLimiterOptions {
@@ -332,17 +323,11 @@ async fn setup_with_account_budget(max_attempts: Option<u32>) -> Harness {
             max_keys: None,
         }))
     });
+    // HTTP-shaped dispatch (no socket): the no-op peer returns NoTransport,
+    // which no spec under test invokes
     let options = PerformActionOptions {
-        pool: pool.clone(),
-        registry: Arc::new(build_registry(&effect_fired)),
-        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
-        connection_closer: Arc::new(NoopConnectionCloser),
-        notification_sender: Arc::new(NoopNotificationSender),
-        // This suite drives HTTP-shaped dispatch (no socket); the Noop peer
-        // returns NoTransport, which no spec under test invokes.
-        peer: fuz_realtime::noop_action_peer(),
         account_rate_limiter,
-        ip_rate_limiter: None,
+        ..dispatch_options(&pool, build_specs(&effect_fired))
     };
     Harness {
         options,
@@ -360,34 +345,18 @@ async fn run(
     account: Option<&AccountRow>,
     credential_type: Option<CredentialType>,
 ) -> Result<ActionOutput, fuz_http::JsonrpcError> {
-    let request_id = json!(1);
-    let signal = SignalToken::new();
-    let span = tracing::Span::none();
-    let notify: &(dyn Fn(&str, &Value) + Send + Sync) = &fuz_realtime::http_no_op_notify;
     // A real credential on the account, resolved through the walk. These cases
     // exercise the dispatch pipeline (tx boundary, audit, rollback), not the
     // scope axis — a full-scope credential keeps the scope gate transparent.
     // The scope gate's own cases live in `fuz_auth`'s `action_auth` unit
     // tests, where they need no DB.
-    let auth = match (account, credential_type) {
-        (Some(account), Some(credential_type)) => Some(
-            fuz_testing::resolve_test_credential(&options.pool, account.id, credential_type).await,
-        ),
-        (None, None) => None,
+    match (account, credential_type) {
+        (Some(account), Some(credential_type)) => {
+            perform_as(options, method, params, account.id, credential_type).await
+        }
+        (None, None) => perform_with_auth(options, method, params, None).await,
         _ => panic!("an account and its credential type come together"),
-    };
-    let input = PerformActionInput {
-        method,
-        params: &params,
-        request_id: &request_id,
-        auth: auth.as_ref(),
-        client_ip: None,
-        connection_id: None,
-        notify,
-        signal: &signal,
-        log: &span,
-    };
-    perform_action(input, options).await
+    }
 }
 
 /// Seed an `account` + a single `actor` (so the authorization phase resolves it
@@ -413,14 +382,13 @@ async fn count(pool: &Pool, table: &str) -> i64 {
         .get(0)
 }
 
+#[track_caller]
 fn assert_status(result: &Result<ActionOutput, fuz_http::JsonrpcError>, expected: StatusCode) {
-    match result {
-        Err(error) => {
-            let status = fuz_http::error_code_to_http_status(error.code);
-            assert_eq!(status, expected, "unexpected error: {error:?}");
-        }
-        Ok(value) => panic!("expected {expected}, got Ok({value:?})"),
-    }
+    assert_eq!(
+        rpc_refusal(result).0,
+        expected,
+        "unexpected error: {result:?}"
+    );
 }
 
 // -- Transactional boundary: commit drains, rollback discards ----------------
@@ -657,24 +625,7 @@ async fn role_gate_denies_a_scoped_admin_403() {
 /// Dispatch options over the standard auth spec set with no-op side channels —
 /// the spine surface a consumer mounts, for the escalation cases.
 fn plain_auth_spec_options(pool: &Pool) -> PerformActionOptions {
-    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
-    let connection_closer: Arc<dyn fuz_auth::ConnectionCloser> = Arc::new(NoopConnectionCloser);
-    let specs = fuz_actions::auth_adapter::build_auth_spec_set(
-        Arc::clone(&audit),
-        Arc::clone(&connection_closer),
-        Arc::new(fuz_auth::AdminOfferAuthorize),
-        Arc::new(fuz_auth::RoleRegistry::default()),
-    );
-    PerformActionOptions {
-        pool: pool.clone(),
-        registry: Arc::new(ActionRegistry::compile(specs).expect("compile auth specs")),
-        audit,
-        connection_closer,
-        notification_sender: Arc::new(NoopNotificationSender),
-        peer: fuz_realtime::noop_action_peer(),
-        account_rate_limiter: None,
-        ip_rate_limiter: None,
-    }
+    auth_spec_options(pool, Arc::new(NoopConnectionCloser))
 }
 
 /// **The escalation regression.** A scoped `admin` holder can't reach the
@@ -684,7 +635,7 @@ fn plain_auth_spec_options(pool: &Pool) -> PerformActionOptions {
 /// the handler are both in the path.
 #[tokio::test]
 async fn a_scoped_admin_cannot_escalate_or_reach_admin_actions() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let options = plain_auth_spec_options(&pool);
     let (account, actor_id) = seed_scoped_admin(&pool, "scoped_admin").await;
 
@@ -751,7 +702,7 @@ async fn a_scoped_admin_cannot_escalate_or_reach_admin_actions() {
 /// the harness.
 #[tokio::test]
 async fn a_global_admin_assigns_through_the_dispatcher() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let options = plain_auth_spec_options(&pool);
     let admin = seed_account(&pool, "global_admin", &[ROLE_ADMIN]).await;
     let (recipient, _) = seed_account_actor(&pool, "recipient").await;
@@ -773,7 +724,7 @@ async fn a_global_admin_assigns_through_the_dispatcher() {
 /// `role_grant_offer_actions.create.db.test.ts` credential-channel cases.
 #[tokio::test]
 async fn role_grant_offer_create_is_session_only() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let options = plain_auth_spec_options(&pool);
     let admin = seed_account(&pool, "offer_admin", &[ROLE_ADMIN]).await;
     let (recipient, _) = seed_account_actor(&pool, "offer_recipient").await;
@@ -1207,14 +1158,9 @@ fn auth_spec_options(
         Arc::new(fuz_auth::RoleRegistry::default()),
     );
     PerformActionOptions {
-        pool: pool.clone(),
-        registry: Arc::new(ActionRegistry::compile(specs).expect("compile auth specs")),
         audit,
         connection_closer,
-        notification_sender: Arc::new(NoopNotificationSender),
-        peer: fuz_realtime::noop_action_peer(),
-        account_rate_limiter: None,
-        ip_rate_limiter: None,
+        ..dispatch_options(pool, specs)
     }
 }
 
@@ -1290,7 +1236,7 @@ async fn revocations_close_connections_after_the_transaction_commits() {
     // session and the client keeps a dead socket. So by the time the closer
     // is asked to close, every revocation's deletion must already be
     // committed — probed per handler below.
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let closer = Arc::new(CommitProbingCloser::new(&pool));
     let options = auth_spec_options(&pool, Arc::<CommitProbingCloser>::clone(&closer));
     let session = CredentialType::Session;
@@ -1439,7 +1385,7 @@ fn token_create_params() -> Value {
 /// names the evicted token, not the account.
 #[tokio::test]
 async fn a_token_mint_past_the_cap_closes_the_evicted_tokens_connections() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let ws = Arc::new(fuz_realtime::ConnectionRegistry::new());
     let sse = Arc::new(fuz_realtime::SseRegistry::new());
     let options = auth_spec_options(
@@ -1553,7 +1499,7 @@ async fn a_token_mint_past_the_cap_closes_the_evicted_tokens_connections() {
 /// side of the line.
 #[tokio::test]
 async fn a_revocation_whose_in_tx_audit_write_fails_is_rolled_back() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let ws = Arc::new(fuz_realtime::ConnectionRegistry::new());
     let sse = Arc::new(fuz_realtime::SseRegistry::new());
     let options = auth_spec_options(
@@ -1580,7 +1526,7 @@ async fn a_revocation_whose_in_tx_audit_write_fails_is_rolled_back() {
     );
     assert!(stream.next().await.is_some(), "connect comment");
 
-    refuse_audit_rows(&pool, &["session_revoke_all"]).await;
+    refuse_audit_rows(&pool, &[AuditEventType::SessionRevokeAll]).await;
 
     let result = run(
         &options,
@@ -1665,7 +1611,7 @@ async fn a_failed_checkout_answers_service_unavailable_at_every_phase() {
 /// tracker's drain waits for it rather than resolving past it.
 #[tokio::test]
 async fn a_dropped_dispatch_leaves_its_effects_on_the_shutdown_drain() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let effect_done = Arc::new(AtomicBool::new(false));
@@ -1691,23 +1637,15 @@ async fn a_dropped_dispatch_leaves_its_effects_on_the_shutdown_drain() {
             })
         })
     };
-    let registry = ActionRegistry::compile(vec![ActionSpec::with_side_effects(
-        "slow_effect",
-        AuthSpec::public(),
-        InputShape::Object,
-        slow_effect_handler,
-    )])
-    .expect("compile registry");
-    let options = PerformActionOptions {
-        pool: pool.clone(),
-        registry: Arc::new(registry),
-        audit: Arc::new(AuditEmitter::new(pool.clone(), Arc::default())),
-        connection_closer: Arc::new(NoopConnectionCloser),
-        notification_sender: Arc::new(NoopNotificationSender),
-        peer: fuz_realtime::noop_action_peer(),
-        account_rate_limiter: None,
-        ip_rate_limiter: None,
-    };
+    let options = dispatch_options(
+        &pool,
+        vec![ActionSpec::with_side_effects(
+            "slow_effect",
+            AuthSpec::public(),
+            InputShape::Object,
+            slow_effect_handler,
+        )],
+    );
     let writes = Arc::clone(options.audit.background_writes());
 
     let dispatch = tokio::spawn({

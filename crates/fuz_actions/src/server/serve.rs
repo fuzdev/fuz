@@ -284,15 +284,11 @@ pub async fn serve_until_shutdown(
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-
     use axum::body::Body;
-    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode, header};
     use std::future::Future;
 
     use fuz_http::BackgroundWrites;
-    use tower::ServiceExt;
 
     use super::*;
 
@@ -311,23 +307,14 @@ mod tests {
         for (name, value) in headers {
             builder = builder.header(name, *value);
         }
-        let mut request = builder.body(Body::empty()).expect("the request builds");
-        // `serve_with_shutdown` inserts the peer; a `oneshot` has no connection
-        request.extensions_mut().insert(ConnectInfo(
-            "127.0.0.1:40000"
-                .parse::<SocketAddr>()
-                .expect("the peer parses"),
-        ));
+        let request = builder.body(Body::empty()).expect("the request builds");
         let response = boot_only_router("probe_test_server", &stack_options)
-            .into_router_for_testing()
-            .oneshot(request)
-            .await
-            .expect("the router answers");
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("the body reads");
-        (status, String::from_utf8_lossy(&body).into_owned())
+            .send_for_testing(request, fuz_http::TEST_PEER)
+            .await;
+        (
+            response.status(),
+            String::from_utf8_lossy(response.body()).into_owned(),
+        )
     }
 
     #[tokio::test]
@@ -437,21 +424,14 @@ mod tests {
     }
 
     async fn boot_only_status(router: GatedRouter, host: &str) -> StatusCode {
-        let mut request = Request::builder()
+        let request = Request::builder()
             .uri("/health")
             .header(header::HOST, host)
             .body(Body::empty())
             .expect("the request builds");
-        request.extensions_mut().insert(ConnectInfo(
-            "127.0.0.1:40000"
-                .parse::<SocketAddr>()
-                .expect("the peer parses"),
-        ));
         router
-            .into_router_for_testing()
-            .oneshot(request)
+            .send_for_testing(request, fuz_http::TEST_PEER)
             .await
-            .expect("the router answers")
             .status()
     }
 

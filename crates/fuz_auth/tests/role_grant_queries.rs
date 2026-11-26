@@ -12,9 +12,10 @@ use std::time::{Duration, SystemTime};
 
 use fuz_auth::actor_queries::{query_create_role_grant, query_keeper_account_id};
 use fuz_auth::role::{ROLE_ADMIN, ROLE_KEEPER};
+use fuz_testing::seed_account_actor;
 
 mod common;
-use common::{fresh_db, seed_account_actor};
+use common::fresh_db;
 
 /// The revoke columns of one `role_grant` row: `(revoked, revoked_by, revoked_reason)`.
 async fn revoke_state(

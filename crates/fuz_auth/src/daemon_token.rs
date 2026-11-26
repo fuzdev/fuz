@@ -4,7 +4,7 @@
 //! holds only the **consuming** half — the state vessel, the constant-time
 //! compare, and the keeper-account adapters. The **producing** half
 //! (generate / write the secret file) lives in
-//! `fuz_testing::daemon_token`, deliberately out of this crate.
+//! `fuz_testing` (`init_daemon_token`), deliberately out of this crate.
 //!
 //! ## Why the split
 //!
@@ -47,7 +47,7 @@ use crate::bootstrap_keeper_resolved::BootstrapKeeperResolved;
 
 /// In-memory daemon token state.
 ///
-/// Built by `fuz_testing::daemon_token::init_daemon_token` — this crate
+/// Built by `fuz_testing::init_daemon_token` — this crate
 /// exposes no constructor (see the module docs for why).
 ///
 /// `Debug` redacts both tokens.

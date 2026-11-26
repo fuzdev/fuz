@@ -1,8 +1,9 @@
 //! The request-reads census over this workspace: a spine handler reads its
 //! query and its path params only through `fuz_http`'s strict readers. The
-//! checks are [`fuz_testing::request_reads_census`]'s, shared with the other
-//! workspaces on the spine that run it; this file holds this workspace's inputs — its
-//! [`SUPPRESSIONS`] and its positive controls.
+//! checks are the `fuz_testing` request-reads census's (its crate doc § The
+//! request-reads census), shared with the other workspaces on the spine that
+//! run it; this file holds this workspace's inputs — its [`SUPPRESSIONS`] and
+//! its positive controls.
 //!
 //! `RouteParams` carries the one `#[expect]` in production code, over the axum
 //! `Path` it wraps. The positive controls below use each disallowed axum type
@@ -14,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use fuz_testing::request_reads_census::{
+use fuz_testing::{
     Suppression, assert_clippy_configs_disallow_lenient_readers,
     assert_no_lints_table_allows_disallows, assert_suppressions_listed,
 };

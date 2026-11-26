@@ -638,13 +638,7 @@ mod tests {
     /// a test database of its own.
     fn no_db_state() -> FactServingRouteState {
         FactServingRouteState {
-            gate: fuz_testing::testing_auth_gate(
-                fuz_db::create_pool(
-                    "postgres://fact_serving_params_test@127.0.0.1:1/none",
-                    &fuz_db::PoolOptions::default(),
-                )
-                .expect("pool builds without connecting"),
-            ),
+            gate: fuz_testing::testing_auth_gate(fuz_testing::unreachable_pool()),
             facts_dir: PathBuf::from("/nonexistent-facts-dir"),
             x_accel: None,
         }

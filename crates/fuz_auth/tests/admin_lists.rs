@@ -7,12 +7,12 @@ use fuz_auth::admin_action_specs::{ADMIN_ACCOUNT_LIST_LIMIT_MAX, ERROR_ACCOUNT_N
 use fuz_auth::audit_log_queries::AUDIT_LOG_LIST_LIMIT_MAX;
 use fuz_auth::params_helpers::{ERROR_LIMIT_INVALID, ERROR_OFFSET_INVALID};
 use fuz_http::JsonrpcErrorCode;
+use fuz_testing::seed_account_actor;
 use serde_json::{Value, json};
 
 mod common;
 use common::{
-    build_audit, closer, ctx, fresh_db, seed_account_actor, seed_admin, seed_audit_log_row,
-    seed_role_grant_direct,
+    build_audit, closer, ctx, fresh_db, seed_admin, seed_audit_log_row, seed_role_grant_direct,
 };
 
 // ============================================================

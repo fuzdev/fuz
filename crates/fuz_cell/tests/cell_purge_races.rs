@@ -17,34 +17,14 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
-
 use common::{fresh_db, fresh_postgres_db};
 use fuz_auth::account_queries::query_purge_account;
 use fuz_cell::cell_grant_queries::query_cell_grant_create;
 use fuz_cell::cell_grant_schema::{CellGrantLevel, CellGrantPrincipalInput};
 use fuz_cell::cell_queries::{query_cell_create, query_cell_get, query_cell_update};
 use fuz_db::Pool;
-use fuz_testing::seed_account_actor;
+use fuz_testing::{seed_account_actor, until_lock_waiters, until_lock_waiters_or};
 use serde_json::json;
-
-/// How long a lock wait the test arranged may take to show, a bound on a hang
-/// only.
-const LOCK_WAIT_DEADLINE: Duration = Duration::from_secs(20);
-
-/// Backends waiting on a lock in this database.
-async fn lock_waiters(pool: &Pool) -> i64 {
-    let client = pool.get().await.unwrap();
-    client
-        .query_one(
-            "SELECT COUNT(*) FROM pg_stat_activity
-             WHERE wait_event_type = 'Lock' AND datname = current_database()",
-            &[],
-        )
-        .await
-        .unwrap()
-        .get(0)
-}
 
 /// A grant held by `actor`, the row the pin holds.
 async fn insert_grant(pool: &Pool, actor: uuid::Uuid) -> uuid::Uuid {
@@ -112,14 +92,7 @@ async fn an_owners_first_edit_of_their_cell_across_their_purge_both_commit() {
         }
     };
     let edit_then_release = async {
-        let deadline = Instant::now() + LOCK_WAIT_DEADLINE;
-        while lock_waiters(&pool).await < 1 {
-            assert!(
-                Instant::now() < deadline,
-                "the purge waits on the pinned grant"
-            );
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        until_lock_waiters(&pool, 1, "the purge waits on the pinned grant").await;
         let edit = async {
             let mut client = pool.get().await.unwrap();
             let tx = client.transaction().await.unwrap();
@@ -140,14 +113,13 @@ async fn an_owners_first_edit_of_their_cell_across_their_purge_both_commit() {
             result
         };
         let release = async {
-            while !edited.load(std::sync::atomic::Ordering::SeqCst) && lock_waiters(&pool).await < 2
-            {
-                assert!(
-                    Instant::now() < deadline,
-                    "the edit neither waits nor finishes"
-                );
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
+            until_lock_waiters_or(
+                &pool,
+                2,
+                || edited.load(std::sync::atomic::Ordering::SeqCst),
+                "the edit neither waits nor finishes",
+            )
+            .await;
             pin.commit().await.unwrap();
         };
         let (edit, ()) = tokio::join!(edit, release);

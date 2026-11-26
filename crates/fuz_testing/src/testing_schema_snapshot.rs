@@ -1,18 +1,6 @@
 //! `_testing_schema_snapshot` action spec.
 //!
-//! Test binaries register this on their `ActionRegistry` alongside
-//! `_testing_reset`. It introspects the live database via
-//! [`fuz_db::query_schema_snapshot`] and returns the snapshot as JSON
-//! shaped to match `fuz_app`'s TS `SchemaSnapshot`, so the cross-backend
-//! harness can diff a Rust backend's schema against the TS reference's
-//! with `assert_schema_snapshots_equal` (which keys on names + compares
-//! field values, so ordering between impls is irrelevant).
-//!
-//! Optional `exclude_tables: string[]` param drops tables from the
-//! snapshot. Mirrors the TS `query_schema_snapshot` exclude option.
-//!
-//! Read-only + daemon-token gated — effectively keeper-only without
-//! forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
+//! The overview is on [`create_testing_schema_snapshot_action_spec`].
 
 use std::sync::Arc;
 
@@ -31,6 +19,20 @@ const TESTING_SCHEMA_SNAPSHOT_KEYS: &[&str] = &["exclude_tables"];
 ///
 /// The handler introspects `public` and returns the JSON snapshot; an
 /// optional `exclude_tables` array param drops named tables.
+///
+/// Test binaries register this on their `ActionRegistry` alongside
+/// `_testing_reset`. It introspects the live database via
+/// [`fuz_db::query_schema_snapshot`] and returns the snapshot as JSON
+/// shaped to match `fuz_app`'s TS `SchemaSnapshot`, so the cross-backend
+/// harness can diff a Rust backend's schema against the TS reference's
+/// with `assert_schema_snapshots_equal` (which keys on names + compares
+/// field values, so ordering between impls is irrelevant).
+///
+/// Optional `exclude_tables: string[]` param drops tables from the
+/// snapshot. Mirrors the TS `query_schema_snapshot` exclude option.
+///
+/// Read-only + daemon-token gated — effectively keeper-only without
+/// forcing the `actor: 'required'` biconditional, matching `_testing_reset`.
 #[must_use]
 pub fn create_testing_schema_snapshot_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |params: Value, ctx: ActionContext<'_>| {

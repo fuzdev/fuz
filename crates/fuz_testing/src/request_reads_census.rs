@@ -1,58 +1,6 @@
 //! The request-reads census, shared by the workspaces on the spine that run it.
 //!
-//! A handler reads its query and its path params only through `fuz_http`'s
-//! strict readers — `fuz_http::read_query_pairs` over axum's `RawQuery`, and
-//! `fuz_http::RouteParams` — never a lenient extractor that leaves an escape
-//! that doesn't decode as text or writes U+FFFD for it. Twin of the query and
-//! path-param half of `fuz_app`'s `request_reads_census.test.ts` (its header
-//! half has no Rust twin here).
-//!
-//! The enforcement is clippy's `disallowed-types` / `disallowed-methods` in a
-//! workspace's `clippy.toml` (`-D warnings` makes a hit an error), each entry
-//! one of [`LENIENT_READERS`]. Clippy resolves the paths, so an aliased or
-//! grouped import is caught. These checks hold that enforcement in place, each
-//! over a workspace root (the directory holding its `Cargo.toml` and
-//! `crates/`):
-//!
-//!  - **the config** ([`assert_clippy_configs_disallow_lenient_readers`]): the
-//!    root `clippy.toml` and every one under `crates/` or a crate directory, by
-//!    either name (a nearer one replaces the root file rather than merging with
-//!    it), lists each lenient reader with its canonical reason, spelled exactly
-//!    — a misspelled path is only a clippy warning (`does not refer to a
-//!    reachable type`) that `-D warnings` does not promote, and a dropped entry
-//!    turns the census off with clippy green;
-//!  - **suppressions** ([`assert_suppressions_listed`]): every `.rs` file under
-//!    `crates/` that names the disallow lints, a clippy group holding them, or
-//!    `warnings` in an `allow`/`expect` is one the workspace's [`Suppression`]
-//!    list names, with its count of sites and its reason;
-//!  - **`[lints]` tables** ([`assert_no_lints_table_allows_disallows`]): no
-//!    `Cargo.toml` `[lints]` table, root or crate, allows them.
-//!
-//! What stays in each workspace's own test crate is **resolution**: positive
-//! controls that use each disallowed item under an `#[expect]`, so a path that
-//! stops resolving (an axum upgrade moving it) leaves the expectation
-//! unfulfilled — an error under `-D warnings`. A control proves resolution
-//! only under the clippy config of the workspace it compiles in, so it can't
-//! live here; its `#[expect]` is a suppression site the workspace lists.
-//!
-//! What it cannot see:
-//!
-//!  - a hand-split query or path — `RawQuery`, `Uri::query()`, `OriginalUri`
-//!    or `Uri::path()` read and decoded by hand outside the strict readers;
-//!  - a lenient reader no entry names (another crate's query decoder), and a
-//!    suppression from outside the source (`-A` flags, `CLIPPY_CONF_DIR`);
-//!  - a `lints` key written under `[workspace]` or at a manifest's root rather
-//!    than under a `[lints…]` header;
-//!  - a lint written as its own sub-table (`[lints.clippy.all]` with
-//!    `level = "allow"` under it) or a header spelled with spaces
-//!    (`[ lints ]`);
-//!  - a `"` in a trailing comment inside a multi-line `allow(…)` list, which
-//!    unbalances the string scan;
-//!  - a workspace member outside `crates/<name>/`, which is neither scanned
-//!    nor config-checked;
-//!  - a workspace that doesn't run it — the spine, zzz,
-//!    visionesdelcaribe.org and `fuz_forge` do; the other spine consumers
-//!    read nothing leniently today.
+//! The overview, and what the census cannot see, is the crate doc § The request-reads census.
 
 #![expect(
     clippy::panic,
@@ -66,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// One lenient reader: the `clippy.toml` list it belongs under, its path, and
 /// the reason every config gives it.
 #[derive(Debug, Clone, Copy)]
-pub struct LenientReader {
+struct LenientReader {
     /// `disallowed-types` or `disallowed-methods`.
     pub list: &'static str,
     /// The item's path, as clippy resolves it.
@@ -76,7 +24,7 @@ pub struct LenientReader {
 }
 
 /// Each lenient reader, as every workspace's `clippy.toml` must spell it.
-pub const LENIENT_READERS: &[LenientReader] = &[
+const LENIENT_READERS: &[LenientReader] = &[
     LenientReader {
         list: "disallowed-types",
         path: "axum::extract::Path",
@@ -144,9 +92,12 @@ const LINTS_TABLE_KEYS: &[&str] = &[
     "warnings",
 ];
 
-/// Assert that the workspace's root `clippy.toml`, and every `clippy.toml` /
-/// `.clippy.toml` under `crates/` or a crate directory, lists each of
-/// [`LENIENT_READERS`] under its list with its reason.
+/// Assert that every `clippy.toml` in the workspace lists each lenient reader.
+///
+/// The root `clippy.toml`, and every `clippy.toml` / `.clippy.toml` under
+/// `crates/` or a crate directory, must list each lenient reader
+/// (`axum::extract::Path`, `Query`, …) under its list with its canonical
+/// reason.
 ///
 /// # Panics
 ///

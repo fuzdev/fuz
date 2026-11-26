@@ -20,74 +20,19 @@
 //! and a scoped one closes nothing. The one listener reaches the role-gated
 //! audit streams the same way, through the closer it is handed.
 
-#![expect(
-    clippy::expect_used,
-    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
-)]
-
 use std::sync::Arc;
 
 use fuz_auth::{
     AuditEmitter, AuditLogEvent, ConnectionCloseTarget, ConnectionCloser, register_revocation_guard,
 };
-use parking_lot::Mutex;
+use fuz_testing::{RecordingConnectionCloser, unreachable_pool};
 use serde_json::json;
 use uuid::Uuid;
-
-/// One recorded `ConnectionCloser` call.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Closed {
-    Session(String),
-    Token(String),
-    Account(Uuid),
-    Role(Uuid, String),
-}
-
-/// Records what the listener asked for instead of closing anything. Counting
-/// closes on a real registry would conflate "the listener called the right
-/// method" with "the registry matched a subscriber" — this suite is about the
-/// first.
-#[derive(Debug, Default)]
-struct RecordingCloser {
-    calls: Mutex<Vec<Closed>>,
-}
-
-impl RecordingCloser {
-    fn calls(&self) -> Vec<Closed> {
-        self.calls.lock().clone()
-    }
-}
-
-impl fuz_http::ShutdownCloser for RecordingCloser {
-    fn close_all_connections(&self) -> usize {
-        0
-    }
-    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
-        Box::pin(std::future::ready(()))
-    }
-}
-
-impl ConnectionCloser for RecordingCloser {
-    fn close_connections(&self, target: &ConnectionCloseTarget) -> usize {
-        self.calls.lock().push(match target.clone() {
-            ConnectionCloseTarget::Session(hash) => Closed::Session(hash),
-            ConnectionCloseTarget::Token(id) => Closed::Token(id),
-            ConnectionCloseTarget::Account(id) => Closed::Account(id),
-            ConnectionCloseTarget::Role { account_id, role } => Closed::Role(account_id, role),
-        });
-        1
-    }
-}
 
 /// An emitter over a pool that is never connected — `notify` fans to the
 /// listener chain directly and touches neither.
 fn emitter() -> Arc<AuditEmitter> {
-    let pool = fuz_db::create_pool(
-        "postgres://unused@127.0.0.1:1/unused",
-        &fuz_db::PoolOptions::default(),
-    )
-    .expect("lazy pool");
-    Arc::new(AuditEmitter::new(pool, Arc::default()))
+    Arc::new(AuditEmitter::new(unreachable_pool(), Arc::default()))
 }
 
 fn event(
@@ -112,10 +57,13 @@ fn event(
 }
 
 /// Register the listener and fan one row through it; returns what it asked to
-/// close.
-async fn dispatch(event: Arc<AuditLogEvent>) -> Vec<Closed> {
+/// close. The recorder reports each close as one connection, and closes
+/// nothing: counting closes on a real registry would conflate "the listener
+/// called the right method" with "the registry matched a subscriber" — this
+/// suite is about the first.
+async fn dispatch(event: Arc<AuditLogEvent>) -> Vec<ConnectionCloseTarget> {
     let emitter = emitter();
-    let recorder = Arc::new(RecordingCloser::default());
+    let recorder = Arc::new(RecordingConnectionCloser::with_closes(1));
     // via a concrete temporary: `Arc::clone` infers its type parameter from
     // the annotation, so cloning straight into the `dyn` binding asks for a
     // clone of an `Arc<dyn ConnectionCloser>` we don't have. The unsize coercion
@@ -124,7 +72,7 @@ async fn dispatch(event: Arc<AuditLogEvent>) -> Vec<Closed> {
     let closer: Arc<dyn ConnectionCloser> = cloned;
     register_revocation_guard(&emitter, &closer);
     emitter.notify(event).await;
-    recorder.calls()
+    recorder.closed()
 }
 
 #[tokio::test]
@@ -136,7 +84,10 @@ async fn session_revoke_closes_the_named_session() {
         Some(json!({"session_id": "hash_a"})),
     ))
     .await;
-    assert_eq!(calls, vec![Closed::Session("hash_a".to_owned())]);
+    assert_eq!(
+        calls,
+        vec![ConnectionCloseTarget::Session("hash_a".to_owned())]
+    );
 }
 
 /// Logout ends one credential, the session it was sent on, so its row closes
@@ -151,7 +102,10 @@ async fn logout_closes_the_session_it_ended() {
         Some(json!({"session_id": "hash_a"})),
     ))
     .await;
-    assert_eq!(calls, vec![Closed::Session("hash_a".to_owned())]);
+    assert_eq!(
+        calls,
+        vec![ConnectionCloseTarget::Session("hash_a".to_owned())]
+    );
 }
 
 /// A `logout` row naming no session closes nothing — not the account.
@@ -172,7 +126,10 @@ async fn token_revoke_closes_the_named_token() {
         Some(json!({"token_id": "tok_abc"})),
     ))
     .await;
-    assert_eq!(calls, vec![Closed::Token("tok_abc".to_owned())]);
+    assert_eq!(
+        calls,
+        vec![ConnectionCloseTarget::Token("tok_abc".to_owned())]
+    );
 }
 
 #[tokio::test]
@@ -190,7 +147,7 @@ async fn account_wide_events_close_the_whole_account() {
         let calls = dispatch(event(event_type, "success", Some(account), None)).await;
         assert_eq!(
             calls,
-            vec![Closed::Account(account)],
+            vec![ConnectionCloseTarget::Account(account)],
             "{event_type} should close the account's sockets"
         );
     }
@@ -210,7 +167,13 @@ async fn a_global_role_grant_revoke_closes_the_targets_gated_sockets() {
     );
     Arc::get_mut(&mut row).unwrap().target_account_id = Some(target);
     let calls = dispatch(row).await;
-    assert_eq!(calls, vec![Closed::Role(target, "admin".to_owned())]);
+    assert_eq!(
+        calls,
+        vec![ConnectionCloseTarget::Role {
+            account_id: target,
+            role: "admin".to_owned()
+        }]
+    );
 }
 
 /// A self-service revoke carries no target column distinct from the actor's,
@@ -225,7 +188,13 @@ async fn a_role_revoke_with_no_scope_id_reads_as_global() {
         Some(json!({"role": "admin", "self_service": true})),
     ))
     .await;
-    assert_eq!(calls, vec![Closed::Role(account, "admin".to_owned())]);
+    assert_eq!(
+        calls,
+        vec![ConnectionCloseTarget::Role {
+            account_id: account,
+            role: "admin".to_owned()
+        }]
+    );
 }
 
 /// A role gate admits on global grants only, so revoking a scoped grant takes

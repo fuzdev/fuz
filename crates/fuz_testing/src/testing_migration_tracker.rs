@@ -1,21 +1,6 @@
 //! `_testing_migration_tracker` action spec.
 //!
-//! The migration-identity twin of `_testing_schema_snapshot`. Where the
-//! snapshot captures the live *schema* (provenance-agnostic — it excludes
-//! the `schema_version` tracker), this returns the **tracker rows
-//! themselves** as `[{namespace, name, sequence}]`, so the cross-backend
-//! harness can assert the two spines record byte-identical migration
-//! identity.
-//!
-//! This is the gate a schema-only comparison lacks: the resulting
-//! schema can match while the recorded migration *names* diverge
-//! (`name-divergence-at-N` — a Rust binary then refuses to boot on a
-//! TS-migrated DB), and the snapshot gate is blind to it because it
-//! excludes `schema_version` by design. Diffing the tracker rows turns the
-//! swap-freely invariant into a gated fact.
-//!
-//! Read-only + daemon-token gated — effectively keeper-only without forcing
-//! the `actor: 'required'` biconditional, matching `_testing_reset`.
+//! The overview is on [`create_testing_migration_tracker_action_spec`].
 
 use std::sync::Arc;
 
@@ -31,6 +16,23 @@ use serde_json::{Value, json};
 /// twin's input is `s.void`, so the spec declares [`InputShape::Void`]: the
 /// dispatcher reads an absent `params`, `null`, and `{}` as the call and
 /// refuses anything else (`-32602`) before the handler runs.
+///
+/// The migration-identity twin of `_testing_schema_snapshot`. Where the
+/// snapshot captures the live *schema* (provenance-agnostic — it excludes
+/// the `schema_version` tracker), this returns the **tracker rows
+/// themselves** as `[{namespace, name, sequence}]`, so the cross-backend
+/// harness can assert the two spines record byte-identical migration
+/// identity.
+///
+/// This is the gate a schema-only comparison lacks: the resulting
+/// schema can match while the recorded migration *names* diverge
+/// (`name-divergence-at-N` — a Rust binary then refuses to boot on a
+/// TS-migrated DB), and the snapshot gate is blind to it because it
+/// excludes `schema_version` by design. Diffing the tracker rows turns the
+/// swap-freely invariant into a gated fact.
+///
+/// Read-only + daemon-token gated — effectively keeper-only without forcing
+/// the `actor: 'required'` biconditional, matching `_testing_reset`.
 #[must_use]
 pub fn create_testing_migration_tracker_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(move |_params: Value, ctx: ActionContext<'_>| {

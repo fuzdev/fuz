@@ -58,14 +58,12 @@ use fuz_auth::{
 };
 use fuz_db::{ActionDb, Pool};
 use fuz_http::{JsonrpcError, JsonrpcErrorCode};
-use fuz_testing::TestDb;
+use fuz_testing::{TestDb, in_tx, race};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 mod common;
-use common::{
-    fresh_postgres_db, in_tx, race, seed_actor_context, seed_admin, seed_role_grant_direct,
-};
+use common::{fresh_postgres_db, seed_actor_context, seed_admin, seed_role_grant_direct};
 
 /// The admin-grantable role every scoped write here confers.
 const ROLE: &str = "scope_race_role";
