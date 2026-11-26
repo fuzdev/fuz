@@ -144,9 +144,9 @@
 //!    unbalances the string scan;
 //!  - a workspace member outside `crates/<name>/`, which is neither scanned
 //!    nor config-checked;
-//!  - a workspace that doesn't run it — the spine, zzz,
-//!    visionesdelcaribe.org and `fuz_forge` do; the other spine consumers
-//!    read nothing leniently today.
+//!  - a workspace that doesn't run it — the spine and every spine
+//!    consumer except mageguild do; mageguild reads nothing leniently
+//!    today.
 
 use fuz_auth::{AuthSpec, CredentialGate, CredentialType};
 
