@@ -144,9 +144,8 @@
 //!    unbalances the string scan;
 //!  - a workspace member outside `crates/<name>/`, which is neither scanned
 //!    nor config-checked;
-//!  - a workspace that doesn't run it — the spine and every spine
-//!    consumer except mageguild do; mageguild reads nothing leniently
-//!    today.
+//!  - a workspace that doesn't run it — each workspace opts in with its
+//!    own census test, as the spine does.
 
 use fuz_auth::{AuthSpec, CredentialGate, CredentialType};
 
