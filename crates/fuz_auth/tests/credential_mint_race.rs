@@ -14,7 +14,9 @@
 //! with the credential revoked. And the lock is shown to serialize: a mint
 //! waits on an uncommitted change's row lock, and a change waits on an
 //! uncommitted mint's — so the change's revoke, which runs after its account
-//! write, reaches the session the mint inserted. Two mints of one account at
+//! write, reaches the session the mint inserted. The wait is read off
+//! `pg_stat_activity` (`fuz_testing`'s `race!`), so those cases run on
+//! PostgreSQL only. Two mints of one account at
 //! its cap take turns: the second waits on the first's commit and then counts
 //! the first's row, so the account ends at the cap, not one over. A password
 //! change held in its verify across a delete changes nothing: its write is
@@ -37,7 +39,6 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -57,7 +58,7 @@ use fuz_auth::{
     password_handler,
 };
 use fuz_db::Pool;
-use fuz_testing::{backend_pid, seed_account_actor, until_blocked_by};
+use fuz_testing::{backend_pid, in_tx, race, seed_account_actor, until_blocked_by};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -66,10 +67,6 @@ use common::{fresh_db, fresh_postgres_db, seed_admin};
 
 const OLD_PASSWORD: &str = "old-password-race-1";
 const NEW_PASSWORD: &str = "new-password-race-2";
-
-/// How long a blocked statement is given to show it is blocked before the
-/// transaction holding its row commits.
-const HOLD: Duration = Duration::from_millis(300);
 
 /// The latch a [`LatchHasher`] verify waits on: `reached` fires when the verify
 /// is entered, and the verify returns once `release` is sent.
@@ -334,13 +331,12 @@ async fn token_create(
     account_id: uuid::Uuid,
     session_hash: &str,
 ) -> Result<Value, fuz_http::JsonrpcError> {
-    let mut client = pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    let result = token_create_in(pool, &tx, account_id, session_hash).await;
-    if result.is_ok() {
-        tx.commit().await.unwrap();
-    }
-    result
+    in_tx!(pool, |tx| token_create_in(
+        pool,
+        &tx,
+        account_id,
+        session_hash
+    ))
 }
 
 fn assert_refused_as_wrong_password(answer: &Answer, label: &str) {
@@ -971,85 +967,61 @@ async fn a_login_committed_before_a_delete_is_revoked_and_stays_dead_after_the_u
 }
 
 // -- The lock serializes --------------------------------------------------------
-
-/// Run `blocked` beside a holder that commits after [`HOLD`]; returns
-/// `blocked`'s output and whether it finished only after the commit.
-async fn race_against_commit<T>(
-    blocked: impl Future<Output = T>,
-    commit: impl Future<Output = ()>,
-) -> (T, bool) {
-    let blocked = async {
-        let out = blocked.await;
-        (out, Instant::now())
-    };
-    let commit = async {
-        tokio::time::sleep(HOLD).await;
-        let at = Instant::now();
-        commit.await;
-        at
-    };
-    let ((out, finished_at), committed_at) = tokio::join!(blocked, commit);
-    (out, finished_at > committed_at)
-}
+//
+// Each case holds one transaction open, runs the other call into the lock it
+// holds, and commits the first only once the call is seen waiting on it
+// (`race!`), so the order is the lock's, never a sleep's.
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_login_waits_on_an_uncommitted_password_change_and_is_then_refused() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
 
     // the change's account write, uncommitted: its row lock held
-    let mut client = pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    let updated = fuz_auth::account_queries::query_update_account_password(
-        &tx,
-        &account_id,
-        &stored_hash(NEW_PASSWORD),
-        &stored_hash(OLD_PASSWORD),
-    )
-    .await
-    .unwrap();
-    assert!(updated);
-
-    let (raced, waited) = race_against_commit(login(&state, "victim", OLD_PASSWORD), async {
-        tx.commit().await.unwrap();
-    })
-    .await;
+    let (updated, raced, waited) = race!(
+        &pool,
+        first: |tx| fuz_auth::account_queries::query_update_account_password(
+            &tx,
+            &account_id,
+            &stored_hash(NEW_PASSWORD),
+            &stored_hash(OLD_PASSWORD),
+        ),
+        second: login(&state, "victim", OLD_PASSWORD).await
+    );
+    assert!(updated.unwrap(), "the change's account write");
     assert!(waited, "the login's mint waits on the change's row lock");
     assert_refused_as_wrong_password(&raced, "the login that waited");
     assert_eq!(session_count(&pool, &account_id).await, 0);
 }
 
-/// Hold a login's mint uncommitted — the lock taken, the session inserted —
-/// and return the transaction.
-async fn hold_a_mint<'a>(
-    client: &'a mut deadpool_postgres::Object,
+/// A login's mint on `tx`, left for `race!` to hold uncommitted — the lock
+/// taken, the session inserted, nothing evicted.
+async fn hold_a_mint(
+    tx: &deadpool_postgres::Transaction<'_>,
     account_id: &uuid::Uuid,
-) -> deadpool_postgres::Transaction<'a> {
-    let tx = client.transaction().await.unwrap();
-    assert!(
-        query_account_lock_verified(&tx, account_id, &stored_hash(OLD_PASSWORD))
-            .await
-            .unwrap()
-    );
-    let minted = create_capped_session(&tx, account_id).await.unwrap();
+) -> Result<(), tokio_postgres::Error> {
+    assert!(query_account_lock_verified(tx, account_id, &stored_hash(OLD_PASSWORD)).await?);
+    let minted = create_capped_session(tx, account_id).await?;
     assert!(minted.evicted.is_empty());
-    tx
+    Ok(())
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_password_change_waits_on_an_uncommitted_mint_and_then_revokes_it() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     let first = login(&state, "victim", OLD_PASSWORD).await;
 
-    let mut client = pool.get().await.unwrap();
-    let tx = hold_a_mint(&mut client, &account_id).await;
-    let (change, waited) = race_against_commit(change_password(&state, &first.cookie()), async {
-        tx.commit().await.unwrap();
-    })
-    .await;
+    let (held, change, waited) = race!(
+        &pool,
+        first: |tx| hold_a_mint(&tx, &account_id),
+        second: change_password(&state, &first.cookie()).await
+    );
+    held.expect("the held mint");
     assert!(
         waited,
         "the change's account write waits on the mint's lock"
@@ -1063,25 +1035,24 @@ async fn a_password_change_waits_on_an_uncommitted_mint_and_then_revokes_it() {
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_delete_waits_on_an_uncommitted_mint_and_then_revokes_it() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let admin = seed_admin_with_grant(&pool).await;
 
-    let mut client = pool.get().await.unwrap();
-    let tx = hold_a_mint(&mut client, &account_id).await;
-    let ((), waited) = race_against_commit(
-        admin_action(
+    let (held, (), waited) = race!(
+        &pool,
+        first: |tx| hold_a_mint(&tx, &account_id),
+        second: admin_action(
             &pool,
             &admin,
             "account_delete",
             &json!({"account_id": account_id}),
-        ),
-        async {
-            tx.commit().await.unwrap();
-        },
-    )
-    .await;
+        )
+        .await
+    );
+    held.expect("the held mint");
     assert!(waited, "the delete's tombstone waits on the mint's lock");
     assert_eq!(
         session_count(&pool, &account_id).await,
@@ -1091,8 +1062,9 @@ async fn a_delete_waits_on_an_uncommitted_mint_and_then_revokes_it() {
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_login_at_the_cap_waits_on_an_uncommitted_mint_and_then_evicts_past_it() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let state = build_state(pool.clone(), Arc::new(LatchHasher::default()));
     while session_count(&pool, &account_id).await < DEFAULT_MAX_SESSIONS {
@@ -1101,19 +1073,21 @@ async fn a_login_at_the_cap_waits_on_an_uncommitted_mint_and_then_evicts_past_it
 
     // a login's mint at the cap, uncommitted: the lock taken, its session
     // inserted, the oldest evicted
-    let mut client = pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    assert!(
-        query_account_lock_verified(&tx, &account_id, &stored_hash(OLD_PASSWORD))
-            .await
-            .unwrap()
+    let (minted, raced, waited) = race!(
+        &pool,
+        first: |tx| async {
+            assert!(
+                query_account_lock_verified(&tx, &account_id, &stored_hash(OLD_PASSWORD)).await?
+            );
+            create_capped_session(&tx, &account_id).await
+        },
+        second: login(&state, "victim", OLD_PASSWORD).await
     );
-    let minted = create_capped_session(&tx, &account_id).await.unwrap();
-    assert_eq!(minted.evicted.len(), 1, "the held mint evicts the oldest");
-    let (raced, waited) = race_against_commit(login(&state, "victim", OLD_PASSWORD), async {
-        tx.commit().await.unwrap();
-    })
-    .await;
+    assert_eq!(
+        minted.unwrap().evicted.len(),
+        1,
+        "the held mint evicts the oldest"
+    );
     assert!(waited, "the login's mint waits on the held mint's lock");
     assert_eq!(raced.status, StatusCode::OK, "{:?}", raced.body);
     assert_eq!(
@@ -1193,24 +1167,18 @@ async fn a_token_committed_before_a_delete_is_revoked_by_it() {
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_token_create_waits_on_an_uncommitted_delete_and_is_then_refused() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
 
-    let mut client = pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    assert!(
-        query_account_soft_delete(&tx, &account_id, None)
-            .await
-            .unwrap()
-            .is_some()
+    let (deleted, result, waited) = race!(
+        &pool,
+        first: |tx| query_account_soft_delete(&tx, &account_id, None),
+        second: token_create(&pool, account_id, &session_hash).await
     );
-    let (result, waited) =
-        race_against_commit(token_create(&pool, account_id, &session_hash), async {
-            tx.commit().await.unwrap();
-        })
-        .await;
+    assert!(deleted.unwrap().is_some(), "the held tombstone");
     assert!(waited, "the mint waits on the tombstone's row lock");
     assert_unauthenticated(result, "the mint that waited");
     assert_eq!(token_count(&pool, &account_id).await, 0);
@@ -1250,33 +1218,32 @@ async fn a_token_committed_before_a_password_change_is_revoked_by_it() {
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_token_create_waits_on_an_uncommitted_password_change_and_is_then_refused() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
 
     // the change's writes in its order, uncommitted: the account row first,
     // then the revokes
-    let mut client = pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    assert!(
-        fuz_auth::account_queries::query_update_account_password(
-            &tx,
-            &account_id,
-            &stored_hash(NEW_PASSWORD),
-            &stored_hash(OLD_PASSWORD),
-        )
-        .await
-        .unwrap()
+    let (held, result, waited) = race!(
+        &pool,
+        first: |tx| async {
+            assert!(
+                fuz_auth::account_queries::query_update_account_password(
+                    &tx,
+                    &account_id,
+                    &stored_hash(NEW_PASSWORD),
+                    &stored_hash(OLD_PASSWORD),
+                )
+                .await?
+            );
+            fuz_auth::session_queries::query_session_revoke_all_for_account(&tx, &account_id)
+                .await
+        },
+        second: token_create(&pool, account_id, &session_hash).await
     );
-    fuz_auth::session_queries::query_session_revoke_all_for_account(&tx, &account_id)
-        .await
-        .unwrap();
-    let (result, waited) =
-        race_against_commit(token_create(&pool, account_id, &session_hash), async {
-            tx.commit().await.unwrap();
-        })
-        .await;
+    held.expect("the held change");
     assert!(waited, "the mint waits on the change's row lock");
     assert_unauthenticated(
         result,
@@ -1306,8 +1273,9 @@ async fn a_token_minted_by_a_session_later_logged_out_keeps_working() {
 }
 
 #[tokio::test]
+#[ignore = "postgres-only: observes a lock wait (pg_stat_activity, pg_backend_pid)"]
 async fn a_token_create_at_the_cap_waits_on_an_uncommitted_token_create_and_then_evicts_past_it() {
-    let pool = fresh_db().await;
+    let pool = fresh_postgres_db().await;
     let account_id = seed_victim(&pool).await;
     let session_hash = seed_session(&pool, &account_id).await;
     while token_count(&pool, &account_id).await < DEFAULT_MAX_TOKENS {
@@ -1318,16 +1286,12 @@ async fn a_token_create_at_the_cap_waits_on_an_uncommitted_token_create_and_then
 
     // a token mint at the cap, uncommitted: the lock taken, its token
     // inserted, the oldest evicted
-    let mut client = pool.get().await.unwrap();
-    let tx = client.transaction().await.unwrap();
-    token_create_in(&pool, &tx, account_id, &session_hash)
-        .await
-        .unwrap();
-    let (result, waited) =
-        race_against_commit(token_create(&pool, account_id, &session_hash), async {
-            tx.commit().await.unwrap();
-        })
-        .await;
+    let (held, result, waited) = race!(
+        &pool,
+        first: |tx| token_create_in(&pool, &tx, account_id, &session_hash),
+        second: token_create(&pool, account_id, &session_hash).await
+    );
+    held.expect("the held token mint");
     assert!(waited, "the token mint waits on the held mint's lock");
     result.expect("the token create that waited mints");
     assert_eq!(
