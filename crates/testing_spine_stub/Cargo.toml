@@ -34,10 +34,10 @@ fuz_db.workspace = true
 fuz_http.workspace = true
 fuz_realtime.workspace = true
 
-# Test-only fixtures — `TestingArgon2idHasher` (~1-5 ms argon2),
-# `_testing_reset` spec, env-gated startup DB reset. Deliberately a dep of
-# this test-only crate; the `cargo xtask check-release` audit blocks
-# `fuz_testing` from any production binary's dep graph.
+# Test-only fixtures — `TestingArgon2idHasher` (~1-5 ms argon2) and the
+# `_testing_reset` spec. Deliberately a dep of this test-only crate; the
+# `cargo xtask check-release` audit blocks `fuz_testing` from any production
+# binary's dep graph.
 fuz_testing.workspace = true
 
 # Async runtime + web. Serving, the signal handler, and the drain come from

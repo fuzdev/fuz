@@ -33,13 +33,13 @@ use std::env;
 ///
 /// # Environment variables
 ///
-/// - `SSH_TEST_TARGET`: `ssh://user@host[:port]/path` root (skips if unset)
+/// - `SSH_TEST_TARGET`: `ssh://user@host[:port]/path` root (run with
+///   `--ignored` and no variable, the test fails rather than passing untested)
 #[tokio::test]
 #[ignore = "requires an SSH host (set SSH_TEST_TARGET)"]
 async fn test_ssh_round_trip() {
     let Ok(target) = env::var("SSH_TEST_TARGET") else {
-        eprintln!("SSH_TEST_TARGET unset; skipping SSH integration test");
-        return;
+        panic!("SSH_TEST_TARGET must name an ssh:// root to run the SSH integration test");
     };
 
     let backend = fuz_storage::parse_storage(&target).expect("should parse ssh:// target");

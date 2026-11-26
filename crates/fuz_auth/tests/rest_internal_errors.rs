@@ -14,7 +14,9 @@
 //! - **a pool checkout** — a pool that cannot connect at all for the routes
 //!   that resolve no credential first, and a pool with a checkout budget
 //!   ([`common::budgeted_pool`]) for the ones that do, so the credential read
-//!   gets its connection and the handler's own checkout is the one refused;
+//!   gets its connection and the handler's own checkout is the one refused,
+//!   and one that refuses only its first checkout
+//!   ([`pool_refusing_first_checkout`]) for the credential walk's first leg;
 //! - **a `BEGIN`** — a pool that hands out one dead connection
 //!   ([`pool_with_dead_checkout`]), so the checkout succeeds and the first
 //!   statement on it is the one that fails;
@@ -58,7 +60,7 @@ use std::sync::{Arc, Mutex};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::{Extension, Router};
-use deadpool_postgres::{ClientWrapper, Hook, Manager, Runtime};
+use deadpool_postgres::{ClientWrapper, Hook, HookError, Manager, Runtime};
 use futures::future::{BoxFuture, FutureExt};
 use fuz_auth::bootstrap_routes::bootstrap_router;
 use fuz_auth::signup_routes::signup_router;
@@ -69,7 +71,7 @@ use fuz_auth::{
     SESSION_COOKIE_NAME, SignupOptions, SignupRouteState, TokenScopeDocument, account_router,
 };
 use fuz_db::{Pool, create_pool};
-use fuz_http::ClientIp;
+use fuz_http::{BackgroundWrites, ClientIp};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -310,6 +312,31 @@ fn pool_with_dead_checkout(url: &str, nth: usize) -> Pool {
         .expect("dead-checkout pool builds")
 }
 
+/// A pool on the suite's database whose first checkout is refused and every
+/// later one served — the inverse of [`common::budgeted_pool`]: the fault
+/// for the credential walk's first leg, with the legs after it free to read
+/// if the walk went on to them.
+fn pool_refusing_first_checkout(url: &str) -> Pool {
+    let config: tokio_postgres::Config = url.parse().expect("test URL parses");
+    let checkouts = Arc::new(AtomicUsize::new(0));
+    let hook = || {
+        let checkouts = Arc::clone(&checkouts);
+        Hook::sync_fn(move |_, _| {
+            if checkouts.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(HookError::message("first checkout refused"))
+            } else {
+                Ok(())
+            }
+        })
+    };
+    Pool::builder(Manager::new(config, tokio_postgres::NoTls))
+        .runtime(Runtime::Tokio1)
+        .post_create(hook())
+        .pre_recycle(hook())
+        .build()
+        .expect("first-refusing pool builds")
+}
+
 /// Run fault-injecting DDL on the suite's database.
 async fn execute(pool: &Pool, sql: &str) {
     pool.get()
@@ -481,6 +508,23 @@ fn account_state(pool: Pool, hasher: Arc<dyn PasswordHasher>) -> AccountRouteSta
 /// The account router over `pool` with a hasher that accepts every password.
 fn account_routes(pool: Pool) -> Router {
     account_router(account_state(pool, StubHasher::accepting()))
+}
+
+/// [`account_routes`], with the gate's tracker — the one the bearer leg
+/// spawns its `last_used_at` touch on — so a case can drain it before reading
+/// the token row.
+fn account_routes_tracked(pool: Pool) -> (Router, Arc<BackgroundWrites>) {
+    let state = account_state(pool, StubHasher::accepting());
+    let writes = Arc::clone(&state.gate.background_writes);
+    (account_router(state), writes)
+}
+
+/// Await every write spawned on `writes`, bounded so a stuck one fails the
+/// case instead of hanging it.
+async fn drain(writes: &BackgroundWrites) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), writes.drain())
+        .await
+        .expect("the gate's spawned writes settle");
 }
 
 /// Seed a single-actor account and a live session for it. Returns the account
@@ -737,15 +781,20 @@ async fn status_pool_checkout_failure_answers_the_503() {
 
 /// A refused checkout on the credential walk's first leg answers the 503 and
 /// ends the walk: the bearer sent beside the cookie is never looked up, so
-/// its `last_used_at` stays unset.
+/// its `last_used_at` stays unset. The pool refuses only the cookie leg's
+/// checkout, so the bearer leg would read its token and spawn the touch if the
+/// walk went on to it; the gate's tracker is drained before the row is read.
 #[tokio::test]
 async fn status_credential_checkout_failure_answers_the_503_and_ends_the_walk() {
     let pool = fresh_db().await;
     let (account_id, _, cookie) = seed_session(&pool, "status_walk_checkout").await;
+    let control = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
     let token = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
+
+    let (router, writes) = account_routes_tracked(pool_refusing_first_checkout(pool.url()));
     let bearer = format!("Bearer {}", token.token);
     let reply = send(
-        account_routes(common::budgeted_pool(&pool, 0)),
+        router.clone(),
         "GET",
         "/status",
         &[(header::COOKIE, &cookie), (header::AUTHORIZATION, &bearer)],
@@ -753,20 +802,34 @@ async fn status_credential_checkout_failure_answers_the_503_and_ends_the_walk() 
     )
     .await;
     assert_flat_503(&reply);
-    // the bearer leg's touch is spawned; give it the time it would take
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let touched: Option<String> = pool
-        .get()
-        .await
-        .expect("pool.get")
-        .query_one(
-            "SELECT last_used_at::text FROM api_token WHERE account_id = $1",
-            &[&account_id],
-        )
-        .await
-        .expect("token row")
-        .get(0);
-    assert_eq!(touched, None, "the walk stopped at the faulted cookie leg");
+    drain(&writes).await;
+    assert_eq!(
+        token_last_used_at(&pool, &token.id).await,
+        None,
+        "the walk stopped at the faulted cookie leg"
+    );
+
+    // the control, on the same router and pool, past its refused checkout:
+    // a bearer alone authenticates there, and the drain lands its touch
+    let bearer = format!("Bearer {}", control.token);
+    let reply = send(
+        router,
+        "GET",
+        "/status",
+        &[(header::AUTHORIZATION, &bearer)],
+        None,
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "the pool serves the later checkouts"
+    );
+    drain(&writes).await;
+    assert!(
+        token_last_used_at(&pool, &control.id).await.is_some(),
+        "the control's touch landed"
+    );
 }
 
 /// A failed query on the credential walk's checked-out client keeps the text
@@ -1723,10 +1786,11 @@ async fn a_failed_cookie_read_does_not_fall_through_to_the_bearer() {
     let control = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
     let token = fuz_testing::mint_api_token(&pool, account_id, &TokenScopeDocument::full()).await;
 
-    // the control: the bearer alone authenticates, and its touch lands
+    // the control: the bearer alone authenticates, and the drain lands its touch
+    let (router, writes) = account_routes_tracked(pool.clone());
     let bearer = format!("Bearer {}", control.token);
     let reply = send(
-        account_routes(pool.clone()),
+        router,
         "GET",
         "/status",
         &[(header::AUTHORIZATION, &bearer)],
@@ -1734,18 +1798,16 @@ async fn a_failed_cookie_read_does_not_fall_through_to_the_bearer() {
     )
     .await;
     assert_eq!(reply.status, StatusCode::OK, "the bearer is live");
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    while token_last_used_at(&pool, &control.id).await.is_none() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the control's touch never landed"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    drain(&writes).await;
+    assert!(
+        token_last_used_at(&pool, &control.id).await.is_some(),
+        "the control's touch landed"
+    );
 
+    let (router, writes) = account_routes_tracked(pool_with_dead_checkout(pool.url(), 1));
     let bearer = format!("Bearer {}", token.token);
     let reply = send(
-        account_routes(pool_with_dead_checkout(pool.url(), 1)),
+        router,
         "GET",
         "/status",
         &[(header::COOKIE, &cookie), (header::AUTHORIZATION, &bearer)],
@@ -1753,9 +1815,7 @@ async fn a_failed_cookie_read_does_not_fall_through_to_the_bearer() {
     )
     .await;
     assert_credential_read_500(&reply);
-    // a touch the walk spawned would land well inside this window: the
-    // control's did above
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    drain(&writes).await;
     assert_eq!(
         token_last_used_at(&pool, &token.id).await,
         None,

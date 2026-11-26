@@ -26,7 +26,7 @@ uuid.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
-# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`). A dev
+# Dev-only: the shared test-database harness (`fuz_testing::fresh_db`). A dev
 # cycle — `fuz_testing` depends on `fuz_actions` — which cargo permits and
 # `fuz_audit` ignores (it walks runtime edges only).
 fuz_testing.workspace = true

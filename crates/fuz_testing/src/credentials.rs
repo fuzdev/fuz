@@ -1,6 +1,5 @@
 //! The credential fixtures — a signed session cookie, an `api_token` row, and
-//! a daemon-token state — shared by the spine's `#[ignore]` `PostgreSQL`
-//! suites.
+//! a daemon-token state — shared by the spine's database suites.
 //!
 //! Third sibling of [`crate::fresh_db`] and [`crate::seed`], one layer further
 //! into the request: `fresh_db` hands a suite a migrated pool, `seed` gives it

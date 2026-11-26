@@ -634,8 +634,8 @@ mod tests {
     /// refusal that precedes the first checkout — which every params rejection
     /// does, by contract — is drivable with no database. So is the checkout
     /// itself failing: nothing listens on the port the URL names. Anything
-    /// that reaches a query belongs in the `#[ignore]`d `tests/serve.rs` suite
-    /// instead.
+    /// that reaches a query belongs in the `tests/serve.rs` suite instead, on
+    /// a test database of its own.
     fn no_db_state() -> FactServingRouteState {
         FactServingRouteState {
             gate: fuz_testing::testing_auth_gate(

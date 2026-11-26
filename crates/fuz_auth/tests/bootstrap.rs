@@ -41,12 +41,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::BoxFuture;
 use fuz_auth::error::BootstrapErrorKind;
-use fuz_auth::keyring::MIN_KEY_LENGTH;
 use fuz_auth::{
     Argon2idHasher, AuditEmitter, BOOTSTRAP_TOKEN_LENGTH_MAX, BootstrapError, BootstrapInput,
     BootstrapKeeperResolved, BootstrapOptions, BootstrapTokenStore, FileBootstrapTokenStore,
-    Keyring, PasswordHasher, ROLE_ADMIN, ROLE_KEEPER, RateLimiter, RateLimiterOptions,
-    SESSION_COOKIE_NAME, bootstrap_handler, hash_session_token, is_bootstrap_available,
+    PasswordHasher, ROLE_ADMIN, ROLE_KEEPER, RateLimiter, RateLimiterOptions, SESSION_COOKIE_NAME,
+    bootstrap_handler, hash_session_token, is_bootstrap_available,
 };
 use fuz_db::Pool;
 use fuz_sys::secure_file::BurnOutcome;
@@ -216,7 +215,7 @@ fn build_options(
         token_store,
         on_keeper_resolved,
         bootstrap_ip_rate_limiter: None,
-        keyring: Arc::new(Keyring::new(&"k".repeat(MIN_KEY_LENGTH)).unwrap()),
+        keyring: Arc::new(fuz_testing::testing_keyring()),
         session_cookie_name: SESSION_COOKIE_NAME,
     }
 }

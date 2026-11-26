@@ -68,12 +68,12 @@ at publish and at manifest read). A domain-free spine server — the auth /
 account / admin / audit / role-grant-offer surface, the cell verbs, the room
 verbs (an exclusive registry, `TestRoomAuthorize` deciding by the room id's
 prefix, cleared by `_testing_reset`), and cell-gated fact serving — its own
-`run_app` over the `fuz_actions::server` toolkit, with `fuz_testing`'s hasher,
-every `_testing_*` spec, and an env-gated startup DB reset. Default port 1177;
-its command line is the harness's `--port <port>`, no arguments, or `--help` /
-`-h`. Driven by fuz_app's cross-backend suites (./testing.md § Cross-backend
-suite); like its TS twin it schedules no auth cleanup
-(`AuthCleanupSchedule::Off`) and starts with its limiters off.
+`run_app` over the `fuz_actions::server` toolkit, with `fuz_testing`'s hasher
+and every `_testing_*` spec. Default port 1177; its command line is the
+harness's `--port <port>`, no arguments, or `--help` / `-h`. Driven by
+fuz_app's cross-backend suites (./testing.md § Cross-backend suite); like its
+TS twin it schedules no auth cleanup (`AuthCleanupSchedule::Off`) and starts
+with its limiters off.
 
 ### `testing_fake_fgro`
 

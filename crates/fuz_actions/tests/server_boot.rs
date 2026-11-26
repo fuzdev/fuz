@@ -261,20 +261,30 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
     let lock = TestingTableLock::acquire(&pool, "audit_log").await;
     drop(emitter.emit(AuditLogInput::for_event(AuditEventType::Login).failure()));
     lock.wait_for_waiter().await;
-    let released = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        lock.release().await;
-    });
 
     // fired once the serve is up — a token fired before it would end the serve
-    // before the bind, with nothing drained
+    // before the bind, with nothing drained. The extra upkeep starts once the
+    // listener is bound, so it is the signal; it reports how many writes were
+    // in flight as the token fired, and the lock's release is timed from then.
+    // (It must not release the lock itself: the serve joins its upkeep before
+    // it drains the writes.)
     let shutdown = fuz_http::CancellationToken::new();
-    tokio::spawn({
-        let shutdown = shutdown.clone();
-        async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            shutdown.cancel();
+    let (fired_tx, fired_rx) = tokio::sync::oneshot::channel::<usize>();
+    let fire_on_bind: fuz_actions::server::UpkeepTask = Box::new({
+        let emitter = Arc::clone(&emitter);
+        move |token| {
+            tokio::spawn(async move {
+                let inflight = emitter.inflight_count();
+                token.cancel();
+                let _ = fired_tx.send(inflight);
+            })
         }
+    });
+    let released = tokio::spawn(async move {
+        let inflight = fired_rx.await.expect("the token fired");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        lock.release().await;
+        inflight
     });
     // the probes serve live here, carrying the duties of the backend whose
     // write is held
@@ -292,7 +302,7 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
             addr: "127.0.0.1:0".parse().expect("addr"),
             drain_timeout: Duration::from_secs(10),
             shutdown,
-            extra_upkeep: Vec::new(),
+            extra_upkeep: vec![fire_on_bind],
         },
     )
     .await
@@ -311,5 +321,9 @@ async fn shutdown_waits_for_a_failure_row_still_being_written() {
         .expect("count the rows")
         .get(0);
     assert_eq!(rows, 1, "the failure row landed before the serve returned");
-    released.await.expect("the lock was released");
+    assert_eq!(
+        released.await.expect("the lock was released"),
+        1,
+        "the failure row was still held when the token fired"
+    );
 }

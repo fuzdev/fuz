@@ -37,7 +37,7 @@ tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"
 # The fresh database each DB test opens; a dev-dependency cycle (`fuz_testing`
 # depends on this crate), which Cargo allows for integration tests.
 fuz_testing.workspace = true
-http-body-util = "0.1"
+http-body-util.workspace = true
 futures.workspace = true
 tower = { workspace = true, features = ["util"] }
 tracing-subscriber.workspace = true

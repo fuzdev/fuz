@@ -17,7 +17,7 @@
 //! read as the token predicate matches nothing here.
 //!
 //! The end-to-end companion (a real `/logout` / `/password` with the audit
-//! INSERT made to fail) is the `#[ignore]` Postgres suite in
+//! INSERT made to fail) is the database suite in
 //! `tests/audit_stream.rs`.
 
 #![expect(

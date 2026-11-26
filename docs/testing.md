@@ -56,6 +56,13 @@ yourself (the commands are in `crates/fuz_eval/tests/uid_drop.rs`); run
 unprivileged, it fails. Its other suites run in `check` against
 `testing_fake_fgro`.
 
+A suite that needs `git` or an SSH host doesn't pass by skipping. `fuz_sign`'s
+release log suites run a real `git` and check nothing without one, so its
+`required_programs` test fails where `git` is missing unless
+`FUZ_TEST_ALLOW_NO_GIT=1` accepts that. The `#[ignore]` `ssh://` suites
+(`fuz_storage`'s `test_ssh_round_trip`, `fuz_sign`'s `signed_trust_ssh`) run
+in no CI job; run with `--ignored` and no `SSH_TEST_TARGET`, they fail.
+
 The toolchain is pinned in `rust-toolchain.toml` (local `cargo` and CI both
 read it), since `clippy::nursery` + `-D warnings` breaks on stable-channel
 drift.

@@ -199,8 +199,8 @@ async fn seed_account_with_email_and_hash(
 }
 
 /// A pool that never connects — the pre-DB guards below return before any DB
-/// access, so those tests run in the fast (no-Postgres) lane. `create_pool`
-/// only parses the URL; `deadpool` connects lazily on first `get()`.
+/// access, so those tests need no database. `create_pool` only parses the
+/// URL; `deadpool` connects lazily on first `get()`.
 fn pool_no_db() -> Pool {
     create_pool(
         "postgres://never-connected.invalid/none",

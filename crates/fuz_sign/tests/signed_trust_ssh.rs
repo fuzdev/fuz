@@ -11,7 +11,8 @@
 //!
 //! Gated on `SSH_TEST_TARGET` (`ssh://user@host[:port]/path`, key/agent auth,
 //! host already in `~/.ssh/known_hosts`) and `#[ignore]`, so CI without an SSH
-//! host skips it:
+//! host doesn't run it. Run with `--ignored` and no variable, each case fails
+//! rather than passing untested:
 //!
 //! ```bash
 //! export SSH_TEST_TARGET=ssh://$USER@localhost/tmp/fuz-ssh-test
@@ -24,6 +25,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::panic,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
@@ -89,15 +91,17 @@ fn make_self_artifact(dir: &Path, version: &str, content: &[u8]) -> ArtifactMeta
 
 /// The `SSH_TEST_TARGET` root with a per-pid, per-tag subpath, so a run never
 /// collides with the `fuz_storage` round-trip test or a parallel invocation
-/// (and each test's remote tree is independently cleanable). Returns `None` when
-/// `SSH_TEST_TARGET` is unset — the caller skips.
-fn ssh_target(tag: &str) -> Option<String> {
-    let base = std::env::var("SSH_TEST_TARGET").ok()?;
-    Some(format!(
+/// (and each test's remote tree is independently cleanable). Panics when
+/// `SSH_TEST_TARGET` is unset: a case run without a host checked nothing.
+fn ssh_target(tag: &str) -> String {
+    let Ok(base) = std::env::var("SSH_TEST_TARGET") else {
+        panic!("SSH_TEST_TARGET must name an ssh:// root to run the ssh signed-trust suite");
+    };
+    format!(
         "{}/signed-{}-{tag}",
         base.trim_end_matches('/'),
         std::process::id()
-    ))
+    )
 }
 
 /// Best-effort remote cleanup: list every published key under the test's root
@@ -121,10 +125,7 @@ async fn cleanup(backend: &StorageBackend) {
 #[ignore = "requires an SSH host (set SSH_TEST_TARGET)"]
 async fn publish_then_install_tool_over_ssh_end_to_end() {
     let _serial = SERIAL.lock().await;
-    let Some(target) = ssh_target("tool") else {
-        eprintln!("SSH_TEST_TARGET unset; skipping ssh signed-install test");
-        return;
-    };
+    let target = ssh_target("tool");
     let backend = parse_storage(&target).expect("should parse ssh:// target");
 
     let key = trusted_key();
@@ -183,10 +184,7 @@ async fn publish_then_install_tool_over_ssh_end_to_end() {
 #[ignore = "requires an SSH host (set SSH_TEST_TARGET)"]
 async fn publish_then_fetch_self_over_ssh_end_to_end() {
     let _serial = SERIAL.lock().await;
-    let Some(target) = ssh_target("self") else {
-        eprintln!("SSH_TEST_TARGET unset; skipping ssh signed-self test");
-        return;
-    };
+    let target = ssh_target("self");
     let backend = parse_storage(&target).expect("should parse ssh:// target");
 
     let key = trusted_key();

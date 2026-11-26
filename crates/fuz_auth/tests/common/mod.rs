@@ -41,7 +41,7 @@ use fuz_db::Pool;
 use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db};
 use serde_json::Value;
 
-/// The `account` + `actor` pair (and the second-actor variant) every PG suite
+/// The `account` + `actor` pair (and the second-actor variant) every DB suite
 /// in the spine seeds — one body in `fuz_testing::seed`, re-exported here so
 /// `common::seed_account_actor` keeps working alongside this module's
 /// `fuz_auth`-specific fixtures. Not every test file uses both — the allow is

@@ -66,12 +66,29 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 struct SuiteAuthorize {
     reached: Notify,
     release: Notify,
+    /// Signalled when a held gate is dropped before its release — the request
+    /// future cancelled mid-authorizer.
+    dropped: Notify,
 }
 
 impl SuiteAuthorize {
     async fn gate(&self) {
         self.reached.notify_one();
+        let mut held = HeldGate(Some(&self.dropped));
         self.release.notified().await;
+        held.0 = None;
+    }
+}
+
+/// Signals its `Notify` when dropped while still armed: a gate whose future
+/// was dropped before the release reached it.
+struct HeldGate<'a>(Option<&'a Notify>);
+
+impl Drop for HeldGate<'_> {
+    fn drop(&mut self) {
+        if let Some(dropped) = self.0 {
+            dropped.notify_one();
+        }
     }
 }
 
@@ -786,11 +803,12 @@ async fn a_socket_closed_mid_authorizer_leaves_no_seat() {
     })
     .await
     .expect("the server sees the close");
+    // the close dropped the held join's future; a join that outlived it would
+    // pass the gate on this release instead, disarmed, and nothing would signal
     server.authorize.release.notify_one();
-
-    // time for a released join to reach its admit: one let through would
-    // queue its `room_member_joined` ahead of this answer
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::timeout(STEP_TIMEOUT, server.authorize.dropped.notified())
+        .await
+        .expect("the close drops the join held in its authorizer");
     assert_eq!(
         watcher.call("room_watch", json!({"room_id": room})).await,
         json!({"room_id": room, "seq": 0, "members": []})

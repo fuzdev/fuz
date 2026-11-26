@@ -18,7 +18,7 @@ uuid.workspace = true
 deadpool-postgres.workspace = true
 
 [dev-dependencies]
-# Dev-only: the PG-suite harness + seeding (`fuz_testing`) and the no-op
+# Dev-only: the test-database harness + seeding (`fuz_testing`) and the no-op
 # transport pieces `perform_action` takes (`fuz_realtime`, `tracing`), for the
 # dispatcher-driven `tests/cell_authz.rs`. Dev-only edges, so they never reach
 # a production build — `fuz_audit` walks runtime edges only.

@@ -22,8 +22,8 @@
 //! - a leg whose read fails: the walk ends there with that leg's
 //!   [`CredentialReadFault`] and its 500, and the legs after it are not tried.
 //!
-//! The pool is a never-connecting handle, so the suite runs in the fast
-//! (no-`#[ignore]`) lane. The precheck case swaps in a pool that dials a local
+//! The pool is a never-connecting handle, so the suite needs no database. The
+//! precheck case swaps in a pool that dials a local
 //! listener counting connection attempts: a malformed bearer makes none, and
 //! its control — a well-formed unknown token — makes at least one, and fails
 //! the read.

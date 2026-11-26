@@ -126,9 +126,9 @@ mod auth_gate_tests {
     };
 
     /// Keyring needed to build the reset / mint specs; never exercised (the
-    /// tests only read `.auth`), so any valid key suffices.
+    /// tests only read `.auth`).
     fn test_keyring() -> Arc<Keyring> {
-        Arc::new(Keyring::new("test-cookie-key-not-a-real-secret").expect("one valid key"))
+        Arc::new(crate::testing_keyring())
     }
 
     fn daemon_token_state() -> Arc<RwLock<DaemonTokenState>> {

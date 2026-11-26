@@ -190,7 +190,6 @@ mod tests {
     //! rows name them with `{placeholders}` this test fills from its own
     //! keyring.
 
-    use fuz_auth::keyring::MIN_KEY_LENGTH;
     use fuz_auth::{create_session_cookie_value, generate_api_token, generate_session_token};
 
     use super::*;
@@ -214,10 +213,6 @@ mod tests {
         "api_token",
         "daemon_token",
     ];
-
-    fn keyring() -> Keyring {
-        Keyring::new(&"k".repeat(MIN_KEY_LENGTH)).expect("a keyring")
-    }
 
     fn now_secs() -> u64 {
         std::time::SystemTime::now()
@@ -306,7 +301,7 @@ mod tests {
 
     #[test]
     fn every_row_gets_the_reading_it_names() {
-        let keyring = keyring();
+        let keyring = crate::testing_keyring();
         let placeholders = placeholders(&keyring);
         let table = table();
         let mut failures = Vec::new();
@@ -340,7 +335,7 @@ mod tests {
 
     #[test]
     fn every_refused_row_is_refused_with_its_reason() {
-        let keyring = keyring();
+        let keyring = crate::testing_keyring();
         let placeholders = placeholders(&keyring);
         let table = table();
         for row in rows(&table, "refused") {
@@ -365,7 +360,7 @@ mod tests {
     /// spine alone fails its own unit leg.
     #[test]
     fn the_cap_rows_sit_at_the_caps() {
-        let keyring = keyring();
+        let keyring = crate::testing_keyring();
         let placeholders = placeholders(&keyring);
         let table = table();
         let filled = |name: &str| -> Vec<String> {
@@ -484,9 +479,12 @@ mod tests {
         // distinct names: the map's limit counts entries by name
         let lines: Vec<String> = (0..40_000).map(|i| format!("x{i}: 1")).collect();
         assert!(parse_testing_header_lines(lines.iter().map(String::as_str)).is_none());
-        let error =
-            run_testing_credential_read(lines.iter().map(String::as_str), &keyring(), COOKIE_NAME)
-                .expect_err("a refusal");
+        let error = run_testing_credential_read(
+            lines.iter().map(String::as_str),
+            &crate::testing_keyring(),
+            COOKIE_NAME,
+        )
+        .expect_err("a refusal");
         assert_eq!(error.code, fuz_http::JsonrpcErrorCode::InvalidParams);
         assert_eq!(
             error.data,

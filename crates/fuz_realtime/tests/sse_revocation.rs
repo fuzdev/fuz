@@ -22,10 +22,11 @@
 //!
 //! The route-level companions (credential gate, cookie-session regression
 //! guard, and the end-to-end bearer-stream-closes-on-revoke loop) are the
-//! `#[ignore]` Postgres suite in `tests/audit_stream.rs`.
+//! database suite in `tests/audit_stream.rs`.
 
 #![expect(
     clippy::expect_used,
+    clippy::panic,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
@@ -36,7 +37,9 @@ use futures::StreamExt;
 use futures::stream::Stream;
 use fuz_auth::{AuditEmitter, AuditLogEvent, ConnectionCloser, register_revocation_guard};
 use fuz_realtime::ConnectionIdentity;
-use fuz_realtime::{SseRegistry, SseSubscription, register_audit_sse_listener};
+use fuz_realtime::{
+    SSE_CONNECTED_COMMENT, SseRegistry, SseSubscription, register_audit_sse_listener,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -97,6 +100,22 @@ async fn assert_stream_closes(
     assert!(
         tokio::time::timeout(CLOSE_TIMEOUT, drained).await.is_ok(),
         "{what}: the stream was never closed"
+    );
+}
+
+/// Read `stream`'s first item and assert it is the connect comment: the
+/// stream is open before the case revokes anything, so a close it then sees is
+/// the revocation's.
+async fn assert_connected(
+    stream: &mut (impl Stream<Item = Result<String, std::convert::Infallible>> + Unpin),
+    what: &str,
+) {
+    let first = tokio::time::timeout(CLOSE_TIMEOUT, stream.next())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: no first frame"));
+    assert!(
+        matches!(&first, Some(Ok(comment)) if comment == SSE_CONNECTED_COMMENT),
+        "{what}: the stream opened with {first:?}, not the connect comment"
     );
 }
 
@@ -229,9 +248,9 @@ async fn token_revoke_spares_the_accounts_other_streams() {
             ..SseSubscription::default()
         },
     ));
-    let _ = revoked.next().await;
-    let _ = kept.next().await;
-    let _ = cookie.next().await;
+    assert_connected(&mut revoked, "revoked").await;
+    assert_connected(&mut kept, "kept").await;
+    assert_connected(&mut cookie, "cookie").await;
 
     emitter
         .notify(event(
@@ -268,7 +287,7 @@ async fn a_failed_token_revoke_closes_nothing() {
             ..SseSubscription::default()
         },
     ));
-    let _ = stream.next().await;
+    assert_connected(&mut stream, "stream").await;
 
     emitter
         .notify(event(
@@ -300,7 +319,7 @@ async fn role_grant_revoke_closes_the_role_gated_stream() {
             ..SseSubscription::default()
         },
     ));
-    let _ = stream.next().await;
+    assert_connected(&mut stream, "stream").await;
 
     emitter
         .notify(event(
@@ -333,7 +352,7 @@ async fn a_scoped_role_grant_revoke_leaves_the_role_gated_stream_open() {
             ..SseSubscription::default()
         },
     ));
-    let _ = stream.next().await;
+    assert_connected(&mut stream, "stream").await;
 
     emitter
         .notify(event(
@@ -386,8 +405,8 @@ async fn session_scoped_events_close_only_the_named_sessions_stream() {
                 ..SseSubscription::default()
             },
         ));
-        let _ = revoked.next().await;
-        let _ = kept.next().await;
+        assert_connected(&mut revoked, "revoked").await;
+        assert_connected(&mut kept, "kept").await;
 
         emitter
             .notify(event(
@@ -440,8 +459,8 @@ async fn account_wide_events_close_every_stream_on_the_account() {
                 ..SseSubscription::default()
             },
         ));
-        let _ = theirs.next().await;
-        let _ = bystander.next().await;
+        assert_connected(&mut theirs, "theirs").await;
+        assert_connected(&mut bystander, "bystander").await;
 
         emitter
             .notify(event(event_type, "success", Some(account), None))
@@ -481,7 +500,7 @@ async fn non_revoking_and_custom_events_only_broadcast() {
                 credential_deadline: None,
             },
         ));
-        let _ = stream.next().await;
+        assert_connected(&mut stream, "stream").await;
 
         emitter
             .notify(event(

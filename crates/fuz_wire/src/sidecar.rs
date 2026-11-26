@@ -117,7 +117,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sidecar_status_serialization() {
+    fn sidecar_status_serializes_lowercase() {
         // Verify lowercase serialization
         let status = SidecarStatus::Running;
         let json = serde_json::to_string(&status).unwrap();
@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sidecar_status_deserialization() {
+    fn sidecar_status_deserializes_lowercase() {
         let status: SidecarStatus = serde_json::from_str(r#""unloaded""#).unwrap();
         assert_eq!(status, SidecarStatus::Unloaded);
 
@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sidecar_status_info() {
+    fn sidecar_status_info_renders_absent_options_as_null() {
         let info = SidecarStatusInfo {
             id: "deno".to_string(),
             runtime: "deno".to_string(),

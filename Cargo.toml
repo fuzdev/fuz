@@ -72,6 +72,8 @@ hyper = { version = "1.11.1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs"] }
+# Test-side body collection; already linked through axum.
+http-body-util = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 futures-util = { version = "0.3", features = ["sink"] }

@@ -407,10 +407,8 @@ async fn the_recheck_does_not_touch_the_api_token() {
     for _ in 0..3 {
         assert!(is_live(&pool, &resolved).await);
     }
-    // long enough for a spawned touch — the form the resolve walk uses — to
-    // have landed
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
+    // the re-check holds only the borrowed client — no pool and no tracker to
+    // spawn a touch on — so any write it made has landed when it returns
     assert!(
         !token_was_touched(&pool, token_id(&resolved)).await,
         "the re-check must not record a use"

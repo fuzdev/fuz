@@ -23,7 +23,7 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`).
+# Dev-only: the shared test-database harness (`fuz_testing::fresh_db`).
 fuz_testing.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tower = { workspace = true, features = ["util"] }

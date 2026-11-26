@@ -22,7 +22,7 @@ uuid.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# Dev-only: the shared PG-suite harness (`fuz_testing::fresh_db`). The
+# Dev-only: the shared test-database harness (`fuz_testing::fresh_db`). The
 # `fuz_fact` ⊥ {axum, fuz_http, fuz_cell, fuz_auth, fuz_actions} layering rule
 # is a *runtime* rule; `fuz_audit` skips dev edges.
 fuz_testing.workspace = true

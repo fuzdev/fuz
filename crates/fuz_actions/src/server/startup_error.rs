@@ -281,7 +281,7 @@ mod tests {
     async fn a_migration_that_lost_its_connection_gets_the_connectivity_hint() {
         // a driver error with no SQLSTATE: the server never answered, as when
         // the connection drops mid-chain (a bad body answers with a code — the
-        // `server_boot` PG suite pins that it gets no hint)
+        // `server_boot` database suite pins that it gets no hint)
         let source = tokio_postgres::connect("host=127.0.0.1 port=1", tokio_postgres::NoTls)
             .await
             .err()
