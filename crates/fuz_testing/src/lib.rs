@@ -32,7 +32,8 @@
 //!   [`mint_api_token`], [`resolve_test_credential`]).
 //! - **Races** — [`TestingTableLock`], the lock-wait observers
 //!   ([`until_lock_waiters`], [`until_blocked_by`]), and the [`in_tx!`] and
-//!   [`race!`] macros.
+//!   [`race!`] macros, which commit as the dispatcher does
+//!   ([`commit_as_dispatcher`]).
 //! - **Doubles and the dispatcher harness** — [`RecordingConnectionCloser`],
 //!   [`dispatch_options`], [`perform_as`], [`assert_rpc_ok`],
 //!   [`assert_rpc_err`].
@@ -202,8 +203,8 @@ pub use fresh_db::{
     budgeted_pool, fresh_test_db,
 };
 pub use lock_wait::{
-    LOCK_WAIT_DEADLINE, backend_pid, blocked_by, lock_waiters, until_blocked_by,
-    until_blocked_by_or, until_lock_waiters, until_lock_waiters_or,
+    LOCK_WAIT_DEADLINE, backend_pid, blocked_by, commit_as_dispatcher, lock_waiters,
+    until_blocked_by, until_blocked_by_or, until_lock_waiters, until_lock_waiters_or,
 };
 pub use migration_tables::migration_created_tables;
 pub use password_argon2::{TESTING_DUMMY_HASH, TestingArgon2idHasher};

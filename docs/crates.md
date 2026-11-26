@@ -952,7 +952,9 @@ modules are private and its API is the crate root, one path per item
   read a wait off `pg_stat_activity` rather than inferring it from a sleep —
   PostgreSQL only, as pglet has neither view nor `pg_blocking_pids`. The
   `in_tx!` and `race!` macros run a call in its own transaction and race a
-  held transaction against a second call.
+  held transaction against a second call; both commit as the dispatcher does
+  (`commit_as_dispatcher`, over `commit_checked`), so a call that swallows a
+  failed statement panics there instead of answering `Ok`.
 - Fixtures and doubles: the seeding (`seed_account_actor`, its `_with_email`
   form, `seed_extra_actor`, `grant_role` / `grant_scoped_role` returning the
   grant id, `refuse_audit_rows` over `AuditEventType`), the credential mints

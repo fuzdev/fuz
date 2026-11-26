@@ -154,8 +154,34 @@ pub async fn until_blocked_by_or(
     }
 }
 
-/// Run `call` in a transaction of its own, committed when it returns `Ok`, as
-/// the dispatcher does, and rolled back when it returns `Err`.
+/// Commit `tx` as the dispatcher commits an action's transaction, with
+/// [`fuz_db::commit_checked`] — the commit of [`in_tx!`](crate::in_tx) and of
+/// [`race!`](crate::race)'s first.
+///
+/// # Panics
+///
+/// When the transaction was aborted: the call returned `Ok` after swallowing
+/// a failed statement, which the dispatcher answers with an error rather
+/// than the call's `Ok` (the transaction is rolled back first). And when the
+/// commit fails for another reason, as on any database fault.
+#[expect(
+    clippy::panic,
+    reason = "a test harness: a call the dispatcher would refuse fails its test loudly"
+)]
+pub async fn commit_as_dispatcher(tx: deadpool_postgres::Transaction<'_>) {
+    match fuz_db::commit_checked(tx).await {
+        Ok(()) => {}
+        Err(fuz_db::DbError::TransactionAborted(source)) => panic!(
+            "commit as the dispatcher: the call returned Ok over an aborted transaction — it swallowed a failed \
+             statement, which the dispatcher answers with an error; rolled back: {source}"
+        ),
+        Err(e) => panic!("commit as the dispatcher: {e}"),
+    }
+}
+
+/// Run `call` in a transaction of its own, committed when it returns `Ok` as
+/// the dispatcher commits ([`commit_as_dispatcher`]), and rolled back when it
+/// returns `Err`.
 ///
 /// `in_tx!(pool, |tx| call(&tx))` — `pool` a [`fuz_db::Pool`] (or a
 /// [`crate::TestDb`]), `call` a future over the `deadpool_postgres`
@@ -170,7 +196,10 @@ pub async fn until_blocked_by_or(
 /// # Panics
 ///
 /// When a connection can't be checked out, or the transaction can't begin,
-/// commit, or roll back.
+/// commit, or roll back — and when `call` returns `Ok` after swallowing a
+/// statement error that aborted the transaction: the dispatcher would answer
+/// an error, so a test passing on that `Ok` would vouch for a call the server
+/// refuses.
 #[macro_export]
 macro_rules! in_tx {
     ($pool:expr, |$tx:ident| $call:expr) => {{
@@ -178,7 +207,7 @@ macro_rules! in_tx {
         let $tx = client.transaction().await.expect("in_tx: begin");
         let result = $call.await;
         if result.is_ok() {
-            $tx.commit().await.expect("in_tx: commit");
+            $crate::commit_as_dispatcher($tx).await;
         } else {
             $tx.rollback().await.expect("in_tx: rollback");
         }
@@ -200,8 +229,9 @@ macro_rules! in_tx {
 ///
 /// # Panics
 ///
-/// When neither comes within [`LOCK_WAIT_DEADLINE`], and on a database fault
-/// holding, committing, or rolling back the first.
+/// When neither comes within [`LOCK_WAIT_DEADLINE`], on a database fault
+/// holding, committing, or rolling back the first, and when the first returned
+/// `Ok` over an aborted transaction ([`commit_as_dispatcher`]).
 #[macro_export]
 macro_rules! race {
     ($pool:expr, first: |$ftx:ident| $first:expr, second: $second:expr) => {{
@@ -226,7 +256,7 @@ macro_rules! race {
             )
             .await;
             if first_ok {
-                $ftx.commit().await.expect("race: commit the first");
+                $crate::commit_as_dispatcher($ftx).await;
             } else {
                 $ftx.rollback().await.expect("race: roll the first back");
             }
@@ -364,6 +394,100 @@ mod tests {
             probe.expect("row 1 is free once in_tx! answers the refused call"),
             1
         );
+    }
+
+    /// A call that swallows a failed statement and returns `Ok` is refused
+    /// as the dispatcher refuses it — `in_tx!` panics rather than answer the
+    /// call's `Ok` — and nothing it wrote persists. On a plain `COMMIT` the
+    /// server silently rolls the aborted transaction back and the `Ok` stands.
+    #[tokio::test]
+    async fn an_ok_over_an_aborted_transaction_is_refused() {
+        use futures::FutureExt as _;
+        use std::panic::AssertUnwindSafe;
+
+        let db = TestingDbOptions {
+            suite: "fuz_testing_in_tx",
+            migrations: &[],
+            setup_sql: Some("CREATE TABLE probe (id int PRIMARY KEY)"),
+            engine: TestEngine::Any,
+        };
+        let pool = db.open().await;
+        let swallowing = AssertUnwindSafe(async {
+            crate::in_tx!(pool, |tx| async {
+                tx.execute("INSERT INTO probe VALUES (1)", &[]).await?;
+                // the duplicate fails and aborts the transaction; its error
+                // is dropped
+                let _ = tx.execute("INSERT INTO probe VALUES (1)", &[]).await;
+                Ok::<(), tokio_postgres::Error>(())
+            })
+        })
+        .catch_unwind()
+        .await;
+        let Err(panic) = swallowing else {
+            panic!("in_tx! answered the call's Ok over an aborted transaction");
+        };
+        let message = panic.downcast_ref::<String>().map_or("", String::as_str);
+        assert!(
+            message.contains(
+                "commit as the dispatcher: the call returned Ok over an aborted transaction"
+            ),
+            "panics naming the swallowed statement, not another fault: {message}"
+        );
+        let count: i64 = pool
+            .get()
+            .await
+            .expect("pool.get")
+            .query_one("SELECT COUNT(*) FROM probe", &[])
+            .await
+            .expect("count the rows")
+            .get(0);
+        assert_eq!(count, 0, "the aborted transaction left nothing behind");
+    }
+
+    /// A first call that swallows a failed statement and returns `Ok` is
+    /// refused as `in_tx!` refuses one: `race!` panics committing it, and
+    /// nothing it wrote persists.
+    #[tokio::test]
+    #[ignore = "postgres-only: race! scopes its wait to a backend"]
+    async fn race_refuses_a_first_ok_over_an_aborted_transaction() {
+        use futures::FutureExt as _;
+        use std::panic::AssertUnwindSafe;
+
+        let pool = DB.open().await;
+        let raced = AssertUnwindSafe(async {
+            crate::race!(
+                &pool,
+                first: |tx| async {
+                    tx.execute("INSERT INTO probe VALUES (2)", &[]).await?;
+                    // the duplicate fails and aborts the transaction; its
+                    // error is dropped
+                    let _ = tx.execute("INSERT INTO probe VALUES (2)", &[]).await;
+                    Ok::<(), tokio_postgres::Error>(())
+                },
+                second: Ok::<(), tokio_postgres::Error>(())
+            )
+        })
+        .catch_unwind()
+        .await;
+        let Err(panic) = raced else {
+            panic!("race! committed a first Ok over an aborted transaction");
+        };
+        let message = panic.downcast_ref::<String>().map_or("", String::as_str);
+        assert!(
+            message.contains(
+                "commit as the dispatcher: the call returned Ok over an aborted transaction"
+            ),
+            "panics naming the swallowed statement, not another fault: {message}"
+        );
+        let count: i64 = pool
+            .get()
+            .await
+            .expect("pool.get")
+            .query_one("SELECT COUNT(*) FROM probe WHERE id = 2", &[])
+            .await
+            .expect("count the rows")
+            .get(0);
+        assert_eq!(count, 0, "the aborted transaction left nothing behind");
     }
 
     /// `race!` reports a second call that waits on the first, and one that
