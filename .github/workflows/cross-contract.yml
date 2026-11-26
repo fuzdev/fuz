@@ -115,10 +115,12 @@ jobs:
         working-directory: fuz_app
         run: npx svelte-kit sync
 
-      # The three runs are sequential steps, never parallel jobs: the spine
-      # binaries bind fixed ports (1177, 1181 and 1182), so concurrent runs
-      # would collide. `npm run` puts `node_modules/.bin` on PATH: the TS leg
-      # spawns `gro run`.
+      # The runs are steps of one job, so they share its Cargo builds (the
+      # stub binary built above, the `pglet_server` the first suite builds).
+      # Ports don't force the order: fuz_app gives every cross project ports,
+      # databases and temp directories of its own (`cross_backend_projects.ts`),
+      # so the suites could run at once. `npm run` puts `node_modules/.bin` on
+      # PATH: the TS leg spawns `gro run`.
       - name: Rust spine stub suite
         working-directory: fuz_app
         run: npm run test:cross:rust-spine-stub
