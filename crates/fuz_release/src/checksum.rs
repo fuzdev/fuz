@@ -179,7 +179,8 @@ mod tests {
     /// Don't expect this test to catch a format regression.
     ///
     /// Skips when `sha512sum` is absent rather than failing — the tool is not a
-    /// build requirement.
+    /// build requirement — and `tests/required_programs.rs` fails such a run
+    /// unless `FUZ_TEST_ALLOW_NO_SHA512SUM=1` accepts it.
     #[test]
     fn sidecar_round_trips_through_sha512sum_check() {
         use std::process::Command;

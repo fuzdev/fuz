@@ -1203,6 +1203,9 @@ fn self_bootstrap_leaves_a_fifo_rc_untouched() {
     let home = fresh_home_rc_safe();
     let user_home = fresh_home();
     let rc = user_home.path().join(".bashrc");
+    // Without `mkfifo(1)` there is nothing to test against, and
+    // `required_programs` fails the run unless `FUZ_TEST_ALLOW_NO_MKFIFO=1`
+    // accepts it.
     if !make_fifo(&rc) {
         eprintln!("skipping: mkfifo(1) unavailable");
         return;
@@ -1282,7 +1285,9 @@ fn self_bootstrap_rc_error_note_carries_the_io_cause() {
     // a writable rc in a home directory that isn't: the replacement can't be
     // created beside it. Root writes there regardless, so it has no such case
     // to observe.
-    if !running_as_root() {
+    if running_as_root() {
+        eprintln!("skipping the unwritable-home case: running as root");
+    } else {
         let user_home = fresh_home();
         let rc = user_home.path().join(".bashrc");
         std::fs::write(&rc, "alias a=b\n").unwrap();

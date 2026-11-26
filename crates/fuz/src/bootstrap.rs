@@ -1687,6 +1687,7 @@ mod tests {
         // created beside it. Root writes there regardless, so it has no such
         // case to observe.
         if running_as_root() {
+            eprintln!("skipping the unwritable-directory case: running as root");
             return;
         }
         let rc = dir.path().join("locked").join(".bashrc");
@@ -1736,7 +1737,8 @@ mod tests {
         let dir = TempDir::new().expect("create temp dir");
         let fifo = dir.path().join("fifo");
         // std has no FIFO constructor; without `mkfifo(1)` there is nothing
-        // to test against.
+        // to test against, and `tests/required_programs.rs` fails the run
+        // unless `FUZ_TEST_ALLOW_NO_MKFIFO=1` accepts it.
         if !Command::new("mkfifo")
             .arg(&fifo)
             .status()

@@ -56,10 +56,18 @@ yourself (the commands are in `crates/fuz_eval/tests/uid_drop.rs`); run
 unprivileged, it fails. Its other suites run in `check` against
 `testing_fake_fgro`.
 
-A suite that needs `git` or an SSH host doesn't pass by skipping. `fuz_sign`'s
-release log suites run a real `git` and check nothing without one, so its
-`required_programs` test fails where `git` is missing unless
-`FUZ_TEST_ALLOW_NO_GIT=1` accepts that. The `#[ignore]` `ssh://` suites
+A suite that needs an external program or an SSH host doesn't pass by
+skipping. A test that runs a program checks nothing without it, so its
+crate's `required_programs` test fails where the program is missing unless an
+explicit variable accepts that: `git` for `fuz_sign`'s release log suites
+(`FUZ_TEST_ALLOW_NO_GIT=1`), `sha512sum` for `fuz_release`'s sidecar
+round-trip (`FUZ_TEST_ALLOW_NO_SHA512SUM=1`), `mkfifo` for `fuz`'s FIFO rc
+tests (`FUZ_TEST_ALLOW_NO_MKFIFO=1`). The musl-target build cases (`fuz`'s
+`artifact_cli`, `xtask`'s `install`) skip where `x86_64-unknown-linux-musl`
+isn't installed; no sentinel holds them. A case that can't run as root (a
+permission bit root ignores, a write through `/dev/null` a regression would
+make) skips with a `skipping …: running as root` line; no sentinel holds
+those, as CI runs unprivileged. The `#[ignore]` `ssh://` suites
 (`fuz_storage`'s `test_ssh_round_trip`, `fuz_sign`'s `signed_trust_ssh`) run
 in no CI job; run with `--ignored` and no `SSH_TEST_TARGET`, they fail.
 

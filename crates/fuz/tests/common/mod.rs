@@ -69,7 +69,8 @@ pub fn running_as_root() -> bool {
 
 /// Create a FIFO at `path` by shelling out to `mkfifo(1)` — std has no
 /// constructor for one. `false` when the tool is unavailable, so the caller
-/// can skip.
+/// can skip; `tests/required_programs.rs` fails such a run unless
+/// `FUZ_TEST_ALLOW_NO_MKFIFO=1` accepts it.
 pub fn make_fifo(path: &Path) -> bool {
     Command::new("mkfifo")
         .arg(path)
