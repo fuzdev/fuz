@@ -155,17 +155,22 @@ pub async fn until_blocked_by_or(
 }
 
 /// Run `call` in a transaction of its own, committed when it returns `Ok`, as
-/// the dispatcher does; an `Err` rolls the transaction back as it drops.
+/// the dispatcher does, and rolled back when it returns `Err`.
 ///
 /// `in_tx!(pool, |tx| call(&tx))` — `pool` a [`fuz_db::Pool`] (or a
 /// [`crate::TestDb`]), `call` a future over the `deadpool_postgres`
 /// transaction bound to `tx`, evaluating to a `Result`. A macro, not a
 /// function, so `call` borrows the transaction without a boxed closure.
 ///
+/// The rollback is awaited, not left to the transaction's drop: a dropped
+/// transaction only queues its `ROLLBACK`, so a refused call's locks could
+/// still be held when the next statement on another session — or a
+/// [`race!`](crate::race) observer — runs.
+///
 /// # Panics
 ///
-/// When a connection can't be checked out, or the transaction can't begin or
-/// commit.
+/// When a connection can't be checked out, or the transaction can't begin,
+/// commit, or roll back.
 #[macro_export]
 macro_rules! in_tx {
     ($pool:expr, |$tx:ident| $call:expr) => {{
@@ -174,6 +179,8 @@ macro_rules! in_tx {
         let result = $call.await;
         if result.is_ok() {
             $tx.commit().await.expect("in_tx: commit");
+        } else {
+            $tx.rollback().await.expect("in_tx: rollback");
         }
         result
     }};
@@ -281,6 +288,82 @@ mod tests {
         let pool = DB.open().await;
         assert!(!until_lock_waiters_or(&pool, 1, || true, "finished").await);
         assert!(!until_blocked_by_or(&pool, 0, || true, "finished").await);
+    }
+
+    /// A refused call's locks are released before `in_tx!` answers.
+    ///
+    /// The call locks row 1, then leaves a statement waiting on row 2 (held
+    /// by a gate session) and returns `Err`. Its `ROLLBACK` queues behind that
+    /// statement, so a macro that left the rollback to the transaction's drop
+    /// answers while row 1 is still locked, and the probe after it — the next
+    /// statement, on another session — is refused. The gate opens once the
+    /// statement waits, except when the macro has already answered: then only
+    /// after the probe, so the old answer shows every run, not by timing.
+    #[tokio::test]
+    #[ignore = "postgres-only: observes a lock wait"]
+    async fn a_refused_call_releases_its_locks_before_in_tx_answers() {
+        use futures::FutureExt as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let pool = DB.open().await;
+        pool.get()
+            .await
+            .expect("pool.get")
+            .execute("INSERT INTO probe VALUES (2)", &[])
+            .await
+            .expect("seed row 2");
+        let mut gate_client = pool.get().await.expect("pool.get");
+        let gate = gate_client.transaction().await.expect("begin");
+        gate.execute("SELECT id FROM probe WHERE id = 2 FOR UPDATE", &[])
+            .await
+            .expect("hold row 2");
+        let gate_pid = backend_pid(&gate).await;
+        // Checked out now, so the probe never gets the call's client back
+        // from the pool and queues behind its waiting statement.
+        let prober = pool.get().await.expect("pool.get");
+        let answered = AtomicBool::new(false);
+        let probed = tokio::sync::Notify::new();
+
+        let caller = async {
+            let refused = crate::in_tx!(pool, |tx| async {
+                tx.execute("SELECT id FROM probe WHERE id = 1 FOR UPDATE", &[])
+                    .await
+                    .map_err(|e| e.to_string())?;
+                // Sent, never awaited: one poll queues the statement.
+                let _ = tx
+                    .batch_execute("SELECT id FROM probe WHERE id = 2 FOR UPDATE")
+                    .now_or_never();
+                Err::<(), String>("refused".to_owned())
+            });
+            answered.store(true, Ordering::SeqCst);
+            assert!(refused.is_err(), "the call is refused");
+            let probe = prober
+                .execute("SELECT id FROM probe WHERE id = 1 FOR UPDATE NOWAIT", &[])
+                .await;
+            probed.notify_one();
+            probe
+        };
+        let release = async {
+            // An answer ends the wait too: the call's client is back in the
+            // pool then, and an observer checking it out would queue behind
+            // the waiting statement.
+            let waited = until_blocked_by_or(
+                &pool,
+                gate_pid,
+                || answered.load(Ordering::SeqCst),
+                "the call's statement waits on row 2",
+            )
+            .await;
+            if !waited {
+                probed.notified().await;
+            }
+            gate.commit().await.expect("release row 2");
+        };
+        let (probe, ()) = tokio::join!(caller, release);
+        assert_eq!(
+            probe.expect("row 1 is free once in_tx! answers the refused call"),
+            1
+        );
     }
 
     /// `race!` reports a second call that waits on the first, and one that
